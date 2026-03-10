@@ -11,13 +11,12 @@ type Step = 'main' | 'delegate' | 'project'
 
 interface Props {
   position: { x: number; y: number }
-  selectedText: string
   userId: string
   onClose: () => void
   onAction: (action: SelectionAction) => void
 }
 
-export function SelectionMenu({ position, selectedText, userId, onClose, onAction }: Props) {
+export function SelectionMenu({ position, userId, onClose, onAction }: Props) {
   const [step, setStep] = useState<Step>('main')
   const [people, setPeople] = useState<Person[]>([])
   const [projects, setProjects] = useState<Project[]>([])
