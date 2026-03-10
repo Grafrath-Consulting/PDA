@@ -23,21 +23,28 @@ export function JournalPage({ userId }: Props) {
   const [hasMore, setHasMore] = useState(true)
   const [loading, setLoading] = useState(false)
   const [initialised, setInitialised] = useState(false)
-  // Default open; localStorage value applied after mount to avoid hydration mismatch
+  // Default true (server render); localStorage applied on mount only.
+  // Writing happens in togglePanel, not in a separate effect, so we never
+  // clobber the stored value during the initial render cycle.
   const [panelOpen, setPanelOpen] = useState(true)
 
   const contextFilterRef = useRef(contextFilter)
   contextFilterRef.current = contextFilter
 
-  // Sync panel state from/to localStorage after hydration
+  // Read stored preference once, client-side only (inside useEffect so it
+  // never runs during SSR and never causes a hydration mismatch).
   useEffect(() => {
     const saved = localStorage.getItem(PANEL_STORAGE_KEY)
     if (saved !== null) setPanelOpen(saved === 'true')
   }, [])
 
-  useEffect(() => {
-    localStorage.setItem(PANEL_STORAGE_KEY, String(panelOpen))
-  }, [panelOpen])
+  function togglePanel() {
+    setPanelOpen((prev) => {
+      const next = !prev
+      localStorage.setItem(PANEL_STORAGE_KEY, String(next))
+      return next
+    })
+  }
 
   // Fetch contexts once
   useEffect(() => {
@@ -128,7 +135,7 @@ export function JournalPage({ userId }: Props) {
       <header className="h-14 bg-white border-b border-gray-100 flex items-center justify-between px-6 flex-shrink-0">
         <h1 className="text-sm font-medium text-gray-900">Journal</h1>
         <button
-          onClick={() => setPanelOpen((o) => !o)}
+          onClick={togglePanel}
           title={panelOpen ? 'Close focus panel' : 'Open focus panel'}
           className={`p-1.5 rounded-lg transition-colors ${
             panelOpen

@@ -305,7 +305,10 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
   const showModified = isMeaningfullyModified(block.created_at, block.updated_at)
 
   return (
-    <div className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors select-none">
+    <div
+      className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors select-none cursor-text"
+      onClick={handleContentClick}
+    >
       {dot && (
         <div
           className={`absolute left-0 top-3 bottom-3 w-0.5 rounded-full ${dot.cls}`}
@@ -332,7 +335,7 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2">
             <div ref={dotMenuRef} className="relative">
               <button
-                onClick={() => setDotMenuOpen((o) => !o)}
+                onClick={(e) => { e.stopPropagation(); setDotMenuOpen((o) => !o) }}
                 className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
                 title="More options"
               >
@@ -373,10 +376,8 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
         ) : (
           <div
             ref={contentRef}
-            onClick={handleContentClick}
             onContextMenu={handleContextMenu}
-            className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed select-text cursor-text"
-            title="Click to edit"
+            className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed select-text"
           >
             {block.content || <span className="text-gray-300 italic">Click to edit…</span>}
           </div>

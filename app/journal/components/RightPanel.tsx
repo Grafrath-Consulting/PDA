@@ -159,11 +159,7 @@ export function RightPanel({ userId }: Props) {
 
   return (
     <div className="w-[280px] flex-shrink-0 bg-white border-l border-gray-100 flex flex-col overflow-hidden">
-      <div className="px-3 py-3 border-b border-gray-100">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-1">Focus</p>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-3 py-3">
+      <div className="flex-1 overflow-y-auto px-3 py-4">
         {loading && (
           <div className="space-y-2">
             {[...Array(3)].map((_, i) => (
