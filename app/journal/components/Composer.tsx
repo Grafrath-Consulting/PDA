@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Block } from '../types'
 
@@ -15,6 +15,11 @@ export function Composer({ userId, contextId, onSaved }: Props) {
   const [active, setActive] = useState(false)
   const [saving, setSaving] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Auto-focus on mount so the user can start typing immediately
+  useEffect(() => {
+    textareaRef.current?.focus()
+  }, [])
 
   const save = useCallback(async () => {
     const text = content.trim()
@@ -37,6 +42,8 @@ export function Composer({ userId, contextId, onSaved }: Props) {
     if (error) { console.error(error); return }
     setContent('')
     setActive(false)
+    // Re-focus after saving so the user can keep typing
+    requestAnimationFrame(() => textareaRef.current?.focus())
     if (data) onSaved(data as Block)
   }, [content, saving, userId, contextId, onSaved])
 
@@ -51,7 +58,6 @@ export function Composer({ userId, contextId, onSaved }: Props) {
     }
   }
 
-  // Auto-resize textarea
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setContent(e.target.value)
     const el = e.target

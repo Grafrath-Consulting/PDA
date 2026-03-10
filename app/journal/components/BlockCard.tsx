@@ -21,11 +21,20 @@ interface Props {
   onSplitBlock: (newBlock: Block) => void
 }
 
-function formatDate(iso: string) {
+function formatTimestamp(iso: string) {
   return new Date(iso).toLocaleString(undefined, {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   })
+}
+
+// Compare at minute granularity — sub-minute differences (e.g. status updates)
+// don't warrant showing a "modified" label.
+function isMeaningfullyModified(created: string, updated: string) {
+  return created.slice(0, 16) !== updated.slice(0, 16)
 }
 
 const STATUS_DOT: Record<BlockStatus, { cls: string; title: string } | null> = {
@@ -42,73 +51,73 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
   const [menuState, setMenuState] = useState<MenuState | null>(null)
 
   const contentRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const dotMenuRef = useRef<HTMLDivElement>(null)
 
-  // Keep mutable values accessible inside stable event listeners without re-registering
+  // Refs so stable event listeners can read current values without re-registering
   const isEditingRef = useRef(isEditing)
   isEditingRef.current = isEditing
   const blockContentRef = useRef(block.content)
   blockContentRef.current = block.content
 
-  // ── Selection detection via selectionchange ──────────────────────────────
-  // selectionchange fires as the selection forms (before mouseup), which means
-  // our menu appears before the browser decides to render its native toolbar.
+  // Guard against double-save (Ctrl+Enter fires saveEdit, then blur also fires it)
+  const savingRef = useRef(false)
+
+  // ── selectionchange → open selection menu ────────────────────────────────
   useEffect(() => {
     function onSelectionChange() {
       if (isEditingRef.current || !contentRef.current) return
 
       const selection = window.getSelection()
       if (!selection || selection.isCollapsed) return
-
       const selText = selection.toString()
       if (!selText.trim()) return
-
-      // Only handle selections that start inside our content div
       if (!contentRef.current.contains(selection.anchorNode)) return
 
       const range = selection.getRangeAt(0)
       const rect = range.getBoundingClientRect()
-      if (!rect.width && !rect.height) return // phantom selection
+      if (!rect.width && !rect.height) return
 
-      // Compute character offsets within the content node
       const preRange = document.createRange()
       preRange.setStart(contentRef.current, 0)
       preRange.setEnd(range.startContainer, range.startOffset)
       const start = preRange.toString().length
       const end = start + selText.length
 
-      setMenuState({
-        selText,
-        start,
-        end,
-        x: rect.left + rect.width / 2,
-        y: rect.top,
-      })
+      setMenuState({ selText, start, end, x: rect.left + rect.width / 2, y: rect.top })
     }
 
     document.addEventListener('selectionchange', onSelectionChange)
     return () => document.removeEventListener('selectionchange', onSelectionChange)
-  }, []) // registered once; mutable state accessed via refs
+  }, [])
 
   // ── Close selection menu on outside mousedown ────────────────────────────
-  // SelectionMenu calls e.stopPropagation() on its own mousedown, so clicks
-  // inside the menu never reach this handler.
   useEffect(() => {
     if (!menuState) return
-    function onOutsideMouseDown() { setMenuState(null) }
-    document.addEventListener('mousedown', onOutsideMouseDown)
-    return () => document.removeEventListener('mousedown', onOutsideMouseDown)
+    function handler() { setMenuState(null) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
   }, [menuState])
 
   // ── Close dot menu on outside mousedown ─────────────────────────────────
   useEffect(() => {
     if (!dotMenuOpen) return
-    function onOutsideMouseDown(e: MouseEvent) {
+    function handler(e: MouseEvent) {
       if (!dotMenuRef.current?.contains(e.target as Node)) setDotMenuOpen(false)
     }
-    document.addEventListener('mousedown', onOutsideMouseDown)
-    return () => document.removeEventListener('mousedown', onOutsideMouseDown)
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
   }, [dotMenuOpen])
+
+  // ── Click-to-edit ────────────────────────────────────────────────────────
+  // A plain click (no drag-selection) on the content div opens inline editing.
+  function handleContentClick() {
+    if (isEditing) return
+    // If the user just made a text selection, don't enter edit mode
+    const selection = window.getSelection()
+    if (selection && !selection.isCollapsed) return
+    startEdit()
+  }
 
   // ── Right-click: show menu for full block ────────────────────────────────
   function handleContextMenu(e: React.MouseEvent) {
@@ -126,24 +135,20 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
   async function handleAction(action: SelectionAction) {
     if (!menuState) return
     const { selText, start, end } = menuState
-    // Snapshot content now before any state changes
     const content = blockContentRef.current ?? ''
     setMenuState(null)
     window.getSelection()?.removeAllRanges()
 
     const supabase = createClient()
 
-    // ── 1 & 2 & 3: Create Task / Delegate / Waiting On ──────────────────
+    // 1–3: Create Task / Delegate / Waiting On
     if (action.type === 'create_task') {
       const newContent = content.slice(0, start) + content.slice(end)
       const isEmpty = !newContent.trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
-
-      await supabase
-        .from('journal_blocks')
+      await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
-
       await supabase.from('tasks').insert({
         user_id: block.user_id,
         context_id: block.context_id,
@@ -153,104 +158,58 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
         task_type: action.taskType,
         assignee_id: action.assigneeId ?? null,
       })
-
       if (isEmpty) onRemove(block.id)
       else onUpdate({ ...block, content: newContent, status: newStatus })
       return
     }
 
-    // ── 4: Split to Block ────────────────────────────────────────────────
+    // 4: Split to Block
     if (action.type === 'split_block') {
       const newContent = content.slice(0, start) + content.slice(end)
       const isEmpty = !newContent.trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
-
-      await supabase
-        .from('journal_blocks')
+      await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
-
-      const { data: newBlock } = await supabase
-        .from('journal_blocks')
-        .insert({
-          user_id: block.user_id,
-          context_id: block.context_id,
-          content: selText,
-          status: 'partially_handled',
-          created_at: block.created_at,
-        })
-        .select()
-        .single()
-
+      const { data: newBlock } = await supabase.from('journal_blocks')
+        .insert({ user_id: block.user_id, context_id: block.context_id, content: selText, status: 'partially_handled', created_at: block.created_at })
+        .select().single()
       if (newBlock) onSplitBlock(newBlock as Block)
       if (isEmpty) onRemove(block.id)
       else onUpdate({ ...block, content: newContent, status: newStatus })
       return
     }
 
-    // ── 5: Link to Project ───────────────────────────────────────────────
-    // Tags the block to the project (no text removal). Finds or creates a
-    // dedicated tag named `proj:<project-name>` then inserts a tagging row.
+    // 5: Link to Project
     if (action.type === 'link_project') {
-      const { data: project } = await supabase
-        .from('projects')
-        .select('name')
-        .eq('id', action.projectId)
-        .single()
-
+      const { data: project } = await supabase.from('projects').select('name').eq('id', action.projectId).single()
       if (!project) return
-
       const tagName = `proj:${project.name}`
-      let { data: tag } = await supabase
-        .from('tags')
-        .select('id')
-        .eq('user_id', block.user_id)
-        .eq('name', tagName)
-        .maybeSingle()
-
+      let { data: tag } = await supabase.from('tags').select('id').eq('user_id', block.user_id).eq('name', tagName).maybeSingle()
       if (!tag) {
-        const { data: created } = await supabase
-          .from('tags')
-          .insert({ user_id: block.user_id, name: tagName, color: '#6366f1' })
-          .select('id')
-          .single()
+        const { data: created } = await supabase.from('tags').insert({ user_id: block.user_id, name: tagName, color: '#6366f1' }).select('id').single()
         tag = created
       }
-
-      if (tag) {
-        await supabase
-          .from('taggings')
-          .insert({ tag_id: tag.id, entity_type: 'block', entity_id: block.id })
-      }
-
-      await supabase
-        .from('journal_blocks')
-        .update({ status: 'partially_handled' })
-        .eq('id', block.id)
-
+      if (tag) await supabase.from('taggings').insert({ tag_id: tag.id, entity_type: 'block', entity_id: block.id })
+      await supabase.from('journal_blocks').update({ status: 'partially_handled' }).eq('id', block.id)
       onUpdate({ ...block, status: 'partially_handled' })
       return
     }
 
-    // ── 6: Label as Info ─────────────────────────────────────────────────
-    // Removes the selected text (it has been acknowledged as informational).
+    // 6: Label as Info — acknowledge and remove from block
     if (action.type === 'label_info') {
       const newContent = content.slice(0, start) + content.slice(end)
       const isEmpty = !newContent.trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
-
-      await supabase
-        .from('journal_blocks')
+      await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
-
       if (isEmpty) onRemove(block.id)
       else onUpdate({ ...block, content: newContent, status: newStatus })
       return
     }
 
-    // ── 7: AI Summarize ──────────────────────────────────────────────────
-    // Replaces the selection with a condensed version. No text removal otherwise.
+    // 7: AI Summarize
     if (action.type === 'summarize') {
       const res = await fetch('/api/ai/summarize', {
         method: 'POST',
@@ -259,97 +218,87 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
       })
       const json = await res.json()
       if (!json.summary) return
-
       const newContent = content.slice(0, start) + json.summary + content.slice(end)
-      await supabase
-        .from('journal_blocks')
-        .update({ content: newContent, status: 'partially_handled' })
-        .eq('id', block.id)
-
+      await supabase.from('journal_blocks').update({ content: newContent, status: 'partially_handled' }).eq('id', block.id)
       onUpdate({ ...block, content: newContent, status: 'partially_handled' })
       return
     }
 
-    // ── 8: Delete Selection ──────────────────────────────────────────────
+    // 8: Delete Selection
     if (action.type === 'delete_selection') {
       const newContent = content.slice(0, start) + content.slice(end)
       const isEmpty = !newContent.trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
-
-      await supabase
-        .from('journal_blocks')
+      await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
-
       if (isEmpty) onRemove(block.id)
       else onUpdate({ ...block, content: newContent, status: newStatus })
-      return
     }
   }
 
   // ── Inline edit ──────────────────────────────────────────────────────────
   function startEdit() {
+    if (isEditing) return
+    savingRef.current = false
     setEditContent(block.content ?? '')
     setIsEditing(true)
     setDotMenuOpen(false)
+    // Focus the textarea on the next frame after it mounts
+    requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
   async function saveEdit() {
-    if (!isEditing) return
+    if (!isEditing || savingRef.current) return
+    savingRef.current = true
     setIsEditing(false)
+
     const trimmed = editContent.trim()
     const supabase = createClient()
 
-    if (trimmed === (block.content ?? '').trim()) return
-
-    if (!trimmed) {
-      await supabase
-        .from('journal_blocks')
-        .update({ status: 'archived', is_archived: true })
-        .eq('id', block.id)
-      onRemove(block.id)
+    if (trimmed === (block.content ?? '').trim()) {
+      savingRef.current = false
       return
     }
 
-    // The on_block_updated DB trigger snapshots the old content into
-    // block_versions automatically — no manual insert needed here.
+    if (!trimmed) {
+      await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
+      onRemove(block.id)
+      savingRef.current = false
+      return
+    }
+
+    // The on_block_updated DB trigger automatically writes the old content
+    // to block_versions before applying this update.
     await supabase.from('journal_blocks').update({ content: trimmed }).eq('id', block.id)
     onUpdate({ ...block, content: trimmed })
+    savingRef.current = false
   }
 
   function handleEditKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit() }
-    if (e.key === 'Escape') { setIsEditing(false); setEditContent(block.content ?? '') }
+    if (e.key === 'Escape') { setIsEditing(false); setEditContent(block.content ?? ''); savingRef.current = false }
   }
 
   // ── Dot menu actions ─────────────────────────────────────────────────────
   async function markDone() {
     setDotMenuOpen(false)
     const supabase = createClient()
-    await supabase
-      .from('journal_blocks')
-      .update({ status: 'archived', is_archived: true })
-      .eq('id', block.id)
+    await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
     onRemove(block.id)
   }
 
   async function deleteBlock() {
     setDotMenuOpen(false)
     const supabase = createClient()
-    await supabase
-      .from('journal_blocks')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('id', block.id)
+    await supabase.from('journal_blocks').update({ deleted_at: new Date().toISOString() }).eq('id', block.id)
     onRemove(block.id)
   }
 
   const dot = STATUS_DOT[block.status]
+  const showModified = isMeaningfullyModified(block.created_at, block.updated_at)
 
   return (
-    // select-none on the outer card prevents the browser from treating the
-    // menu/header areas as selectable text, which suppresses the native
-    // copy/paste toolbar. select-text on the content div re-enables selection
-    // specifically where we want it.
     <div className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors select-none">
       {dot && (
         <div
@@ -360,11 +309,21 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
       )}
 
       <div className="px-4 pt-3 pb-3">
-        {/* Header */}
+        {/* Header: timestamps + dot menu */}
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-400">{formatDate(block.created_at)}</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(block.created_at)}</span>
+            {showModified && (
+              <>
+                <span className="text-xs text-gray-200">·</span>
+                <span className="text-xs text-gray-400 whitespace-nowrap">
+                  edited {formatTimestamp(block.updated_at)}
+                </span>
+              </>
+            )}
+          </div>
 
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2">
             <div ref={dotMenuRef} className="relative">
               <button
                 onClick={() => setDotMenuOpen((o) => !o)}
@@ -380,7 +339,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
 
               {dotMenuOpen && (
                 <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-44 z-40">
-                  <DotMenuItem onClick={startEdit}>Edit</DotMenuItem>
                   <DotMenuItem onClick={markDone}>Mark as Done</DotMenuItem>
                   <DotMenuItem onClick={() => { setShowHistory(true); setDotMenuOpen(false) }}>
                     View History
@@ -395,25 +353,31 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
           </div>
         </div>
 
-        {/* Content */}
+        {/* Content — click anywhere to edit */}
         {isEditing ? (
           <textarea
+            ref={textareaRef}
             value={editContent}
             onChange={(e) => setEditContent(e.target.value)}
             onKeyDown={handleEditKeyDown}
             onBlur={saveEdit}
-            autoFocus
             className="w-full text-sm text-gray-800 bg-gray-50 border border-indigo-200 rounded-lg p-2 resize-none outline-none select-text"
             rows={Math.max(3, editContent.split('\n').length + 1)}
           />
         ) : (
           <div
             ref={contentRef}
+            onClick={handleContentClick}
             onContextMenu={handleContextMenu}
             className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed select-text cursor-text"
+            title="Click to edit"
           >
-            {block.content || <span className="text-gray-300 italic">Empty</span>}
+            {block.content || <span className="text-gray-300 italic">Click to edit…</span>}
           </div>
+        )}
+
+        {isEditing && (
+          <p className="text-xs text-gray-400 mt-1.5">Ctrl+Enter to save · Esc to cancel · click outside to save</p>
         )}
       </div>
 
