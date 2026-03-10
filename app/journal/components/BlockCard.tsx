@@ -268,10 +268,16 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
       return
     }
 
-    // The on_block_updated DB trigger automatically writes the old content
-    // to block_versions before applying this update.
-    await supabase.from('journal_blocks').update({ content: trimmed }).eq('id', block.id)
-    onUpdate({ ...block, content: trimmed })
+    // The on_block_updated DB trigger writes old content to block_versions and
+    // sets updated_at = now(). Fetching the row back gives us the DB-assigned
+    // updated_at so the timestamp refreshes in the UI without a page reload.
+    const { data: saved } = await supabase
+      .from('journal_blocks')
+      .update({ content: trimmed })
+      .eq('id', block.id)
+      .select()
+      .single()
+    onUpdate((saved as Block) ?? { ...block, content: trimmed })
     savingRef.current = false
   }
 
