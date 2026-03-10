@@ -391,7 +391,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
       {menuState && (
         <SelectionMenu
           position={{ x: menuState.x, y: menuState.y }}
-          selectedText={menuState.selText}
           userId={block.user_id}
           onClose={() => setMenuState(null)}
           onAction={handleAction}
