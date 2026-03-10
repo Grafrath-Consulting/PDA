@@ -6,6 +6,7 @@ import { Block, Context } from './types'
 import { Composer } from './components/Composer'
 import { BlockFeed } from './components/BlockFeed'
 import { ContextFilter } from './components/ContextFilter'
+import { ArchivedSection } from './components/ArchivedSection'
 
 const PAGE_SIZE = 20
 
@@ -137,6 +138,8 @@ export function JournalPage({ userId }: Props) {
             onBlockRemove={handleBlockRemove}
             onSplitBlock={handleSplitBlock}
           />
+
+          <ArchivedSection userId={userId} onRestored={handleNewBlock} />
         </div>
       </div>
     </div>

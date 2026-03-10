@@ -331,7 +331,7 @@ function DotMenuItem({
     <button
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 transition-colors ${className}`}
+      className={`w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors ${className}`}
     >
       {children}
     </button>
