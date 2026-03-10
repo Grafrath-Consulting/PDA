@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Block, BlockStatus, SelectionAction } from '../types'
 import { SelectionMenu } from './SelectionMenu'
@@ -22,26 +22,10 @@ interface Props {
 }
 
 function formatDate(iso: string) {
-  const d = new Date(iso)
-  return d.toLocaleString(undefined, {
+  return new Date(iso).toLocaleString(undefined, {
     month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
   })
-}
-
-function getSelectionInfo(container: Element): { selText: string; start: number; end: number } | null {
-  const selection = window.getSelection()
-  if (!selection || selection.isCollapsed) return null
-  const selText = selection.toString()
-  if (!selText.trim()) return null
-  if (!container.contains(selection.anchorNode)) return null
-
-  const range = selection.getRangeAt(0)
-  const preRange = document.createRange()
-  preRange.setStart(container, 0)
-  preRange.setEnd(range.startContainer, range.startOffset)
-  const start = preRange.toString().length
-  return { selText, start, end: start + selText.length }
 }
 
 const STATUS_DOT: Record<BlockStatus, { cls: string; title: string } | null> = {
@@ -56,110 +40,110 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
   const [dotMenuOpen, setDotMenuOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
+
   const contentRef = useRef<HTMLDivElement>(null)
   const dotMenuRef = useRef<HTMLDivElement>(null)
 
-  // Close dot menu on outside click
-  useEffect(() => {
-    if (!dotMenuOpen) return
-    function handler(e: MouseEvent) {
-      if (!dotMenuRef.current?.contains(e.target as Node)) setDotMenuOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [dotMenuOpen])
+  // Keep mutable values accessible inside stable event listeners without re-registering
+  const isEditingRef = useRef(isEditing)
+  isEditingRef.current = isEditing
+  const blockContentRef = useRef(block.content)
+  blockContentRef.current = block.content
 
-  // Close selection menu on outside click
+  // ── Selection detection via selectionchange ──────────────────────────────
+  // selectionchange fires as the selection forms (before mouseup), which means
+  // our menu appears before the browser decides to render its native toolbar.
+  useEffect(() => {
+    function onSelectionChange() {
+      if (isEditingRef.current || !contentRef.current) return
+
+      const selection = window.getSelection()
+      if (!selection || selection.isCollapsed) return
+
+      const selText = selection.toString()
+      if (!selText.trim()) return
+
+      // Only handle selections that start inside our content div
+      if (!contentRef.current.contains(selection.anchorNode)) return
+
+      const range = selection.getRangeAt(0)
+      const rect = range.getBoundingClientRect()
+      if (!rect.width && !rect.height) return // phantom selection
+
+      // Compute character offsets within the content node
+      const preRange = document.createRange()
+      preRange.setStart(contentRef.current, 0)
+      preRange.setEnd(range.startContainer, range.startOffset)
+      const start = preRange.toString().length
+      const end = start + selText.length
+
+      setMenuState({
+        selText,
+        start,
+        end,
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+      })
+    }
+
+    document.addEventListener('selectionchange', onSelectionChange)
+    return () => document.removeEventListener('selectionchange', onSelectionChange)
+  }, []) // registered once; mutable state accessed via refs
+
+  // ── Close selection menu on outside mousedown ────────────────────────────
+  // SelectionMenu calls e.stopPropagation() on its own mousedown, so clicks
+  // inside the menu never reach this handler.
   useEffect(() => {
     if (!menuState) return
-    function handler() { setMenuState(null) }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    function onOutsideMouseDown() { setMenuState(null) }
+    document.addEventListener('mousedown', onOutsideMouseDown)
+    return () => document.removeEventListener('mousedown', onOutsideMouseDown)
   }, [menuState])
 
-  function handleMouseUp() {
-    if (isEditing || !contentRef.current) return
-    const info = getSelectionInfo(contentRef.current)
-    if (!info) return
-    const range = window.getSelection()!.getRangeAt(0)
-    const rect = range.getBoundingClientRect()
-    setMenuState({ ...info, x: rect.left + rect.width / 2, y: rect.top })
-  }
+  // ── Close dot menu on outside mousedown ─────────────────────────────────
+  useEffect(() => {
+    if (!dotMenuOpen) return
+    function onOutsideMouseDown(e: MouseEvent) {
+      if (!dotMenuRef.current?.contains(e.target as Node)) setDotMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onOutsideMouseDown)
+    return () => document.removeEventListener('mousedown', onOutsideMouseDown)
+  }, [dotMenuOpen])
 
+  // ── Right-click: show menu for full block ────────────────────────────────
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
     if (isEditing) return
     const selection = window.getSelection()
     const hasSelection = selection && !selection.isCollapsed && selection.toString().trim()
     if (!hasSelection) {
-      setMenuState({
-        selText: block.content ?? '',
-        start: 0,
-        end: (block.content ?? '').length,
-        x: e.clientX,
-        y: e.clientY,
-      })
+      const content = blockContentRef.current ?? ''
+      setMenuState({ selText: content, start: 0, end: content.length, x: e.clientX, y: e.clientY })
     }
   }
 
+  // ── Action handler — all 8 actions ──────────────────────────────────────
   async function handleAction(action: SelectionAction) {
     if (!menuState) return
     const { selText, start, end } = menuState
+    // Snapshot content now before any state changes
+    const content = blockContentRef.current ?? ''
     setMenuState(null)
+    window.getSelection()?.removeAllRanges()
 
     const supabase = createClient()
-    const content = block.content ?? ''
 
-    // AI Summarize — replaces selection, no removal
-    if (action.type === 'summarize') {
-      const res = await fetch('/api/ai/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: selText }),
-      })
-      const { summary, error } = await res.json()
-      if (error || !summary) return
-      const newContent = content.slice(0, start) + summary + content.slice(end)
-      await supabase.from('journal_blocks')
-        .update({ content: newContent, status: 'partially_handled' })
-        .eq('id', block.id)
-      onUpdate({ ...block, content: newContent, status: 'partially_handled' })
-      return
-    }
-
-    // Link to Project — no text removal
-    if (action.type === 'link_project') {
-      const { data: project } = await supabase
-        .from('projects').select('name').eq('id', action.projectId).single()
-      if (!project) return
-      const tagName = `proj:${project.name}`
-      let { data: tag } = await supabase
-        .from('tags').select('id').eq('user_id', block.user_id).eq('name', tagName).maybeSingle()
-      if (!tag) {
-        const { data: created } = await supabase
-          .from('tags').insert({ user_id: block.user_id, name: tagName, color: '#6366f1' }).select('id').single()
-        tag = created
-      }
-      if (tag) {
-        await supabase.from('taggings').insert({ tag_id: tag.id, entity_type: 'block', entity_id: block.id })
-      }
-      await supabase.from('journal_blocks').update({ status: 'partially_handled' }).eq('id', block.id)
-      onUpdate({ ...block, status: 'partially_handled' })
-      return
-    }
-
-    // All remaining actions remove the selected text
-    const newContent = content.slice(0, start) + content.slice(end)
-    const isEmpty = !newContent.trim()
-    const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
-
-    await supabase.from('journal_blocks').update({
-      content: newContent,
-      status: newStatus,
-      is_archived: isEmpty,
-    }).eq('id', block.id)
-
+    // ── 1 & 2 & 3: Create Task / Delegate / Waiting On ──────────────────
     if (action.type === 'create_task') {
+      const newContent = content.slice(0, start) + content.slice(end)
+      const isEmpty = !newContent.trim()
+      const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
+
+      await supabase
+        .from('journal_blocks')
+        .update({ content: newContent, status: newStatus, is_archived: isEmpty })
+        .eq('id', block.id)
+
       await supabase.from('tasks').insert({
         user_id: block.user_id,
         context_id: block.context_id,
@@ -169,23 +153,141 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
         task_type: action.taskType,
         assignee_id: action.assigneeId ?? null,
       })
-    } else if (action.type === 'split_block') {
-      const { data: newBlock } = await supabase.from('journal_blocks').insert({
-        user_id: block.user_id,
-        context_id: block.context_id,
-        content: selText,
-        status: 'partially_handled' as const,
-        created_at: block.created_at,
-      }).select().single()
-      if (newBlock) onSplitBlock(newBlock as Block)
-    }
-    // label_info and delete_selection just remove the text
 
-    if (isEmpty) onRemove(block.id)
-    else onUpdate({ ...block, content: newContent, status: newStatus })
+      if (isEmpty) onRemove(block.id)
+      else onUpdate({ ...block, content: newContent, status: newStatus })
+      return
+    }
+
+    // ── 4: Split to Block ────────────────────────────────────────────────
+    if (action.type === 'split_block') {
+      const newContent = content.slice(0, start) + content.slice(end)
+      const isEmpty = !newContent.trim()
+      const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
+
+      await supabase
+        .from('journal_blocks')
+        .update({ content: newContent, status: newStatus, is_archived: isEmpty })
+        .eq('id', block.id)
+
+      const { data: newBlock } = await supabase
+        .from('journal_blocks')
+        .insert({
+          user_id: block.user_id,
+          context_id: block.context_id,
+          content: selText,
+          status: 'partially_handled',
+          created_at: block.created_at,
+        })
+        .select()
+        .single()
+
+      if (newBlock) onSplitBlock(newBlock as Block)
+      if (isEmpty) onRemove(block.id)
+      else onUpdate({ ...block, content: newContent, status: newStatus })
+      return
+    }
+
+    // ── 5: Link to Project ───────────────────────────────────────────────
+    // Tags the block to the project (no text removal). Finds or creates a
+    // dedicated tag named `proj:<project-name>` then inserts a tagging row.
+    if (action.type === 'link_project') {
+      const { data: project } = await supabase
+        .from('projects')
+        .select('name')
+        .eq('id', action.projectId)
+        .single()
+
+      if (!project) return
+
+      const tagName = `proj:${project.name}`
+      let { data: tag } = await supabase
+        .from('tags')
+        .select('id')
+        .eq('user_id', block.user_id)
+        .eq('name', tagName)
+        .maybeSingle()
+
+      if (!tag) {
+        const { data: created } = await supabase
+          .from('tags')
+          .insert({ user_id: block.user_id, name: tagName, color: '#6366f1' })
+          .select('id')
+          .single()
+        tag = created
+      }
+
+      if (tag) {
+        await supabase
+          .from('taggings')
+          .insert({ tag_id: tag.id, entity_type: 'block', entity_id: block.id })
+      }
+
+      await supabase
+        .from('journal_blocks')
+        .update({ status: 'partially_handled' })
+        .eq('id', block.id)
+
+      onUpdate({ ...block, status: 'partially_handled' })
+      return
+    }
+
+    // ── 6: Label as Info ─────────────────────────────────────────────────
+    // Removes the selected text (it has been acknowledged as informational).
+    if (action.type === 'label_info') {
+      const newContent = content.slice(0, start) + content.slice(end)
+      const isEmpty = !newContent.trim()
+      const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
+
+      await supabase
+        .from('journal_blocks')
+        .update({ content: newContent, status: newStatus, is_archived: isEmpty })
+        .eq('id', block.id)
+
+      if (isEmpty) onRemove(block.id)
+      else onUpdate({ ...block, content: newContent, status: newStatus })
+      return
+    }
+
+    // ── 7: AI Summarize ──────────────────────────────────────────────────
+    // Replaces the selection with a condensed version. No text removal otherwise.
+    if (action.type === 'summarize') {
+      const res = await fetch('/api/ai/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: selText }),
+      })
+      const json = await res.json()
+      if (!json.summary) return
+
+      const newContent = content.slice(0, start) + json.summary + content.slice(end)
+      await supabase
+        .from('journal_blocks')
+        .update({ content: newContent, status: 'partially_handled' })
+        .eq('id', block.id)
+
+      onUpdate({ ...block, content: newContent, status: 'partially_handled' })
+      return
+    }
+
+    // ── 8: Delete Selection ──────────────────────────────────────────────
+    if (action.type === 'delete_selection') {
+      const newContent = content.slice(0, start) + content.slice(end)
+      const isEmpty = !newContent.trim()
+      const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
+
+      await supabase
+        .from('journal_blocks')
+        .update({ content: newContent, status: newStatus, is_archived: isEmpty })
+        .eq('id', block.id)
+
+      if (isEmpty) onRemove(block.id)
+      else onUpdate({ ...block, content: newContent, status: newStatus })
+      return
+    }
   }
 
-  // ---- Edit mode ----
+  // ── Inline edit ──────────────────────────────────────────────────────────
   function startEdit() {
     setEditContent(block.content ?? '')
     setIsEditing(true)
@@ -196,16 +298,21 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
     if (!isEditing) return
     setIsEditing(false)
     const trimmed = editContent.trim()
-    // Trigger on_block_updated handles block_versions automatically
     const supabase = createClient()
+
     if (trimmed === (block.content ?? '').trim()) return
 
     if (!trimmed) {
-      await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
+      await supabase
+        .from('journal_blocks')
+        .update({ status: 'archived', is_archived: true })
+        .eq('id', block.id)
       onRemove(block.id)
       return
     }
 
+    // The on_block_updated DB trigger snapshots the old content into
+    // block_versions automatically — no manual insert needed here.
     await supabase.from('journal_blocks').update({ content: trimmed }).eq('id', block.id)
     onUpdate({ ...block, content: trimmed })
   }
@@ -215,26 +322,35 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
     if (e.key === 'Escape') { setIsEditing(false); setEditContent(block.content ?? '') }
   }
 
-  // ---- Dot menu actions ----
+  // ── Dot menu actions ─────────────────────────────────────────────────────
   async function markDone() {
     setDotMenuOpen(false)
     const supabase = createClient()
-    await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
+    await supabase
+      .from('journal_blocks')
+      .update({ status: 'archived', is_archived: true })
+      .eq('id', block.id)
     onRemove(block.id)
   }
 
   async function deleteBlock() {
     setDotMenuOpen(false)
     const supabase = createClient()
-    await supabase.from('journal_blocks').update({ deleted_at: new Date().toISOString() }).eq('id', block.id)
+    await supabase
+      .from('journal_blocks')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', block.id)
     onRemove(block.id)
   }
 
   const dot = STATUS_DOT[block.status]
 
   return (
-    <div className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors">
-      {/* Status bar */}
+    // select-none on the outer card prevents the browser from treating the
+    // menu/header areas as selectable text, which suppresses the native
+    // copy/paste toolbar. select-text on the content div re-enables selection
+    // specifically where we want it.
+    <div className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors select-none">
       {dot && (
         <div
           className={`absolute left-0 top-3 bottom-3 w-0.5 rounded-full ${dot.cls}`}
@@ -244,12 +360,11 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
       )}
 
       <div className="px-4 pt-3 pb-3">
-        {/* Header row */}
+        {/* Header */}
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-400">{formatDate(block.created_at)}</span>
 
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            {/* Dot menu */}
             <div ref={dotMenuRef} className="relative">
               <button
                 onClick={() => setDotMenuOpen((o) => !o)}
@@ -257,7 +372,9 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
                 title="More options"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
+                  <circle cx="5" cy="12" r="2" />
+                  <circle cx="12" cy="12" r="2" />
+                  <circle cx="19" cy="12" r="2" />
                 </svg>
               </button>
 
@@ -269,7 +386,9 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
                     View History
                   </DotMenuItem>
                   <div className="h-px bg-gray-100 my-1" />
-                  <DotMenuItem onClick={deleteBlock} className="text-red-500">Delete block</DotMenuItem>
+                  <DotMenuItem onClick={deleteBlock} className="text-red-500">
+                    Delete block
+                  </DotMenuItem>
                 </div>
               )}
             </div>
@@ -284,13 +403,12 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
             onKeyDown={handleEditKeyDown}
             onBlur={saveEdit}
             autoFocus
-            className="w-full text-sm text-gray-800 bg-gray-50 border border-indigo-200 rounded-lg p-2 resize-none outline-none"
+            className="w-full text-sm text-gray-800 bg-gray-50 border border-indigo-200 rounded-lg p-2 resize-none outline-none select-text"
             rows={Math.max(3, editContent.split('\n').length + 1)}
           />
         ) : (
           <div
             ref={contentRef}
-            onMouseUp={handleMouseUp}
             onContextMenu={handleContextMenu}
             className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed select-text cursor-text"
           >
@@ -299,7 +417,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
         )}
       </div>
 
-      {/* Floating selection menu */}
       {menuState && (
         <SelectionMenu
           position={{ x: menuState.x, y: menuState.y }}
@@ -310,7 +427,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
         />
       )}
 
-      {/* History modal */}
       {showHistory && (
         <HistoryModal blockId={block.id} onClose={() => setShowHistory(false)} />
       )}
