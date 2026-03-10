@@ -49,12 +49,16 @@ export function SelectionMenu({ position, selectedText, userId, onClose, onActio
     onClose()
   }
 
-  // Position menu above the selection midpoint, centred
+  // Flip below the selection when near the top of the viewport to avoid clipping
+  const MENU_HEIGHT_ESTIMATE = 260
+  const flipDown = position.y < MENU_HEIGHT_ESTIMATE + 16
   const style: React.CSSProperties = {
     position: 'fixed',
     left: position.x,
     top: position.y,
-    transform: 'translate(-50%, calc(-100% - 8px))',
+    transform: flipDown
+      ? 'translate(-50%, 8px)'
+      : 'translate(-50%, calc(-100% - 8px))',
     zIndex: 50,
   }
 
@@ -62,7 +66,7 @@ export function SelectionMenu({ position, selectedText, userId, onClose, onActio
     <div
       style={style}
       className="bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[176px]"
-      onMouseDown={(e) => e.preventDefault()}
+      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
       onClick={(e) => e.stopPropagation()}
     >
       {step === 'main' && (
@@ -171,8 +175,9 @@ function Item({
 }) {
   return (
     <button
+      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
       onClick={onClick}
-      className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-gray-50 transition-colors ${className}`}
+      className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 text-left hover:bg-gray-50 transition-colors ${className}`}
     >
       {children}
     </button>
