@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import { createClient } from '@/lib/supabase/client'
 import { Block } from '../types'
@@ -12,22 +12,38 @@ interface Props {
   userId: string
   contextId: string | null
   onSaved: (block: Block) => void
+  autosaveInterval?: number
 }
 
-export function Composer({ userId, contextId, onSaved }: Props) {
+export function Composer({ userId, contextId, onSaved, autosaveInterval = 30 }: Props) {
   const [active, setActive] = useState(false)
-  const [saving, setSaving] = useState(false)
   const editorRef = useRef<TipTapEditorHandle>(null)
-  // Track whether content is non-empty to enable/disable save button
-  const [hasContent, setHasContent] = useState(false)
+  const savingRef = useRef(false)
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // For the Composer, autosave creates a draft block then clears.
+  // We track whether we have unsaved content for the autosave.
+  const hasDraftRef = useRef(false)
+
+  function clearAutosaveTimer() {
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = null
+    }
+  }
+
+  // Cleanup timer on unmount
+  useEffect(() => clearAutosaveTimer, [])
 
   const save = useCallback(async () => {
-    if (!editorRef.current || saving) return
+    if (!editorRef.current || savingRef.current) return
     const html = editorRef.current.getHTML()
     const text = editorRef.current.getText().trim()
     if (!text) return
 
-    setSaving(true)
+    savingRef.current = true
+    clearAutosaveTimer()
+    hasDraftRef.current = false
+
     const supabase = createClient()
     const { data, error } = await supabase
       .from('journal_blocks')
@@ -40,22 +56,33 @@ export function Composer({ userId, contextId, onSaved }: Props) {
       .select()
       .single()
 
-    setSaving(false)
+    savingRef.current = false
     if (error) { console.error(error); return }
     editorRef.current.clear()
-    setHasContent(false)
     setActive(false)
     requestAnimationFrame(() => editorRef.current?.focus())
     if (data) onSaved(data as Block)
-  }, [saving, userId, contextId, onSaved])
+  }, [userId, contextId, onSaved])
 
-  function handleChange(html: string) {
-    // Check if there's meaningful text content
-    const div = document.createElement('div')
-    div.innerHTML = html
-    const text = (div.textContent ?? '').trim()
-    setHasContent(!!text)
+  function handleChange() {
+    const text = editorRef.current?.getText().trim() ?? ''
+    hasDraftRef.current = !!text
     if (text && !active) setActive(true)
+    if (!text) { setActive(false); clearAutosaveTimer(); return }
+
+    // Reset autosave timer on every keystroke
+    clearAutosaveTimer()
+    autosaveTimerRef.current = setTimeout(() => {
+      // Autosave for Composer = commit the block (same as explicit save)
+      save()
+    }, autosaveInterval * 1000)
+  }
+
+  function handleBlur() {
+    if (!editorRef.current) return
+    const text = editorRef.current.getText().trim()
+    if (!text) { setActive(false); return }
+    save()
   }
 
   return (
@@ -67,6 +94,13 @@ export function Composer({ userId, contextId, onSaved }: Props) {
       <div
         className="px-4 pt-4 pb-2"
         onFocus={() => setActive(true)}
+        onBlur={(e) => {
+          // Only trigger blur save if focus left the composer entirely
+          const parent = e.currentTarget
+          requestAnimationFrame(() => {
+            if (!parent.contains(document.activeElement)) handleBlur()
+          })
+        }}
       >
         <TipTapEditor
           ref={editorRef}
@@ -79,15 +113,8 @@ export function Composer({ userId, contextId, onSaved }: Props) {
       </div>
 
       {active && (
-        <div className="flex items-center justify-between px-4 pb-3 pt-1">
-          <span className="text-xs text-gray-400">Ctrl+Enter to save · Esc to cancel</span>
-          <button
-            onClick={save}
-            disabled={!hasContent || saving}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </button>
+        <div className="flex items-center px-4 pb-3 pt-1">
+          <span className="text-xs text-gray-400">Ctrl+Enter to save · click outside to save</span>
         </div>
       )}
     </div>

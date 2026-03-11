@@ -12,7 +12,7 @@ export default async function TasksPage() {
 
   return (
     <div className="flex h-screen bg-gray-50 font-[family-name:var(--font-geist-sans)]">
-      <Sidebar email={email} displayName={displayName} />
+      <Sidebar email={email} displayName={displayName} userId={user.id} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="h-14 bg-white border-b border-gray-100 flex items-center px-6 flex-shrink-0">
           <h1 className="text-sm font-medium text-gray-900">Tasks</h1>

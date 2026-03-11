@@ -1,7 +1,9 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { UserPreferencesPanel } from './UserPreferencesPanel'
 
 const navItems = [
   {
@@ -54,52 +56,69 @@ const navItems = [
 interface SidebarProps {
   email: string
   displayName: string
+  userId: string
+  onAutosaveChange?: (seconds: number) => void
 }
 
-export function Sidebar({ email, displayName }: SidebarProps) {
+export function Sidebar({ email, displayName, userId, onAutosaveChange }: SidebarProps) {
   const pathname = usePathname()
+  const [prefsOpen, setPrefsOpen] = useState(false)
 
   return (
-    <aside className="w-60 flex-shrink-0 bg-white border-r border-gray-100 flex flex-col">
-      <div className="px-5 py-5 border-b border-gray-100">
-        <span className="text-lg font-semibold text-gray-900 tracking-tight">PDA</span>
-      </div>
-
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
-        {navItems.map((item) => {
-          const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
-                active
-                  ? 'bg-indigo-50 text-indigo-700 font-medium'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-              }`}
-            >
-              <span className={active ? 'text-indigo-500' : 'text-gray-400'}>
-                {item.icon}
-              </span>
-              {item.label}
-            </Link>
-          )
-        })}
-      </nav>
-
-      <div className="px-4 py-4 border-t border-gray-100">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-            <span className="text-xs font-medium text-indigo-700">
-              {(displayName || email || '?')[0].toUpperCase()}
-            </span>
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-gray-800 truncate">{displayName || email}</p>
-            <p className="text-xs text-gray-400 truncate">{email}</p>
-          </div>
+    <>
+      <aside className="w-60 flex-shrink-0 bg-white border-r border-gray-100 flex flex-col">
+        <div className="px-5 py-5 border-b border-gray-100">
+          <span className="text-lg font-semibold text-gray-900 tracking-tight">PDA</span>
         </div>
-      </div>
-    </aside>
+
+        <nav className="flex-1 px-3 py-4 space-y-0.5">
+          {navItems.map((item) => {
+            const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                  active
+                    ? 'bg-indigo-50 text-indigo-700 font-medium'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                }`}
+              >
+                <span className={active ? 'text-indigo-500' : 'text-gray-400'}>
+                  {item.icon}
+                </span>
+                {item.label}
+              </Link>
+            )
+          })}
+        </nav>
+
+        <div className="px-4 py-4 border-t border-gray-100">
+          <button
+            onClick={() => setPrefsOpen(true)}
+            className="flex items-center gap-3 w-full text-left rounded-lg hover:bg-gray-50 p-1 -m-1 transition-colors"
+          >
+            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
+              <span className="text-xs font-medium text-indigo-700">
+                {(displayName || email || '?')[0].toUpperCase()}
+              </span>
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-gray-800 truncate">{displayName || email}</p>
+              <p className="text-xs text-gray-400 truncate">{email}</p>
+            </div>
+          </button>
+        </div>
+      </aside>
+
+      <UserPreferencesPanel
+        email={email}
+        displayName={displayName}
+        userId={userId}
+        open={prefsOpen}
+        onClose={() => setPrefsOpen(false)}
+        onAutosaveChange={onAutosaveChange}
+      />
+    </>
   )
 }

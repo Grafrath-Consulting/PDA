@@ -11,6 +11,7 @@ import { RightPanel } from './components/RightPanel'
 
 const PAGE_SIZE = 20
 const PANEL_STORAGE_KEY = 'journal-panel-open'
+const DEFAULT_AUTOSAVE_INTERVAL = 30
 
 interface Props {
   userId: string
@@ -23,20 +24,31 @@ export function JournalPage({ userId }: Props) {
   const [hasMore, setHasMore] = useState(true)
   const [loading, setLoading] = useState(false)
   const [initialised, setInitialised] = useState(false)
-  // Default true (server render); localStorage applied on mount only.
-  // Writing happens in togglePanel, not in a separate effect, so we never
-  // clobber the stored value during the initial render cycle.
   const [panelOpen, setPanelOpen] = useState(true)
+  const [autosaveInterval, setAutosaveInterval] = useState(DEFAULT_AUTOSAVE_INTERVAL)
 
   const contextFilterRef = useRef(contextFilter)
   contextFilterRef.current = contextFilter
 
-  // Read stored preference once, client-side only (inside useEffect so it
-  // never runs during SSR and never causes a hydration mismatch).
   useEffect(() => {
     const saved = localStorage.getItem(PANEL_STORAGE_KEY)
     if (saved !== null) setPanelOpen(saved === 'true')
   }, [])
+
+  // Fetch autosave preference
+  useEffect(() => {
+    const supabase = createClient()
+    supabase
+      .from('profiles')
+      .select('autosave_interval_seconds')
+      .eq('id', userId)
+      .single()
+      .then(({ data }) => {
+        if (data?.autosave_interval_seconds) {
+          setAutosaveInterval(data.autosave_interval_seconds)
+        }
+      })
+  }, [userId])
 
   function togglePanel() {
     setPanelOpen((prev) => {
@@ -46,7 +58,6 @@ export function JournalPage({ userId }: Props) {
     })
   }
 
-  // Fetch contexts once
   useEffect(() => {
     const supabase = createClient()
     supabase
@@ -131,7 +142,6 @@ export function JournalPage({ userId }: Props) {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Top bar */}
       <header className="h-14 bg-white border-b border-gray-100 flex items-center justify-between px-6 flex-shrink-0">
         <h1 className="text-sm font-medium text-gray-900">Journal</h1>
         <button
@@ -143,7 +153,6 @@ export function JournalPage({ userId }: Props) {
               : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600'
           }`}
         >
-          {/* Panel toggle icon — columns layout */}
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" />
             <line x1="15" y1="3" x2="15" y2="21" />
@@ -151,9 +160,7 @@ export function JournalPage({ userId }: Props) {
         </button>
       </header>
 
-      {/* Body: feed + optional right panel */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Main feed — stretches to fill available width */}
         <div className="flex-1 overflow-y-auto min-w-0">
           <div className="px-6 py-6 space-y-4">
             <ContextFilter
@@ -166,6 +173,7 @@ export function JournalPage({ userId }: Props) {
               userId={userId}
               contextId={contextFilter}
               onSaved={handleNewBlock}
+              autosaveInterval={autosaveInterval}
             />
 
             <BlockFeed
@@ -176,13 +184,13 @@ export function JournalPage({ userId }: Props) {
               onBlockUpdate={handleBlockUpdate}
               onBlockRemove={handleBlockRemove}
               onSplitBlock={handleSplitBlock}
+              autosaveInterval={autosaveInterval}
             />
 
             <ArchivedSection userId={userId} onRestored={handleNewBlock} />
           </div>
         </div>
 
-        {/* Right panel */}
         {panelOpen && <RightPanel userId={userId} />}
       </div>
     </div>

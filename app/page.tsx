@@ -14,7 +14,7 @@ export default async function Journal() {
 
   return (
     <div className="flex h-screen bg-gray-50 font-[family-name:var(--font-geist-sans)]">
-      <Sidebar email={email} displayName={displayName} />
+      <Sidebar email={email} displayName={displayName} userId={user.id} />
       <JournalPage userId={user.id} />
     </div>
   )
