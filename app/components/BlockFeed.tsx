@@ -12,6 +12,7 @@ interface Props {
   onBlockUpdate: (block: Block) => void
   onBlockRemove: (blockId: string) => void
   onSplitBlock: (newBlock: Block) => void
+  autosaveInterval?: number
 }
 
 export function BlockFeed({
@@ -22,6 +23,7 @@ export function BlockFeed({
   onBlockUpdate,
   onBlockRemove,
   onSplitBlock,
+  autosaveInterval = 30,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -66,6 +68,7 @@ export function BlockFeed({
           onUpdate={onBlockUpdate}
           onRemove={onBlockRemove}
           onSplitBlock={onSplitBlock}
+          autosaveInterval={autosaveInterval}
         />
       ))}
 
