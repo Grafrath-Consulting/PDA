@@ -8,9 +8,7 @@ import { TableRow } from '@tiptap/extension-table-row'
 import { TableCell } from '@tiptap/extension-table-cell'
 import { TableHeader } from '@tiptap/extension-table-header'
 import Placeholder from '@tiptap/extension-placeholder'
-import { useEffect, useState, useImperativeHandle, forwardRef } from 'react'
-
-const TOOLBAR_STORAGE_KEY = 'tiptap-toolbar-visible'
+import { useEffect, useImperativeHandle, forwardRef } from 'react'
 
 export interface TipTapEditorHandle {
   getHTML: () => string
@@ -28,27 +26,13 @@ interface Props {
   className?: string
   minHeight?: string
   editable?: boolean
+  toolbarVisible?: boolean
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
-  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '60px', editable = true },
+  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '60px', editable = true, toolbarVisible = false },
   ref
 ) {
-  const [toolbarVisible, setToolbarVisible] = useState(false)
-
-  useEffect(() => {
-    const saved = localStorage.getItem(TOOLBAR_STORAGE_KEY)
-    if (saved === 'true') setToolbarVisible(true)
-  }, [])
-
-  function toggleToolbar() {
-    setToolbarVisible(prev => {
-      const next = !prev
-      localStorage.setItem(TOOLBAR_STORAGE_KEY, String(next))
-      return next
-    })
-  }
-
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -92,7 +76,6 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
     focus: () => { editor?.commands.focus('end') },
   }), [editor])
 
-  // Sync editable prop
   useEffect(() => {
     if (editor && editor.isEditable !== editable) {
       editor.setEditable(editable)
@@ -172,18 +155,6 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
         </div>
       )}
       <EditorContent editor={editor} />
-      <button
-        type="button"
-        onClick={toggleToolbar}
-        title={toolbarVisible ? 'Hide formatting toolbar' : 'Show formatting toolbar'}
-        className={`absolute bottom-1.5 right-1.5 p-1 rounded text-xs transition-colors ${
-          toolbarVisible
-            ? 'text-indigo-500 bg-indigo-50 hover:bg-indigo-100'
-            : 'text-gray-300 hover:text-gray-500 hover:bg-gray-100'
-        }`}
-      >
-        Aa
-      </button>
     </div>
   )
 })
