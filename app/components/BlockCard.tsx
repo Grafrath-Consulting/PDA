@@ -1,15 +1,17 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { createClient } from '@/lib/supabase/client'
 import { Block, BlockStatus, SelectionAction } from '../types'
 import { SelectionMenu } from './SelectionMenu'
 import { HistoryModal } from './HistoryModal'
+import type { TipTapEditorHandle } from './TipTapEditor'
+
+const TipTapEditor = dynamic(() => import('./TipTapEditor').then(m => m.TipTapEditor), { ssr: false })
 
 interface MenuState {
   selText: string
-  start: number
-  end: number
   x: number
   y: number
 }
@@ -31,8 +33,6 @@ function formatTimestamp(iso: string) {
   })
 }
 
-// Compare at minute granularity — sub-minute differences (e.g. status updates)
-// don't warrant showing a "modified" label.
 function isMeaningfullyModified(created: string, updated: string) {
   return created.slice(0, 16) !== updated.slice(0, 16)
 }
@@ -43,63 +43,133 @@ const STATUS_DOT: Record<BlockStatus, { cls: string; title: string } | null> = {
   archived: null,
 }
 
+/** Remove the first occurrence of `needle` (plain text) from an HTML string,
+ *  preserving surrounding markup. Falls back to simple string replace. */
+function removeTextFromHTML(html: string, needle: string): string {
+  if (!needle) return html
+  const div = document.createElement('div')
+  div.innerHTML = html
+  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT)
+  let remaining = needle
+  const nodesToProcess: { node: Text; startIdx: number; endIdx: number }[] = []
+
+  while (walker.nextNode() && remaining.length > 0) {
+    const node = walker.currentNode as Text
+    const text = node.textContent ?? ''
+    const idx = remaining === needle ? text.indexOf(remaining.slice(0, Math.min(remaining.length, text.length))) : 0
+    if (idx === -1) continue
+    const removeLen = Math.min(remaining.length, text.length - idx)
+    nodesToProcess.push({ node, startIdx: idx, endIdx: idx + removeLen })
+    remaining = remaining.slice(removeLen)
+  }
+
+  // If we couldn't find via tree walk, fall back to simple text replacement
+  if (remaining.length > 0) {
+    const stripped = div.textContent ?? ''
+    const pos = stripped.indexOf(needle)
+    if (pos === -1) return html
+    // Fallback: strip all HTML, splice, return plain text
+    return stripped.slice(0, pos) + stripped.slice(pos + needle.length)
+  }
+
+  for (const { node, startIdx, endIdx } of nodesToProcess) {
+    const text = node.textContent ?? ''
+    node.textContent = text.slice(0, startIdx) + text.slice(endIdx)
+  }
+  return div.innerHTML
+}
+
+/** Replace the first occurrence of `needle` text with `replacement` in HTML */
+function replaceTextInHTML(html: string, needle: string, replacement: string): string {
+  if (!needle) return html
+  const div = document.createElement('div')
+  div.innerHTML = html
+  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT)
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text
+    const text = node.textContent ?? ''
+    const idx = text.indexOf(needle)
+    if (idx !== -1) {
+      node.textContent = text.slice(0, idx) + replacement + text.slice(idx + needle.length)
+      return div.innerHTML
+    }
+  }
+  // Fallback
+  const stripped = div.textContent ?? ''
+  const pos = stripped.indexOf(needle)
+  if (pos === -1) return html
+  return stripped.slice(0, pos) + replacement + stripped.slice(pos + needle.length)
+}
+
+/** Get plain text from HTML */
+function htmlToText(html: string): string {
+  const div = document.createElement('div')
+  div.innerHTML = html
+  return div.textContent ?? ''
+}
+
 export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
   const [isEditing, setIsEditing] = useState(false)
-  const [editContent, setEditContent] = useState(block.content ?? '')
   const [dotMenuOpen, setDotMenuOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
 
   const contentRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<TipTapEditorHandle>(null)
   const dotMenuRef = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
 
-  // Refs so stable event listeners can read current values without re-registering
-  const isEditingRef = useRef(isEditing)
-  isEditingRef.current = isEditing
   const blockContentRef = useRef(block.content)
   blockContentRef.current = block.content
 
-  // Guard against double-save (Ctrl+Enter fires saveEdit, then blur also fires it)
   const savingRef = useRef(false)
+  const isEditingRef = useRef(isEditing)
+  isEditingRef.current = isEditing
 
-  // ── selectionchange → open selection menu ────────────────────────────────
+  // ── pointerup → open selection menu (both read and edit mode) ────────
   useEffect(() => {
-    function onSelectionChange() {
-      if (isEditingRef.current || !contentRef.current) return
+    function onPointerUp(e: PointerEvent) {
+      // Small delay to let the browser finalize the selection
+      requestAnimationFrame(() => {
+        const selection = window.getSelection()
+        if (!selection || selection.isCollapsed) return
+        const selText = selection.toString().trim()
+        if (!selText) return
 
-      const selection = window.getSelection()
-      if (!selection || selection.isCollapsed) return
-      const selText = selection.toString()
-      if (!selText.trim()) return
-      if (!contentRef.current.contains(selection.anchorNode)) return
+        const anchor = selection.anchorNode
+        if (!cardRef.current?.contains(anchor)) return
 
-      const range = selection.getRangeAt(0)
-      const rect = range.getBoundingClientRect()
-      if (!rect.width && !rect.height) return
+        // Don't show menu if clicking inside the dot menu or the selection menu itself
+        const target = e.target as Node
+        if (dotMenuRef.current?.contains(target)) return
 
-      const preRange = document.createRange()
-      preRange.setStart(contentRef.current, 0)
-      preRange.setEnd(range.startContainer, range.startOffset)
-      const start = preRange.toString().length
-      const end = start + selText.length
+        const range = selection.getRangeAt(0)
+        const rect = range.getBoundingClientRect()
+        if (!rect.width && !rect.height) return
 
-      setMenuState({ selText, start, end, x: rect.left + rect.width / 2, y: rect.top })
+        setMenuState({ selText, x: rect.left + rect.width / 2, y: rect.top })
+      })
     }
 
-    document.addEventListener('selectionchange', onSelectionChange)
-    return () => document.removeEventListener('selectionchange', onSelectionChange)
+    document.addEventListener('pointerup', onPointerUp)
+    return () => document.removeEventListener('pointerup', onPointerUp)
   }, [])
 
-  // ── Close selection menu on outside mousedown ────────────────────────────
+  // ── Close selection menu on outside mousedown ────────────────────────
   useEffect(() => {
     if (!menuState) return
-    function handler() { setMenuState(null) }
+    function handler(e: MouseEvent) {
+      // Let the selection menu handle its own clicks
+      const target = e.target as HTMLElement
+      if (target.closest?.('.selection-menu-container')) return
+      setMenuState(null)
+    }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [menuState])
 
-  // ── Close dot menu on outside mousedown ─────────────────────────────────
+  // ── Close dot menu on outside mousedown ──────────────────────────────
   useEffect(() => {
     if (!dotMenuOpen) return
     function handler(e: MouseEvent) {
@@ -109,42 +179,44 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
     return () => document.removeEventListener('mousedown', handler)
   }, [dotMenuOpen])
 
-  // ── Click-to-edit ────────────────────────────────────────────────────────
-  // A plain click (no drag-selection) on the content div opens inline editing.
+  // ── Click-to-edit ────────────────────────────────────────────────────
   function handleContentClick() {
     if (isEditing) return
-    // If the user just made a text selection, don't enter edit mode
     const selection = window.getSelection()
     if (selection && !selection.isCollapsed) return
     startEdit()
   }
 
-  // ── Right-click: show menu for full block ────────────────────────────────
+  // ── Right-click: show menu for full block ────────────────────────────
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
     if (isEditing) return
     const selection = window.getSelection()
     const hasSelection = selection && !selection.isCollapsed && selection.toString().trim()
     if (!hasSelection) {
-      const content = blockContentRef.current ?? ''
-      setMenuState({ selText: content, start: 0, end: content.length, x: e.clientX, y: e.clientY })
+      const content = htmlToText(blockContentRef.current ?? '')
+      setMenuState({ selText: content, x: e.clientX, y: e.clientY })
     }
   }
 
-  // ── Action handler — all 8 actions ──────────────────────────────────────
+  // ── Action handler ───────────────────────────────────────────────────
   async function handleAction(action: SelectionAction) {
     if (!menuState) return
-    const { selText, start, end } = menuState
+    const { selText } = menuState
     const content = blockContentRef.current ?? ''
     setMenuState(null)
     window.getSelection()?.removeAllRanges()
 
+    // If in edit mode, get the latest content from the editor
+    const currentContent = isEditingRef.current && editorRef.current
+      ? editorRef.current.getHTML()
+      : content
+
     const supabase = createClient()
 
-    // 1–3: Create Task / Delegate / Waiting On
     if (action.type === 'create_task') {
-      const newContent = content.slice(0, start) + content.slice(end)
-      const isEmpty = !newContent.trim()
+      const newContent = removeTextFromHTML(currentContent, selText)
+      const isEmpty = !htmlToText(newContent).trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
@@ -152,21 +224,20 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
       await supabase.from('tasks').insert({
         user_id: block.user_id,
         context_id: block.context_id,
-        title: selText.trim().slice(0, 500),
-        body: selText.trim(),
+        title: selText.slice(0, 500),
+        body: selText,
         status: 'open',
         task_type: action.taskType,
         assignee_id: action.assigneeId ?? null,
       })
       if (isEmpty) onRemove(block.id)
-      else onUpdate({ ...block, content: newContent, status: newStatus })
+      else { onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
       return
     }
 
-    // 4: Split to Block
     if (action.type === 'split_block') {
-      const newContent = content.slice(0, start) + content.slice(end)
-      const isEmpty = !newContent.trim()
+      const newContent = removeTextFromHTML(currentContent, selText)
+      const isEmpty = !htmlToText(newContent).trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
@@ -176,11 +247,10 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
         .select().single()
       if (newBlock) onSplitBlock(newBlock as Block)
       if (isEmpty) onRemove(block.id)
-      else onUpdate({ ...block, content: newContent, status: newStatus })
+      else { onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
       return
     }
 
-    // 5: Link to Project
     if (action.type === 'link_project') {
       const { data: project } = await supabase.from('projects').select('name').eq('id', action.projectId).single()
       if (!project) return
@@ -196,20 +266,18 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
       return
     }
 
-    // 6: Label as Info — acknowledge and remove from block
     if (action.type === 'label_info') {
-      const newContent = content.slice(0, start) + content.slice(end)
-      const isEmpty = !newContent.trim()
+      const newContent = removeTextFromHTML(currentContent, selText)
+      const isEmpty = !htmlToText(newContent).trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
       if (isEmpty) onRemove(block.id)
-      else onUpdate({ ...block, content: newContent, status: newStatus })
+      else { onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
       return
     }
 
-    // 7: AI Summarize
     if (action.type === 'summarize') {
       const res = await fetch('/api/ai/summarize', {
         method: 'POST',
@@ -218,75 +286,79 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
       })
       const json = await res.json()
       if (!json.summary) return
-      const newContent = content.slice(0, start) + json.summary + content.slice(end)
+      const newContent = replaceTextInHTML(currentContent, selText, json.summary)
       await supabase.from('journal_blocks').update({ content: newContent, status: 'partially_handled' }).eq('id', block.id)
       onUpdate({ ...block, content: newContent, status: 'partially_handled' })
+      exitEdit()
       return
     }
 
-    // 8: Delete Selection
     if (action.type === 'delete_selection') {
-      const newContent = content.slice(0, start) + content.slice(end)
-      const isEmpty = !newContent.trim()
+      const newContent = removeTextFromHTML(currentContent, selText)
+      const isEmpty = !htmlToText(newContent).trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
       if (isEmpty) onRemove(block.id)
-      else onUpdate({ ...block, content: newContent, status: newStatus })
+      else { onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
     }
   }
 
-  // ── Inline edit ──────────────────────────────────────────────────────────
+  // ── Inline edit ──────────────────────────────────────────────────────
   function startEdit() {
     if (isEditing) return
     savingRef.current = false
-    setEditContent(block.content ?? '')
     setIsEditing(true)
     setDotMenuOpen(false)
-    // Focus the textarea on the next frame after it mounts
-    requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
-  async function saveEdit() {
-    if (!isEditing || savingRef.current) return
+  function exitEdit() {
+    setIsEditing(false)
+    savingRef.current = false
+  }
+
+  const saveEdit = useCallback(async () => {
+    if (!isEditingRef.current || savingRef.current || !editorRef.current) return
     savingRef.current = true
     setIsEditing(false)
 
-    const trimmed = editContent.trim()
+    const html = editorRef.current.getHTML()
+    const text = editorRef.current.getText().trim()
     const supabase = createClient()
 
-    if (trimmed === (block.content ?? '').trim()) {
+    // Compare text content to detect real changes
+    const oldText = htmlToText(block.content ?? '').trim()
+    if (text === oldText) {
       savingRef.current = false
       return
     }
 
-    if (!trimmed) {
+    if (!text) {
       await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
       onRemove(block.id)
       savingRef.current = false
       return
     }
 
-    // The on_block_updated DB trigger writes old content to block_versions and
-    // sets updated_at = now(). Fetching the row back gives us the DB-assigned
-    // updated_at so the timestamp refreshes in the UI without a page reload.
     const { data: saved } = await supabase
       .from('journal_blocks')
-      .update({ content: trimmed })
+      .update({ content: html })
       .eq('id', block.id)
       .select()
       .single()
-    onUpdate((saved as Block) ?? { ...block, content: trimmed })
+    onUpdate((saved as Block) ?? { ...block, content: html })
     savingRef.current = false
+  }, [block, onUpdate, onRemove])
+
+  function handleEditorKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      exitEdit()
+    }
   }
 
-  function handleEditKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit() }
-    if (e.key === 'Escape') { setIsEditing(false); setEditContent(block.content ?? ''); savingRef.current = false }
-  }
-
-  // ── Dot menu actions ─────────────────────────────────────────────────────
+  // ── Dot menu actions ─────────────────────────────────────────────────
   async function markDone() {
     setDotMenuOpen(false)
     const supabase = createClient()
@@ -304,9 +376,13 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
   const dot = STATUS_DOT[block.status]
   const showModified = isMeaningfullyModified(block.created_at, block.updated_at)
 
+  // Determine if content looks like HTML or plain text (for backward compat)
+  const contentHTML = (block.content ?? '').startsWith('<') ? block.content ?? '' : `<p>${(block.content ?? '').replace(/\n/g, '</p><p>')}</p>`
+
   return (
     <div
-      className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors select-none cursor-text"
+      ref={cardRef}
+      className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors"
       onClick={handleContentClick}
     >
       {dot && (
@@ -362,39 +438,42 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock }: Props) {
           </div>
         </div>
 
-        {/* Content — click anywhere to edit */}
+        {/* Content */}
         {isEditing ? (
-          <textarea
-            ref={textareaRef}
-            value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
-            onKeyDown={handleEditKeyDown}
-            onBlur={saveEdit}
-            className="w-full text-sm text-gray-800 bg-gray-50 border border-indigo-200 rounded-lg p-2 resize-none outline-none select-text"
-            rows={Math.max(3, editContent.split('\n').length + 1)}
-          />
+          <div onKeyDown={handleEditorKeyDown} onBlur={(e) => {
+            // Save on blur, but not if focus moved within the card (e.g. to toolbar or selection menu)
+            if (cardRef.current?.contains(e.relatedTarget as Node)) return
+            saveEdit()
+          }}>
+            <TipTapEditor
+              ref={editorRef}
+              content={contentHTML}
+              autoFocus
+              onSubmit={saveEdit}
+              className="bg-gray-50 border border-indigo-200 rounded-lg p-2"
+              minHeight="60px"
+            />
+            <p className="text-xs text-gray-400 mt-1.5">Ctrl+Enter to save · Esc to cancel · click outside to save</p>
+          </div>
         ) : (
           <div
             ref={contentRef}
             onContextMenu={handleContextMenu}
-            className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed select-text"
-          >
-            {block.content || <span className="text-gray-300 italic">Click to edit…</span>}
-          </div>
-        )}
-
-        {isEditing && (
-          <p className="text-xs text-gray-400 mt-1.5">Ctrl+Enter to save · Esc to cancel · click outside to save</p>
+            className="tiptap-content text-sm text-gray-800 leading-relaxed select-text cursor-text"
+            dangerouslySetInnerHTML={{ __html: contentHTML }}
+          />
         )}
       </div>
 
       {menuState && (
-        <SelectionMenu
-          position={{ x: menuState.x, y: menuState.y }}
-          userId={block.user_id}
-          onClose={() => setMenuState(null)}
-          onAction={handleAction}
-        />
+        <div className="selection-menu-container">
+          <SelectionMenu
+            position={{ x: menuState.x, y: menuState.y }}
+            userId={block.user_id}
+            onClose={() => setMenuState(null)}
+            onAction={handleAction}
+          />
+        </div>
       )}
 
       {showHistory && (

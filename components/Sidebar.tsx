@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 
 const navItems = [
   {
-    href: '/journal',
+    href: '/',
     label: 'Journal',
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -67,7 +67,7 @@ export function Sidebar({ email, displayName }: SidebarProps) {
 
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         {navItems.map((item) => {
-          const active = pathname.startsWith(item.href)
+          const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
           return (
             <Link
               key={item.href}
