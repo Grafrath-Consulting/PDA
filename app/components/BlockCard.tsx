@@ -10,6 +10,9 @@ import type { TipTapEditorHandle } from './TipTapEditor'
 
 const TipTapEditor = dynamic(() => import('./TipTapEditor').then(m => m.TipTapEditor), { ssr: false })
 
+const TOOLBAR_EXPANDED_KEY = 'block-toolbar-expanded'
+const FORMATTING_VISIBLE_KEY = 'tiptap-toolbar-visible'
+
 interface MenuState {
   selText: string
   x: number
@@ -103,10 +106,50 @@ function htmlToText(html: string): string {
   return div.textContent ?? ''
 }
 
+// ── Toolbar item definitions ──────────────────────────────────────────
+interface ToolbarItem {
+  key: string
+  label: string
+  icon: React.ReactNode
+  className?: string
+}
+
+const ICON_SIZE = 14
+
+function taskIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
+}
+function waitingIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+}
+function linkIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+}
+function infoIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+}
+function sparkleIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
+}
+function checkIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+}
+function historyIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5" /><path d="M3 8a9 9 0 1 1 1.36 4.69" /></svg>
+}
+function trashIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
+}
+function aaIcon() {
+  return <span className="text-[10px] font-semibold leading-none">Aa</span>
+}
+
 export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInterval = 30 }: Props) {
   const [isEditing, setIsEditing] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
+  const [toolbarExpanded, setToolbarExpanded] = useState(false)
+  const [formattingVisible, setFormattingVisible] = useState(false)
 
   const contentRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<TipTapEditorHandle>(null)
@@ -123,6 +166,30 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedHTMLRef = useRef(block.content ?? '')
 
+  // Read persisted preferences once
+  useEffect(() => {
+    const exp = localStorage.getItem(TOOLBAR_EXPANDED_KEY)
+    if (exp === 'true') setToolbarExpanded(true)
+    const fmt = localStorage.getItem(FORMATTING_VISIBLE_KEY)
+    if (fmt === 'true') setFormattingVisible(true)
+  }, [])
+
+  function toggleToolbarExpanded() {
+    setToolbarExpanded(prev => {
+      const next = !prev
+      localStorage.setItem(TOOLBAR_EXPANDED_KEY, String(next))
+      return next
+    })
+  }
+
+  function toggleFormatting() {
+    setFormattingVisible(prev => {
+      const next = !prev
+      localStorage.setItem(FORMATTING_VISIBLE_KEY, String(next))
+      return next
+    })
+  }
+
   function clearAutosaveTimer() {
     if (autosaveTimerRef.current) {
       clearTimeout(autosaveTimerRef.current)
@@ -132,7 +199,7 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
 
   useEffect(() => clearAutosaveTimer, [])
 
-  // ── pointerup → open selection menu (both read and edit mode) ────────
+  // ── pointerup → open selection menu ──────────────────────────────────
   useEffect(() => {
     function onPointerUp(e: PointerEvent) {
       requestAnimationFrame(() => {
@@ -159,7 +226,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
     return () => document.removeEventListener('pointerup', onPointerUp)
   }, [])
 
-  // ── Close selection menu on outside mousedown ────────────────────────
   useEffect(() => {
     if (!menuState) return
     function handler(e: MouseEvent) {
@@ -179,7 +245,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
     startEdit()
   }
 
-  // ── Right-click: show menu for full block ────────────────────────────
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
     if (isEditing) return
@@ -191,7 +256,7 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
     }
   }
 
-  // ── Selection-based action handler ───────────────────────────────────
+  // ── Action handlers ──────────────────────────────────────────────────
   async function handleSelectionAction(action: SelectionAction) {
     if (!menuState) return
     const { selText } = menuState
@@ -200,7 +265,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
     await executeAction(action, selText)
   }
 
-  // ── Toolbar action handler (operates on full block content) ──────────
   async function handleToolbarAction(action: SelectionAction) {
     const content = isEditingRef.current && editorRef.current
       ? editorRef.current.getHTML()
@@ -322,7 +386,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
     savingRef.current = false
   }
 
-  // Versioned save (Ctrl+Enter or blur)
   const saveEdit = useCallback(async () => {
     if (!isEditingRef.current || savingRef.current || !editorRef.current) return
     savingRef.current = true
@@ -346,7 +409,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
       return
     }
 
-    // This update triggers the on_block_updated DB trigger which writes a block_version
     const { data: saved } = await supabase
       .from('journal_blocks')
       .update({ content: html })
@@ -358,24 +420,12 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
     savingRef.current = false
   }, [block, onUpdate, onRemove])
 
-  // Silent autosave (no block_version — direct update bypassing trigger would require
-  // a separate RPC, so we just update content only, which is the same table update.
-  // The DB trigger writes a version; to avoid that, we use a lightweight RPC or
-  // simply accept the version. For now, we do a direct update — the spec says
-  // "silently updates content WITHOUT writing a block_version record", which
-  // requires a separate approach. We'll use an RPC or a direct update with a flag.)
-  // Practical approach: update via .update() which will trigger the DB trigger.
-  // To truly skip the version, we'd need a DB-side flag or separate endpoint.
-  // For now we update content_only via a column or just accept the limitation.
-  // DECISION: We'll do a simple content update. If the DB trigger exists it fires;
-  // we note this as a known limitation the user can refine with an RPC later.
   const autosave = useCallback(async () => {
     if (!isEditingRef.current || savingRef.current || !editorRef.current) return
     const html = editorRef.current.getHTML()
     if (html === lastSavedHTMLRef.current) return
 
     const supabase = createClient()
-    // Use a direct update — content only, no status change
     await supabase
       .from('journal_blocks')
       .update({ content: html })
@@ -396,7 +446,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
     }
   }
 
-  // ── Toolbar direct actions ───────────────────────────────────────────
   async function markDone() {
     exitEdit()
     const supabase = createClient()
@@ -415,6 +464,19 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
   const showModified = isMeaningfullyModified(block.created_at, block.updated_at)
   const contentHTML = (block.content ?? '').startsWith('<') ? block.content ?? '' : `<p>${(block.content ?? '').replace(/\n/g, '</p><p>')}</p>`
 
+  // Build toolbar items (no Delegate)
+  const toolbarItems: (ToolbarItem & { onClick: () => void })[] = [
+    { key: 'task', label: 'Task', icon: taskIcon(), onClick: () => handleToolbarAction({ type: 'create_task', taskType: 'my_task' }) },
+    { key: 'waiting', label: 'Waiting', icon: waitingIcon(), onClick: () => handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' }) },
+    { key: 'link', label: 'Link', icon: linkIcon(), onClick: () => {} },
+    { key: 'info', label: 'Info', icon: infoIcon(), onClick: () => handleToolbarAction({ type: 'label_info' }) },
+    { key: 'ai', label: 'AI', icon: sparkleIcon(), onClick: () => handleToolbarAction({ type: 'summarize' }) },
+    { key: 'done', label: 'Done', icon: checkIcon(), onClick: markDone },
+    { key: 'history', label: 'History', icon: historyIcon(), onClick: () => setShowHistory(true) },
+    { key: 'format', label: 'Format', icon: aaIcon(), onClick: toggleFormatting, className: formattingVisible ? 'text-indigo-500 bg-indigo-50' : undefined },
+    { key: 'delete', label: 'Delete', icon: trashIcon(), onClick: deleteBlock, className: 'text-red-400 hover:text-red-600 hover:bg-red-50' },
+  ]
+
   return (
     <div
       ref={cardRef}
@@ -431,7 +493,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
 
       {/* Main content area */}
       <div className="flex-1 min-w-0 px-4 pt-3 pb-3">
-        {/* Header: timestamps */}
         <div className="flex items-center gap-2 min-w-0 mb-2">
           <span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(block.created_at)}</span>
           {showModified && (
@@ -444,7 +505,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
           )}
         </div>
 
-        {/* Content */}
         {isEditing ? (
           <div onKeyDown={handleEditorKeyDown} onBlur={(e) => {
             if (cardRef.current?.contains(e.relatedTarget as Node)) return
@@ -456,6 +516,7 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
               autoFocus
               onSubmit={saveEdit}
               onChange={handleEditorChange}
+              toolbarVisible={formattingVisible}
               className="bg-gray-50 border border-indigo-200 rounded-lg p-2"
               minHeight="60px"
             />
@@ -474,60 +535,42 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
       {/* Right-edge vertical icon toolbar */}
       <div
         ref={toolbarRef}
-        className="flex-shrink-0 w-8 border-l border-gray-50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center py-2 gap-0.5"
+        className={`flex-shrink-0 border-l border-gray-50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-stretch py-1 ${
+          toolbarExpanded ? 'w-24' : 'w-9'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <ToolbarIcon
-          title="Create Task"
-          onClick={() => handleToolbarAction({ type: 'create_task', taskType: 'my_task' })}
+        {/* Expand/collapse chevron */}
+        <button
+          title={toolbarExpanded ? 'Collapse toolbar' : 'Expand toolbar'}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={toggleToolbarExpanded}
+          className="p-0.5 mx-auto rounded text-gray-300 hover:text-gray-500 transition-colors mb-0.5"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
-        </ToolbarIcon>
-        <ToolbarIcon
-          title="Delegate"
-          onClick={() => handleToolbarAction({ type: 'create_task', taskType: 'delegated' })}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><polyline points="16 11 18 13 22 9" /></svg>
-        </ToolbarIcon>
-        <ToolbarIcon
-          title="Waiting On"
-          onClick={() => handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' })}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-        </ToolbarIcon>
-        <ToolbarIcon
-          title="Link to Project"
-          onClick={() => {/* Would need project picker — for now a stub */}}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
-        </ToolbarIcon>
-        <ToolbarIcon
-          title="Label as Info"
-          onClick={() => handleToolbarAction({ type: 'label_info' })}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-        </ToolbarIcon>
-        <ToolbarIcon
-          title="AI Summarize"
-          onClick={() => handleToolbarAction({ type: 'summarize' })}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
-        </ToolbarIcon>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {toolbarExpanded
+              ? <><polyline points="15 18 9 12 15 6" /></>
+              : <><polyline points="9 18 15 12 9 6" /></>
+            }
+          </svg>
+        </button>
 
-        <div className="w-4 h-px bg-gray-100 my-0.5" />
-
-        <ToolbarIcon title="Mark as Done" onClick={markDone}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-        </ToolbarIcon>
-        <ToolbarIcon
-          title="View History"
-          onClick={() => setShowHistory(true)}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /><path d="M2 12h2" /></svg>
-        </ToolbarIcon>
-        <ToolbarIcon title="Delete" onClick={deleteBlock} className="text-red-400 hover:text-red-600 hover:bg-red-50">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
-        </ToolbarIcon>
+        {toolbarItems.map((item) => (
+          <button
+            key={item.key}
+            title={item.label}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={item.onClick}
+            className={`flex items-center gap-1.5 rounded transition-colors ${
+              toolbarExpanded ? 'px-2 py-0.5' : 'justify-center px-0 py-0.5'
+            } ${item.className ?? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'}`}
+          >
+            <span className="flex-shrink-0 flex items-center justify-center w-4 h-4">{item.icon}</span>
+            {toolbarExpanded && (
+              <span className="text-[10px] leading-none whitespace-nowrap">{item.label}</span>
+            )}
+          </button>
+        ))}
       </div>
 
       {menuState && (
@@ -545,28 +588,5 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
         <HistoryModal blockId={block.id} onClose={() => setShowHistory(false)} />
       )}
     </div>
-  )
-}
-
-function ToolbarIcon({
-  title,
-  onClick,
-  children,
-  className = '',
-}: {
-  title: string
-  onClick: () => void
-  children: React.ReactNode
-  className?: string
-}) {
-  return (
-    <button
-      title={title}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onClick}
-      className={`p-1 rounded transition-colors text-gray-400 hover:text-gray-700 hover:bg-gray-100 ${className}`}
-    >
-      {children}
-    </button>
   )
 }
