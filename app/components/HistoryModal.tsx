@@ -75,9 +75,10 @@ export function HistoryModal({ blockId, onClose }: Props) {
                   <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">oldest saved</span>
                 )}
               </div>
-              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-                {v.content || <span className="text-gray-300 italic">(empty)</span>}
-              </p>
+              {v.content
+                ? <div className="tiptap-content text-sm text-gray-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: v.content }} />
+                : <p className="text-gray-300 italic text-sm">(empty)</p>
+              }
             </div>
           ))}
         </div>

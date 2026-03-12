@@ -168,9 +168,10 @@ export function ArchivedSection({ userId, onRestored }: Props) {
                 }`}
               >
                 <div className="flex items-start gap-3">
-                  <p className="text-sm text-gray-500 whitespace-pre-wrap break-words leading-relaxed flex-1 min-w-0">
-                    {block.content || <span className="italic text-gray-300">Empty</span>}
-                  </p>
+                  {block.content
+                    ? <div className="tiptap-content text-sm text-gray-500 break-words leading-relaxed flex-1 min-w-0" dangerouslySetInnerHTML={{ __html: block.content }} />
+                    : <p className="italic text-gray-300 text-sm flex-1 min-w-0">Empty</p>
+                  }
                   <button
                     onClick={() => (isDeleted ? restore(block) : unarchive(block))}
                     className="flex-shrink-0 text-xs font-medium text-indigo-600 hover:text-indigo-800 mt-0.5 transition-colors"
