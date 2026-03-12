@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { Block } from '../types'
-import { BlockCard } from './BlockCard'
+import { JournalBlock } from './JournalBlock'
 
 interface Props {
   blocks: Block[]
@@ -13,6 +13,8 @@ interface Props {
   onBlockRemove: (blockId: string) => void
   onSplitBlock: (newBlock: Block) => void
   autosaveInterval?: number
+  formattingVisible: boolean
+  onToggleFormatting: () => void
 }
 
 export function BlockFeed({
@@ -24,6 +26,8 @@ export function BlockFeed({
   onBlockRemove,
   onSplitBlock,
   autosaveInterval = 30,
+  formattingVisible,
+  onToggleFormatting,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -62,13 +66,15 @@ export function BlockFeed({
   return (
     <div className="space-y-3">
       {blocks.map((block) => (
-        <BlockCard
+        <JournalBlock
           key={block.id}
           block={block}
           onUpdate={onBlockUpdate}
           onRemove={onBlockRemove}
           onSplitBlock={onSplitBlock}
           autosaveInterval={autosaveInterval}
+          formattingVisible={formattingVisible}
+          onToggleFormatting={onToggleFormatting}
         />
       ))}
 
