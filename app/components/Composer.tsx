@@ -92,7 +92,7 @@ export function Composer({ userId, contextId, onSaved, autosaveInterval = 30 }: 
       }`}
     >
       <div
-        className="px-4 pt-4 pb-2"
+        className="px-4 pt-3 pb-1"
         onFocus={() => setActive(true)}
         onBlur={(e) => {
           // Only trigger blur save if focus left the composer entirely
@@ -112,11 +112,13 @@ export function Composer({ userId, contextId, onSaved, autosaveInterval = 30 }: 
         />
       </div>
 
-      {active && (
-        <div className="flex items-center px-4 pb-3 pt-1">
+      {/* Bottom bar — matches BlockCard layout */}
+      <div className="flex items-center justify-between px-4 pb-2 pt-1">
+        <span className="text-xs text-gray-400">New Entry</span>
+        {active && (
           <span className="text-xs text-gray-400">Ctrl+Enter to save · click outside to save</span>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
