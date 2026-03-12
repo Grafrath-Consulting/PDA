@@ -265,7 +265,8 @@ export function JournalBlock(props: Props) {
   }
 
   async function handleToolbarAction(action: SelectionAction) {
-    if (!props.block) return
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
     const content = isEditingRef.current && editorRef.current
       ? editorRef.current.getHTML()
       : blockContentRef.current
@@ -274,8 +275,9 @@ export function JournalBlock(props: Props) {
   }
 
   async function executeAction(action: SelectionAction, selText: string) {
-    if (!props.block) return
-    const block = props.block
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    const block = p.block
     const currentContent = isEditingRef.current && editorRef.current
       ? editorRef.current.getHTML()
       : blockContentRef.current
@@ -298,8 +300,8 @@ export function JournalBlock(props: Props) {
         task_type: action.taskType,
         assignee_id: action.assigneeId ?? null,
       })
-      if (isEmpty) props.onRemove(block.id)
-      else { props.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
+      if (isEmpty) p.onRemove(block.id)
+      else { p.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
       return
     }
 
@@ -313,9 +315,9 @@ export function JournalBlock(props: Props) {
       const { data: newBlock } = await supabase.from('journal_blocks')
         .insert({ user_id: block.user_id, context_id: block.context_id, content: selText, status: 'partially_handled', created_at: block.created_at })
         .select().single()
-      if (newBlock) props.onSplitBlock(newBlock as Block)
-      if (isEmpty) props.onRemove(block.id)
-      else { props.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
+      if (newBlock) p.onSplitBlock(newBlock as Block)
+      if (isEmpty) p.onRemove(block.id)
+      else { p.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
       return
     }
 
@@ -330,7 +332,7 @@ export function JournalBlock(props: Props) {
       }
       if (tag) await supabase.from('taggings').insert({ tag_id: tag.id, entity_type: 'block', entity_id: block.id })
       await supabase.from('journal_blocks').update({ status: 'partially_handled' }).eq('id', block.id)
-      props.onUpdate({ ...block, status: 'partially_handled' })
+      p.onUpdate({ ...block, status: 'partially_handled' })
       return
     }
 
@@ -341,8 +343,8 @@ export function JournalBlock(props: Props) {
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
-      if (isEmpty) props.onRemove(block.id)
-      else { props.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
+      if (isEmpty) p.onRemove(block.id)
+      else { p.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
       return
     }
 
@@ -356,7 +358,7 @@ export function JournalBlock(props: Props) {
       if (!json.summary) return
       const newContent = replaceTextInHTML(currentContent, selText, json.summary)
       await supabase.from('journal_blocks').update({ content: newContent, status: 'partially_handled' }).eq('id', block.id)
-      props.onUpdate({ ...block, content: newContent, status: 'partially_handled' })
+      p.onUpdate({ ...block, content: newContent, status: 'partially_handled' })
       exitEdit()
       return
     }
@@ -368,8 +370,8 @@ export function JournalBlock(props: Props) {
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
-      if (isEmpty) props.onRemove(block.id)
-      else { props.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
+      if (isEmpty) p.onRemove(block.id)
+      else { p.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
     }
   }
 
@@ -388,6 +390,10 @@ export function JournalBlock(props: Props) {
     savingRef.current = false
   }
 
+  // Keep a ref to props so async callbacks always see the latest values
+  const propsRef = useRef(props)
+  propsRef.current = props
+
   // ── Save: new entry → INSERT, existing → UPDATE + block_version ─────
   const saveNewEntry = useCallback(async () => {
     if (!editorRef.current || savingRef.current) return
@@ -398,7 +404,7 @@ export function JournalBlock(props: Props) {
     savingRef.current = true
     clearAutosaveTimer()
 
-    const p = props as NewEntryProps
+    const p = propsRef.current as NewEntryProps
     const supabase = createClient()
     const { data, error } = await supabase
       .from('journal_blocks')
@@ -413,23 +419,27 @@ export function JournalBlock(props: Props) {
 
     savingRef.current = false
     if (error) { console.error(error); return }
-    editorRef.current.clear()
+    editorRef.current?.clear()
     setFocused(false)
     requestAnimationFrame(() => editorRef.current?.focus())
     if (data) p.onSaved(data as Block)
-  }, [props])
+  }, [])
 
   const saveExistingBlock = useCallback(async () => {
-    if (!props.block || savingRef.current || !editorRef.current) return
-    const block = props.block
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block || savingRef.current || !editorRef.current) return
+
+    // Read editor content BEFORE changing state
+    const html = editorRef.current.getHTML()
+    const text = editorRef.current.getText().trim()
+
     savingRef.current = true
     clearAutosaveTimer()
     setIsEditing(false)
     setFocused(false)
 
-    const html = editorRef.current.getHTML()
-    const text = editorRef.current.getText().trim()
     const supabase = createClient()
+    const block = p.block
 
     const oldText = htmlToText(block.content ?? '').trim()
     if (text === oldText) {
@@ -439,7 +449,7 @@ export function JournalBlock(props: Props) {
 
     if (!text) {
       await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
-      props.onRemove(block.id)
+      p.onRemove(block.id)
       savingRef.current = false
       return
     }
@@ -459,37 +469,37 @@ export function JournalBlock(props: Props) {
       .select()
       .single()
     lastSavedHTMLRef.current = html
-    props.onUpdate((saved as Block) ?? { ...block, content: html })
+    p.onUpdate((saved as Block) ?? { ...block, content: html })
     savingRef.current = false
-  }, [props])
+  }, [])
 
   const handleSave = isNewEntry ? saveNewEntry : saveExistingBlock
 
   // ── Autosave (silent content update, no block_version) ──────────────
-  const autosaveNewEntry = useCallback(async () => {
-    if (!editorRef.current || savingRef.current) return
-    const text = editorRef.current.getText().trim()
-    if (!text) return
-    // For new entries, autosave commits the block just like explicit save
-    await saveNewEntry()
-  }, [saveNewEntry])
+  const autosaveRef = useRef(() => {})
 
-  const autosaveExistingBlock = useCallback(async () => {
-    if (!props.block || savingRef.current || !editorRef.current) return
-    if (!isEditingRef.current) return
-    const html = editorRef.current.getHTML()
-    if (html === lastSavedHTMLRef.current) return
+  autosaveRef.current = isNewEntry
+    ? async () => {
+        if (!editorRef.current || savingRef.current) return
+        const text = editorRef.current.getText().trim()
+        if (!text) return
+        await saveNewEntry()
+      }
+    : async () => {
+        const p = propsRef.current as ExistingBlockProps
+        if (!p.block || savingRef.current || !editorRef.current) return
+        if (!isEditingRef.current) return
+        const html = editorRef.current.getHTML()
+        if (html === lastSavedHTMLRef.current) return
 
-    const supabase = createClient()
-    await supabase
-      .from('journal_blocks')
-      .update({ content: html })
-      .eq('id', props.block.id)
-    lastSavedHTMLRef.current = html
-    blockContentRef.current = html
-  }, [props])
-
-  const autosave = isNewEntry ? autosaveNewEntry : autosaveExistingBlock
+        const supabase = createClient()
+        await supabase
+          .from('journal_blocks')
+          .update({ content: html })
+          .eq('id', p.block.id)
+        lastSavedHTMLRef.current = html
+        blockContentRef.current = html
+      }
 
   function handleEditorChange() {
     if (isNewEntry) {
@@ -498,7 +508,7 @@ export function JournalBlock(props: Props) {
       if (!text) { setFocused(false); clearAutosaveTimer(); return }
     }
     clearAutosaveTimer()
-    autosaveTimerRef.current = setTimeout(autosave, autosaveInterval * 1000)
+    autosaveTimerRef.current = setTimeout(() => autosaveRef.current(), autosaveInterval * 1000)
   }
 
   function handleEditorKeyDown(e: React.KeyboardEvent) {
@@ -520,19 +530,21 @@ export function JournalBlock(props: Props) {
   }
 
   async function markDone() {
-    if (!props.block) return
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
     exitEdit()
     const supabase = createClient()
-    await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', props.block.id)
-    props.onRemove(props.block.id)
+    await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', p.block.id)
+    p.onRemove(p.block.id)
   }
 
   async function deleteBlock() {
-    if (!props.block) return
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
     exitEdit()
     const supabase = createClient()
-    await supabase.from('journal_blocks').update({ deleted_at: new Date().toISOString() }).eq('id', props.block.id)
-    props.onRemove(props.block.id)
+    await supabase.from('journal_blocks').update({ deleted_at: new Date().toISOString() }).eq('id', p.block.id)
+    p.onRemove(p.block.id)
   }
 
   // ── Derived values ──────────────────────────────────────────────────

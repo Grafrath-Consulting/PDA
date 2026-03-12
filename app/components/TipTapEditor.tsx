@@ -8,7 +8,7 @@ import { TableRow } from '@tiptap/extension-table-row'
 import { TableCell } from '@tiptap/extension-table-cell'
 import { TableHeader } from '@tiptap/extension-table-header'
 import Placeholder from '@tiptap/extension-placeholder'
-import { useEffect, useImperativeHandle, forwardRef } from 'react'
+import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react'
 
 export interface TipTapEditorHandle {
   getHTML: () => string
@@ -33,6 +33,12 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '60px', editable = true, toolbarVisible = false },
   ref
 ) {
+  // Keep refs so the closures inside useEditor always call the latest callbacks
+  const onSubmitRef = useRef(onSubmit)
+  onSubmitRef.current = onSubmit
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -58,14 +64,14 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       handleKeyDown(_view, event) {
         if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
           event.preventDefault()
-          onSubmit?.()
+          onSubmitRef.current?.()
           return true
         }
         return false
       },
     },
     onUpdate({ editor: ed }) {
-      onChange?.(ed.getHTML())
+      onChangeRef.current?.(ed.getHTML())
     },
   })
 
