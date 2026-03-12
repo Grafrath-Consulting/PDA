@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Block, Context } from './types'
-import { Composer } from './components/Composer'
+import { JournalBlock } from './components/JournalBlock'
 import { BlockFeed } from './components/BlockFeed'
 import { ContextFilter } from './components/ContextFilter'
 import { ArchivedSection } from './components/ArchivedSection'
@@ -11,6 +11,7 @@ import { RightPanel } from './components/RightPanel'
 
 const PAGE_SIZE = 20
 const PANEL_STORAGE_KEY = 'journal-panel-open'
+const FORMATTING_VISIBLE_KEY = 'tiptap-toolbar-visible'
 const DEFAULT_AUTOSAVE_INTERVAL = 30
 
 interface Props {
@@ -26,6 +27,7 @@ export function JournalPage({ userId }: Props) {
   const [initialised, setInitialised] = useState(false)
   const [panelOpen, setPanelOpen] = useState(true)
   const [autosaveInterval, setAutosaveInterval] = useState(DEFAULT_AUTOSAVE_INTERVAL)
+  const [formattingVisible, setFormattingVisible] = useState(false)
 
   const contextFilterRef = useRef(contextFilter)
   contextFilterRef.current = contextFilter
@@ -33,7 +35,17 @@ export function JournalPage({ userId }: Props) {
   useEffect(() => {
     const saved = localStorage.getItem(PANEL_STORAGE_KEY)
     if (saved !== null) setPanelOpen(saved === 'true')
+    const fmt = localStorage.getItem(FORMATTING_VISIBLE_KEY)
+    if (fmt === 'true') setFormattingVisible(true)
   }, [])
+
+  function toggleFormatting() {
+    setFormattingVisible(prev => {
+      const next = !prev
+      localStorage.setItem(FORMATTING_VISIBLE_KEY, String(next))
+      return next
+    })
+  }
 
   // Fetch autosave preference
   useEffect(() => {
@@ -169,11 +181,13 @@ export function JournalPage({ userId }: Props) {
               onChange={setContextFilter}
             />
 
-            <Composer
+            <JournalBlock
               userId={userId}
               contextId={contextFilter}
               onSaved={handleNewBlock}
               autosaveInterval={autosaveInterval}
+              formattingVisible={formattingVisible}
+              onToggleFormatting={toggleFormatting}
             />
 
             <BlockFeed
@@ -185,6 +199,8 @@ export function JournalPage({ userId }: Props) {
               onBlockRemove={handleBlockRemove}
               onSplitBlock={handleSplitBlock}
               autosaveInterval={autosaveInterval}
+              formattingVisible={formattingVisible}
+              onToggleFormatting={toggleFormatting}
             />
 
             <ArchivedSection userId={userId} onRestored={handleNewBlock} />
