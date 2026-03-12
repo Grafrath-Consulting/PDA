@@ -4,10 +4,9 @@ import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SelectionAction } from '../types'
 
-interface Person { id: string; name: string; email: string | null }
 interface Project { id: string; name: string }
 
-type Step = 'main' | 'delegate' | 'project'
+type Step = 'main' | 'project'
 
 interface Props {
   position: { x: number; y: number }
@@ -18,20 +17,8 @@ interface Props {
 
 export function SelectionMenu({ position, userId, onClose, onAction }: Props) {
   const [step, setStep] = useState<Step>('main')
-  const [people, setPeople] = useState<Person[]>([])
   const [projects, setProjects] = useState<Project[]>([])
-  const [loadingPeople, setLoadingPeople] = useState(false)
   const [loadingProjects, setLoadingProjects] = useState(false)
-
-  async function openDelegate() {
-    setStep('delegate')
-    if (people.length > 0) return
-    setLoadingPeople(true)
-    const supabase = createClient()
-    const { data } = await supabase.from('people').select('id, name, email').eq('user_id', userId).order('name')
-    setPeople(data ?? [])
-    setLoadingPeople(false)
-  }
 
   async function openProject() {
     setStep('project')
@@ -74,10 +61,7 @@ export function SelectionMenu({ position, userId, onClose, onAction }: Props) {
             <Item onClick={() => act({ type: 'create_task', taskType: 'my_task' })}>
               <TaskIcon /> Create Task
             </Item>
-            <Item onClick={openDelegate}>
-              <DelegateIcon /> Delegate…
-            </Item>
-            <Item onClick={() => act({ type: 'create_task', taskType: 'waiting_on' })}>
+<Item onClick={() => act({ type: 'create_task', taskType: 'waiting_on' })}>
               <WaitingIcon /> Waiting On
             </Item>
           </MenuSection>
@@ -99,26 +83,6 @@ export function SelectionMenu({ position, userId, onClose, onAction }: Props) {
               <SparkleIcon /> AI Summarize
             </Item>
           </MenuSection>
-        </>
-      )}
-
-      {step === 'delegate' && (
-        <>
-          <BackButton onClick={() => setStep('main')} />
-          <p className="px-3 py-1 text-xs font-medium text-gray-400 uppercase tracking-wide">Assign to</p>
-          {loadingPeople && <p className="px-3 py-2 text-xs text-gray-400">Loading…</p>}
-          {!loadingPeople && people.length === 0 && (
-            <p className="px-3 py-2 text-xs text-gray-400">No contacts yet</p>
-          )}
-          {people.map((p) => (
-            <Item key={p.id} onClick={() => act({ type: 'create_task', taskType: 'delegated', assigneeId: p.id })}>
-              {p.name}
-            </Item>
-          ))}
-          <Sep />
-          <Item onClick={() => act({ type: 'create_task', taskType: 'delegated' })}>
-            Assign later
-          </Item>
         </>
       )}
 
@@ -183,9 +147,6 @@ function Item({
 // Icons
 function TaskIcon() {
   return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
-}
-function DelegateIcon() {
-  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><polyline points="16 11 18 13 22 9" /></svg>
 }
 function WaitingIcon() {
   return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
