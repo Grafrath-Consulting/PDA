@@ -10,7 +10,6 @@ import type { TipTapEditorHandle } from './TipTapEditor'
 
 const TipTapEditor = dynamic(() => import('./TipTapEditor').then(m => m.TipTapEditor), { ssr: false })
 
-const TOOLBAR_EXPANDED_KEY = 'block-toolbar-expanded'
 const FORMATTING_VISIBLE_KEY = 'tiptap-toolbar-visible'
 
 interface MenuState {
@@ -39,12 +38,6 @@ function formatTimestamp(iso: string) {
 
 function isMeaningfullyModified(created: string, updated: string) {
   return created.slice(0, 16) !== updated.slice(0, 16)
-}
-
-const STATUS_DOT: Record<BlockStatus, { cls: string; title: string } | null> = {
-  unprocessed: null,
-  partially_handled: { cls: 'bg-amber-400', title: 'Partially processed' },
-  archived: null,
 }
 
 function removeTextFromHTML(html: string, needle: string): string {
@@ -106,14 +99,6 @@ function htmlToText(html: string): string {
   return div.textContent ?? ''
 }
 
-// ── Toolbar item definitions ──────────────────────────────────────────
-interface ToolbarItem {
-  key: string
-  label: string
-  icon: React.ReactNode
-  className?: string
-}
-
 const ICON_SIZE = 14
 
 function taskIcon() {
@@ -148,13 +133,14 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
   const [isEditing, setIsEditing] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
-  const [toolbarExpanded, setToolbarExpanded] = useState(false)
+  const [popoverOpen, setPopoverOpen] = useState(false)
   const [formattingVisible, setFormattingVisible] = useState(false)
 
   const contentRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<TipTapEditorHandle>(null)
   const cardRef = useRef<HTMLDivElement>(null)
-  const toolbarRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
 
   const blockContentRef = useRef(block.content)
   blockContentRef.current = block.content
@@ -168,19 +154,22 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
 
   // Read persisted preferences once
   useEffect(() => {
-    const exp = localStorage.getItem(TOOLBAR_EXPANDED_KEY)
-    if (exp === 'true') setToolbarExpanded(true)
     const fmt = localStorage.getItem(FORMATTING_VISIBLE_KEY)
     if (fmt === 'true') setFormattingVisible(true)
   }, [])
 
-  function toggleToolbarExpanded() {
-    setToolbarExpanded(prev => {
-      const next = !prev
-      localStorage.setItem(TOOLBAR_EXPANDED_KEY, String(next))
-      return next
-    })
-  }
+  // Close popover on outside click
+  useEffect(() => {
+    if (!popoverOpen) return
+    function handler(e: MouseEvent) {
+      const target = e.target as Node
+      if (popoverRef.current?.contains(target)) return
+      if (triggerRef.current?.contains(target)) return
+      setPopoverOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [popoverOpen])
 
   function toggleFormatting() {
     setFormattingVisible(prev => {
@@ -212,7 +201,8 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
         if (!cardRef.current?.contains(anchor)) return
 
         const target = e.target as Node
-        if (toolbarRef.current?.contains(target)) return
+        if (triggerRef.current?.contains(target)) return
+        if (popoverRef.current?.contains(target)) return
 
         const range = selection.getRangeAt(0)
         const rect = range.getBoundingClientRect()
@@ -460,51 +450,67 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
     onRemove(block.id)
   }
 
-  const dot = STATUS_DOT[block.status]
   const showModified = isMeaningfullyModified(block.created_at, block.updated_at)
   const contentHTML = (block.content ?? '').startsWith('<') ? block.content ?? '' : `<p>${(block.content ?? '').replace(/\n/g, '</p><p>')}</p>`
 
-  // Build toolbar items (no Delegate)
-  const toolbarItems: (ToolbarItem & { onClick: () => void })[] = [
-    { key: 'task', label: 'Task', icon: taskIcon(), onClick: () => handleToolbarAction({ type: 'create_task', taskType: 'my_task' }) },
-    { key: 'waiting', label: 'Waiting', icon: waitingIcon(), onClick: () => handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' }) },
-    { key: 'link', label: 'Link', icon: linkIcon(), onClick: () => {} },
-    { key: 'info', label: 'Info', icon: infoIcon(), onClick: () => handleToolbarAction({ type: 'label_info' }) },
-    { key: 'ai', label: 'AI', icon: sparkleIcon(), onClick: () => handleToolbarAction({ type: 'summarize' }) },
-    { key: 'done', label: 'Done', icon: checkIcon(), onClick: markDone },
-    { key: 'history', label: 'History', icon: historyIcon(), onClick: () => setShowHistory(true) },
-    { key: 'format', label: 'Format', icon: aaIcon(), onClick: toggleFormatting, className: formattingVisible ? 'text-indigo-500 bg-indigo-50' : undefined },
-    { key: 'delete', label: 'Delete', icon: trashIcon(), onClick: deleteBlock, className: 'text-red-400 hover:text-red-600 hover:bg-red-50' },
+  // Build popover menu items
+  const popoverItems: { key: string; label: string; icon: React.ReactNode; onClick: () => void; className?: string }[] = [
+    { key: 'task', label: 'Create Task', icon: taskIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'my_task' }) } },
+    { key: 'waiting', label: 'Waiting On', icon: waitingIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' }) } },
+    { key: 'link', label: 'Link to Project', icon: linkIcon(), onClick: () => { setPopoverOpen(false) } },
+    { key: 'info', label: 'Label as Info', icon: infoIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'label_info' }) } },
+    { key: 'ai', label: 'AI Summarize', icon: sparkleIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'summarize' }) } },
+    { key: 'format', label: 'Aa', icon: aaIcon(), onClick: () => { setPopoverOpen(false); toggleFormatting() }, className: formattingVisible ? 'text-indigo-600 bg-indigo-50' : undefined },
+    { key: 'done', label: 'Mark as Done', icon: checkIcon(), onClick: () => { setPopoverOpen(false); markDone() } },
+    { key: 'history', label: 'View History', icon: historyIcon(), onClick: () => { setPopoverOpen(false); setShowHistory(true) } },
+    { key: 'delete', label: 'Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); deleteBlock() }, className: 'text-red-500 hover:bg-red-50' },
   ]
 
   return (
     <div
       ref={cardRef}
-      className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors flex"
+      className="relative group bg-white rounded-xl border border-gray-100 shadow-sm hover:border-gray-200 transition-colors"
       onClick={handleContentClick}
     >
-      {dot && (
+      {/* Popover trigger — absolutely positioned, zero layout impact */}
+      <button
+        ref={triggerRef}
+        type="button"
+        title="Actions"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => { e.stopPropagation(); setPopoverOpen(prev => !prev) }}
+        className={`absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all ${
+          popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        }`}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg>
+      </button>
+
+      {/* Popover menu */}
+      {popoverOpen && (
         <div
-          className={`absolute left-0 top-3 bottom-3 w-0.5 rounded-full ${dot.cls}`}
-          style={{ left: '-1px' }}
-          title={dot.title}
-        />
+          ref={popoverRef}
+          className="absolute top-9 right-2 z-20 bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[172px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {popoverItems.map((item) => (
+            <button
+              key={item.key}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={item.onClick}
+              className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-gray-50 transition-colors ${
+                item.className ?? 'text-gray-700'
+              }`}
+            >
+              <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+        </div>
       )}
 
-      {/* Main content area */}
-      <div className="flex-1 min-w-0 px-4 pt-3 pb-3">
-        <div className="flex items-center gap-2 min-w-0 mb-2">
-          <span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(block.created_at)}</span>
-          {showModified && (
-            <>
-              <span className="text-xs text-gray-200">·</span>
-              <span className="text-xs text-gray-400 whitespace-nowrap">
-                edited {formatTimestamp(block.updated_at)}
-              </span>
-            </>
-          )}
-        </div>
-
+      {/* Content */}
+      <div className="px-4 pt-3 pb-1">
         {isEditing ? (
           <div onKeyDown={handleEditorKeyDown} onBlur={(e) => {
             if (cardRef.current?.contains(e.relatedTarget as Node)) return
@@ -520,7 +526,6 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
               className="bg-gray-50 border border-indigo-200 rounded-lg p-2"
               minHeight="60px"
             />
-            <p className="text-xs text-gray-400 mt-1.5">Ctrl+Enter to save · Esc to cancel · click outside to save</p>
           </div>
         ) : (
           <div
@@ -532,45 +537,15 @@ export function BlockCard({ block, onUpdate, onRemove, onSplitBlock, autosaveInt
         )}
       </div>
 
-      {/* Right-edge vertical icon toolbar */}
-      <div
-        ref={toolbarRef}
-        className={`flex-shrink-0 border-l border-gray-50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-stretch py-1 ${
-          toolbarExpanded ? 'w-24' : 'w-9'
-        }`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Expand/collapse chevron */}
-        <button
-          title={toolbarExpanded ? 'Collapse toolbar' : 'Expand toolbar'}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={toggleToolbarExpanded}
-          className="p-0.5 mx-auto rounded text-gray-300 hover:text-gray-500 transition-colors mb-0.5"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            {toolbarExpanded
-              ? <><polyline points="15 18 9 12 15 6" /></>
-              : <><polyline points="9 18 15 12 9 6" /></>
-            }
-          </svg>
-        </button>
-
-        {toolbarItems.map((item) => (
-          <button
-            key={item.key}
-            title={item.label}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={item.onClick}
-            className={`flex items-center gap-1.5 rounded transition-colors ${
-              toolbarExpanded ? 'px-2 py-0.5' : 'justify-center px-0 py-0.5'
-            } ${item.className ?? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'}`}
-          >
-            <span className="flex-shrink-0 flex items-center justify-center w-4 h-4">{item.icon}</span>
-            {toolbarExpanded && (
-              <span className="text-[10px] leading-none whitespace-nowrap">{item.label}</span>
-            )}
-          </button>
-        ))}
+      {/* Bottom bar — timestamp left, edit hints right */}
+      <div className="flex items-center justify-between px-4 pb-2 pt-1">
+        <span className="text-xs text-gray-400">
+          {formatTimestamp(block.created_at)}
+          {showModified && <span> · edited {formatTimestamp(block.updated_at)}</span>}
+        </span>
+        {isEditing && (
+          <span className="text-xs text-gray-400">Ctrl+Enter to save · Esc to cancel · click outside to save</span>
+        )}
       </div>
 
       {menuState && (
