@@ -156,6 +156,7 @@ export function JournalBlock(props: Props) {
   const [menuState, setMenuState] = useState<MenuState | null>(null)
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [focused, setFocused] = useState(false)
+  const [editorKey, setEditorKey] = useState(0)
 
   const editorRef = useRef<TipTapEditorHandle>(null)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -428,11 +429,10 @@ export function JournalBlock(props: Props) {
 
     savingRef.current = false
     if (error) { console.error(error); return }
-    editorRef.current?.clear()
     liveHTMLRef.current = ''
     liveTextRef.current = ''
     setFocused(false)
-    requestAnimationFrame(() => editorRef.current?.focus())
+    setEditorKey(k => k + 1)
     if (data) p.onSaved(data as Block)
   }, [])
 
@@ -637,6 +637,7 @@ export function JournalBlock(props: Props) {
             onBlur={handleBlur}
           >
             <TipTapEditor
+              key={isNewEntry ? editorKey : undefined}
               ref={editorRef}
               content={contentHTML}
               placeholder={isNewEntry ? "What's on your mind? Press Ctrl+Enter to save." : undefined}
