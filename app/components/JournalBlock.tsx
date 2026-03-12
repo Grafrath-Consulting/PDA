@@ -166,6 +166,12 @@ export function JournalBlock(props: Props) {
   const blockContentRef = useRef(props.block?.content ?? '')
   if (props.block) blockContentRef.current = props.block.content ?? ''
 
+  // Live editor content — updated on every keystroke via onChange.
+  // These are the source of truth for save operations (avoids reliance
+  // on editorRef which may be null if next/dynamic doesn't forward refs).
+  const liveHTMLRef = useRef('')
+  const liveTextRef = useRef('')
+
   const savingRef = useRef(false)
   const isEditingRef = useRef(isEditing || isNewEntry)
   isEditingRef.current = isEditing || isNewEntry
@@ -267,8 +273,8 @@ export function JournalBlock(props: Props) {
   async function handleToolbarAction(action: SelectionAction) {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    const content = isEditingRef.current && editorRef.current
-      ? editorRef.current.getHTML()
+    const content = isEditingRef.current
+      ? liveHTMLRef.current
       : blockContentRef.current
     const fullText = htmlToText(content)
     await executeAction(action, fullText)
@@ -278,8 +284,8 @@ export function JournalBlock(props: Props) {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
     const block = p.block
-    const currentContent = isEditingRef.current && editorRef.current
-      ? editorRef.current.getHTML()
+    const currentContent = isEditingRef.current
+      ? liveHTMLRef.current
       : blockContentRef.current
 
     const supabase = createClient()
@@ -379,7 +385,10 @@ export function JournalBlock(props: Props) {
   function startEdit() {
     if (isEditing) return
     savingRef.current = false
-    lastSavedHTMLRef.current = props.block?.content ?? ''
+    const content = props.block?.content ?? ''
+    lastSavedHTMLRef.current = content
+    liveHTMLRef.current = content
+    liveTextRef.current = htmlToText(content)
     setIsEditing(true)
   }
 
@@ -396,9 +405,9 @@ export function JournalBlock(props: Props) {
 
   // ── Save: new entry → INSERT, existing → UPDATE + block_version ─────
   const saveNewEntry = useCallback(async () => {
-    if (!editorRef.current || savingRef.current) return
-    const html = editorRef.current.getHTML()
-    const text = editorRef.current.getText().trim()
+    if (savingRef.current) return
+    const html = liveHTMLRef.current
+    const text = liveTextRef.current.trim()
     if (!text) return
 
     savingRef.current = true
@@ -420,6 +429,8 @@ export function JournalBlock(props: Props) {
     savingRef.current = false
     if (error) { console.error(error); return }
     editorRef.current?.clear()
+    liveHTMLRef.current = ''
+    liveTextRef.current = ''
     setFocused(false)
     requestAnimationFrame(() => editorRef.current?.focus())
     if (data) p.onSaved(data as Block)
@@ -427,11 +438,10 @@ export function JournalBlock(props: Props) {
 
   const saveExistingBlock = useCallback(async () => {
     const p = propsRef.current as ExistingBlockProps
-    if (!p.block || savingRef.current || !editorRef.current) return
+    if (!p.block || savingRef.current) return
 
-    // Read editor content BEFORE changing state
-    const html = editorRef.current.getHTML()
-    const text = editorRef.current.getText().trim()
+    const html = liveHTMLRef.current
+    const text = liveTextRef.current.trim()
 
     savingRef.current = true
     clearAutosaveTimer()
@@ -480,16 +490,16 @@ export function JournalBlock(props: Props) {
 
   autosaveRef.current = isNewEntry
     ? async () => {
-        if (!editorRef.current || savingRef.current) return
-        const text = editorRef.current.getText().trim()
+        if (savingRef.current) return
+        const text = liveTextRef.current.trim()
         if (!text) return
         await saveNewEntry()
       }
     : async () => {
         const p = propsRef.current as ExistingBlockProps
-        if (!p.block || savingRef.current || !editorRef.current) return
+        if (!p.block || savingRef.current) return
         if (!isEditingRef.current) return
-        const html = editorRef.current.getHTML()
+        const html = liveHTMLRef.current
         if (html === lastSavedHTMLRef.current) return
 
         const supabase = createClient()
@@ -501,11 +511,13 @@ export function JournalBlock(props: Props) {
         blockContentRef.current = html
       }
 
-  function handleEditorChange() {
+  function handleEditorChange(html: string, text: string) {
+    liveHTMLRef.current = html
+    liveTextRef.current = text
+    const trimmed = text.trim()
     if (isNewEntry) {
-      const text = editorRef.current?.getText().trim() ?? ''
-      if (text && !focused) setFocused(true)
-      if (!text) { setFocused(false); clearAutosaveTimer(); return }
+      if (trimmed && !focused) setFocused(true)
+      if (!trimmed) { setFocused(false); clearAutosaveTimer(); return }
     }
     clearAutosaveTimer()
     autosaveTimerRef.current = setTimeout(() => autosaveRef.current(), autosaveInterval * 1000)
@@ -521,7 +533,7 @@ export function JournalBlock(props: Props) {
   function handleBlur(e: React.FocusEvent) {
     if (cardRef.current?.contains(e.relatedTarget as Node)) return
     if (isNewEntry) {
-      const text = editorRef.current?.getText().trim() ?? ''
+      const text = liveTextRef.current.trim()
       if (!text) { setFocused(false); return }
       saveNewEntry()
     } else if (isEditing) {

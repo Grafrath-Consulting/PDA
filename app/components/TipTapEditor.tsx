@@ -22,7 +22,7 @@ interface Props {
   placeholder?: string
   autoFocus?: boolean
   onSubmit?: () => void
-  onChange?: (html: string) => void
+  onChange?: (html: string, text: string) => void
   className?: string
   minHeight?: string
   editable?: boolean
@@ -71,7 +71,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       },
     },
     onUpdate({ editor: ed }) {
-      onChangeRef.current?.(ed.getHTML())
+      onChangeRef.current?.(ed.getHTML(), ed.getText())
     },
   })
 
