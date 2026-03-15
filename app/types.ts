@@ -37,3 +37,4 @@ export type SelectionAction =
   | { type: 'label_info' }
   | { type: 'summarize' }
   | { type: 'delete_selection' }
+  | { type: 'mark_done' }

@@ -185,6 +185,7 @@ export function JournalBlock(props: Props) {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedHTMLRef = useRef(props.block?.content ?? '')
 
+
   // Track the last props.block.content we synced into the editor,
   // so we can detect external updates and push them in.
   const lastSyncedContentRef = useRef(props.block?.content ?? null)
@@ -548,12 +549,13 @@ export function JournalBlock(props: Props) {
       .single()
 
     savingRef.current = false
-    if (error) { console.error(error); return }
+    if (error) { console.error(error); return null }
     liveHTMLRef.current = ''
     liveTextRef.current = ''
     setFocused(false)
     setEditorKey(k => k + 1)
     if (data) p.onSaved(data as Block)
+    return (data as Block) ?? null
   }, [])
 
   const saveExistingBlock = useCallback(async () => {
@@ -651,15 +653,167 @@ export function JournalBlock(props: Props) {
     autosaveTimerRef.current = setTimeout(() => autosaveRef.current(), autosaveInterval * 1000)
   }
 
+  async function handleNewEntryShortcut(action: SelectionAction) {
+    const p = propsRef.current as NewEntryProps
+    if (savingRef.current) return
+    const html = liveHTMLRef.current
+    const text = liveTextRef.current.trim()
+    if (!text) return
+
+    savingRef.current = true
+    clearAutosaveTimer()
+    const supabase = createClient()
+    const { data, error } = await supabase
+      .from('journal_blocks')
+      .insert({
+        user_id: p.userId,
+        context_id: p.contextId ?? null,
+        content: html,
+        status: 'unprocessed',
+      })
+      .select()
+      .single()
+
+    savingRef.current = false
+    if (error || !data) { console.error(error); return }
+
+    liveHTMLRef.current = ''
+    liveTextRef.current = ''
+    setFocused(false)
+    setEditorKey(k => k + 1)
+    p.onSaved(data as Block)
+
+    const saved = data as Block
+    const fullText = htmlToText(html)
+    const supabase2 = createClient()
+
+    if (action.type === 'create_task') {
+      await supabase2.from('journal_blocks')
+        .update({ status: 'archived', is_archived: true })
+        .eq('id', saved.id)
+      await supabase2.from('tasks').insert({
+        user_id: saved.user_id,
+        context_id: saved.context_id,
+        title: fullText.slice(0, 500),
+        body: fullText,
+        status: 'open',
+        task_type: action.taskType,
+        assignee_id: null,
+      })
+      return
+    }
+
+    if (action.type === 'mark_done') {
+      await supabase2.from('tasks').insert({
+        user_id: saved.user_id,
+        context_id: saved.context_id,
+        title: fullText.slice(0, 500),
+        body: fullText,
+        status: 'done',
+        task_type: 'my_task',
+        assignee_id: null,
+      })
+      await supabase2.from('journal_blocks')
+        .update({ status: 'archived', is_archived: true })
+        .eq('id', saved.id)
+      return
+    }
+
+    if (action.type === 'summarize') {
+      const res = await fetch('/api/ai/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: fullText }),
+      })
+      if (!res.ok) return
+      const json = await res.json()
+      if (!json.summary) return
+      await supabase2.from('journal_blocks')
+        .update({ content: json.summary, status: 'partially_handled' })
+        .eq('id', saved.id)
+    }
+  }
+
   function handleEditorKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Escape' && !isNewEntry && focused) {
       e.preventDefault()
-      // Revert content to last saved state
       const revertTo = lastSavedHTMLRef.current
       editorRef.current?.setContent(revertTo)
       liveHTMLRef.current = revertTo
       liveTextRef.current = htmlToText(revertTo)
       deactivate()
+      return
+    }
+
+    const isAltShift = e.altKey && e.shiftKey
+    const isCtrlOnly = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey
+
+    if (isAltShift && e.key === 'F') {
+      e.preventDefault()
+      onToggleFormatting()
+      return
+    }
+
+    if (isNewEntry && isAltShift) {
+      if (e.key === 'T') {
+        e.preventDefault()
+        handleNewEntryShortcut({ type: 'create_task', taskType: 'my_task' })
+        return
+      }
+      if (e.key === 'W') {
+        e.preventDefault()
+        handleNewEntryShortcut({ type: 'create_task', taskType: 'waiting_on' })
+        return
+      }
+      if (e.key === 'D') {
+        e.preventDefault()
+        handleNewEntryShortcut({ type: 'mark_done' })
+        return
+      }
+      if (e.key === 'S') {
+        e.preventDefault()
+        handleNewEntryShortcut({ type: 'summarize' })
+        return
+      }
+    }
+
+    if (isNewEntry && isCtrlOnly && e.key === 'Delete') {
+      e.preventDefault()
+      e.stopPropagation()
+      liveHTMLRef.current = ''
+      liveTextRef.current = ''
+      clearAutosaveTimer()
+      setEditorKey(k => k + 1)
+      return
+    }
+
+    if (!isNewEntry && focused && isAltShift) {
+      if (e.key === 'T') {
+        e.preventDefault()
+        handleToolbarAction({ type: 'create_task', taskType: 'my_task' })
+        return
+      }
+      if (e.key === 'W') {
+        e.preventDefault()
+        handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' })
+        return
+      }
+      if (e.key === 'D') {
+        e.preventDefault()
+        markDone()
+        return
+      }
+      if (e.key === 'S') {
+        e.preventDefault()
+        handleToolbarAction({ type: 'summarize' })
+        return
+      }
+    }
+
+    if (!isNewEntry && focused && isCtrlOnly && e.key === 'Delete') {
+      e.preventDefault()
+      deleteBlock()
+      return
     }
   }
 
@@ -730,16 +884,16 @@ export function JournalBlock(props: Props) {
   const showToolbar = focused && formattingVisible
 
   // Build popover menu items — identical chrome for new entry and existing blocks.
-  const popoverItems: { key: string; label: string; icon: React.ReactNode; onClick: () => void; className?: string }[] = [
-    { key: 'task', label: 'Create Task', icon: taskIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'my_task' }) } },
-    { key: 'waiting', label: 'Waiting On', icon: waitingIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' }) } },
+  const popoverItems: { key: string; label: string; shortcut?: string; icon: React.ReactNode; onClick: () => void; className?: string }[] = [
+    { key: 'task', label: 'Create Task', shortcut: '⌥⇧T', icon: taskIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'my_task' }) } },
+    { key: 'waiting', label: 'Waiting On', shortcut: '⌥⇧W', icon: waitingIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' }) } },
     { key: 'link', label: 'Link to Project', icon: linkIcon(), onClick: () => { setPopoverOpen(false) } },
     { key: 'info', label: 'Label as Info', icon: infoIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'label_info' }) } },
-    { key: 'ai', label: 'AI Summarize', icon: sparkleIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'summarize' }) } },
-    { key: 'format', label: 'Formatting', icon: formatBarIcon(), onClick: () => { setPopoverOpen(false); onToggleFormatting() }, className: formattingVisible ? 'text-amber-700 bg-amber-50' : undefined },
-    { key: 'done', label: 'Mark as Done', icon: checkIcon(), onClick: () => { setPopoverOpen(false); markDone() } },
+    { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', icon: sparkleIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'summarize' }) } },
+    { key: 'format', label: 'Formatting', shortcut: '⌥⇧F', icon: formatBarIcon(), onClick: () => { setPopoverOpen(false); onToggleFormatting() }, className: formattingVisible ? 'text-amber-700 bg-amber-50' : undefined },
+    { key: 'done', label: 'Mark as Done', shortcut: '⌥⇧D', icon: checkIcon(), onClick: () => { setPopoverOpen(false); markDone() } },
     { key: 'history', label: 'View History', icon: historyIcon(), onClick: () => { setPopoverOpen(false); if (block) setShowHistory(true) } },
-    { key: 'delete', label: 'Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); deleteBlock() }, className: 'text-red-500 hover:bg-red-50' },
+    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
   ]
 
   // Disable split when selection covers entire block content
@@ -789,7 +943,8 @@ export function JournalBlock(props: Props) {
               }`}
             >
               <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">{item.icon}</span>
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.shortcut && <span className="text-[10px] text-gray-400 ml-3">{item.shortcut}</span>}
             </button>
           ))}
         </div>
@@ -797,7 +952,7 @@ export function JournalBlock(props: Props) {
 
       {/* Content — always-mounted TipTap editor for active blocks */}
       <div
-        className={`px-4 pb-1 ${showToolbar ? 'pt-1' : 'pt-3'}`}
+        className={`px-4 pb-0 ${showToolbar ? 'pt-1' : 'pt-2'}`}
         onKeyDown={handleEditorKeyDown}
         onFocus={() => {
           if (isNewEntry) {
@@ -826,16 +981,16 @@ export function JournalBlock(props: Props) {
       </div>
 
       {/* Bottom bar */}
-      <div className="flex items-center justify-between px-4 pb-2 pt-1 select-none">
-        <span className="text-xs text-gray-400">
+      <div className="flex items-center justify-between px-4 pb-1.5 pt-0 select-none">
+        <span className="text-[11px] text-gray-400">
           {block
             ? <>Created {formatTimestamp(block.created_at)}{showModified && <span> · Modified {formatTimestamp(block.updated_at)}</span>}</>
             : 'New Entry'
           }
         </span>
         {focused && (
-          <span className="text-xs text-gray-400">
-            Ctrl+Enter to save{!isNewEntry && ' · Esc to cancel'} · click outside to save
+          <span className="text-[11px] text-gray-400">
+            Ctrl+Enter (or click outside) to save{!isNewEntry && ' · Esc to cancel'} · Ctrl+Del to delete
           </span>
         )}
       </div>
