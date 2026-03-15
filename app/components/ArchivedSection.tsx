@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Block } from '../types'
 
@@ -12,9 +12,15 @@ function thirtyDaysAgo() {
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString(undefined, {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
   })
+}
+
+/** Sort key: deleted_at for deleted items, updated_at for archived items, falling back to created_at */
+function actionTime(block: Block): number {
+  const ts = block.deleted_at ?? block.updated_at ?? block.created_at
+  return new Date(ts).getTime()
 }
 
 interface Props {
@@ -22,12 +28,29 @@ interface Props {
   onRestored: (block: Block) => void
 }
 
-export function ArchivedSection({ userId, onRestored }: Props) {
+export interface ArchivedSectionHandle {
+  addBlock: (block: Block) => void
+}
+
+export const ArchivedSection = forwardRef<ArchivedSectionHandle, Props>(function ArchivedSection({ userId, onRestored }, ref) {
   const [open, setOpen] = useState(false)
   const [blocks, setBlocks] = useState<Block[]>([])
   const [count, setCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
+
+  // Imperative API so JournalPage can push blocks here after archive/delete
+  useImperativeHandle(ref, () => ({
+    addBlock(block: Block) {
+      setBlocks(prev => {
+        if (prev.some(b => b.id === block.id)) return prev
+        return [block, ...prev].sort(
+          (a, b) => actionTime(b) - actionTime(a)
+        )
+      })
+      setCount(prev => prev + 1)
+    },
+  }))
 
   // Fetch the total count on mount so the toggle button has a number
   useEffect(() => {
@@ -77,7 +100,7 @@ export function ArchivedSection({ userId, onRestored }: Props) {
     ])
 
     const combined = [...(archived ?? []), ...(deleted ?? [])]
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) as Block[]
+      .sort((a, b) => actionTime(b) - actionTime(a)) as Block[]
 
     setBlocks(combined)
     setLoaded(true)
@@ -121,7 +144,7 @@ export function ArchivedSection({ userId, onRestored }: Props) {
   if (count === 0) return null
 
   return (
-    <div className="mt-6 pt-6 border-t border-gray-100">
+    <div className="mt-6 pt-6 border-t border-[#E5E0D0]">
       <button
         onClick={toggle}
         className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors"
@@ -147,7 +170,7 @@ export function ArchivedSection({ userId, onRestored }: Props) {
           {loading && (
             <div className="space-y-2">
               {[...Array(2)].map((_, i) => (
-                <div key={i} className="h-16 bg-gray-50 rounded-xl animate-pulse" />
+                <div key={i} className="h-16 bg-[#FFFEF7] rounded-xl animate-pulse" />
               ))}
             </div>
           )}
@@ -164,25 +187,30 @@ export function ArchivedSection({ userId, onRestored }: Props) {
                 className={`rounded-xl border px-4 py-3 ${
                   isDeleted
                     ? 'bg-red-50 border-red-100'
-                    : 'bg-gray-50 border-gray-100'
+                    : 'bg-[#FFFEF7] border-[#E5E0D0]'
                 }`}
               >
                 <div className="flex items-start gap-3">
                   {block.content
-                    ? <div className="tiptap-content text-sm text-gray-500 break-words leading-relaxed flex-1 min-w-0" dangerouslySetInnerHTML={{ __html: block.content }} />
+                    ? <div className="tiptap-content text-gray-500 break-words flex-1 min-w-0" dangerouslySetInnerHTML={{ __html: block.content }} />
                     : <p className="italic text-gray-300 text-sm flex-1 min-w-0">Empty</p>
                   }
                   <button
                     onClick={() => (isDeleted ? restore(block) : unarchive(block))}
-                    className="flex-shrink-0 text-xs font-medium text-indigo-600 hover:text-indigo-800 mt-0.5 transition-colors"
+                    className="flex-shrink-0 text-xs font-medium text-[#D97706] hover:text-[#92400E] mt-0.5 transition-colors"
                   >
                     {isDeleted ? 'Restore' : 'Unarchive'}
                   </button>
                 </div>
                 <p className="text-xs text-gray-400 mt-1.5">
+                  Created {formatDate(block.created_at)}
+                  {block.updated_at !== block.created_at && (
+                    <span> · Modified {formatDate(block.updated_at)}</span>
+                  )}
                   {isDeleted
-                    ? `Deleted · ${formatDate(block.deleted_at!)}`
-                    : `Archived · ${formatDate(block.created_at)}`}
+                    ? <span> · Deleted {formatDate(block.deleted_at!)}</span>
+                    : <span> · Archived {formatDate(block.updated_at ?? block.created_at)}</span>
+                  }
                 </p>
               </div>
             )
@@ -191,4 +219,4 @@ export function ArchivedSection({ userId, onRestored }: Props) {
       )}
     </div>
   )
-}
+})

@@ -44,7 +44,7 @@ function SectionBlock({ section, collapsed, onToggle }: SectionBlockProps) {
       <button
         onClick={onToggle}
         disabled={count === 0}
-        className="flex items-center justify-between w-full px-1 py-1.5 rounded hover:bg-gray-50 transition-colors disabled:cursor-default"
+        className="flex items-center justify-between w-full px-1 py-1.5 rounded hover:bg-[#FFFEF7] transition-colors disabled:cursor-default"
       >
         <div className="flex items-center gap-1.5">
           <svg
@@ -74,7 +74,7 @@ function SectionBlock({ section, collapsed, onToggle }: SectionBlockProps) {
       {!collapsed && count > 0 && (
         <div className="mt-0.5 space-y-px pl-4">
           {section.tasks.map((task) => (
-            <div key={task.id} className="flex items-start gap-2 py-1.5 px-2 rounded-lg hover:bg-gray-50">
+            <div key={task.id} className="flex items-start gap-2 py-1.5 px-2 rounded-lg hover:bg-[#FFFEF7]">
               <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${colors.dot}`} />
               <div className="min-w-0 flex-1">
                 <p className={`text-xs leading-snug ${colors.item} break-words`}>{task.title}</p>
@@ -158,12 +158,12 @@ export function RightPanel({ userId }: Props) {
   }
 
   return (
-    <div className="w-[280px] flex-shrink-0 bg-white border-l border-gray-100 flex flex-col overflow-hidden">
+    <div className="w-[280px] flex-shrink-0 bg-white border-l border-[#E5E0D0] flex flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto px-3 py-4">
         {loading && (
           <div className="space-y-2">
             {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-6 bg-gray-50 rounded animate-pulse" />
+              <div key={i} className="h-6 bg-[#FFFEF7] rounded animate-pulse" />
             ))}
           </div>
         )}

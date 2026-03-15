@@ -17,8 +17,8 @@ export function ContextFilter({ contexts, active, onChange }: Props) {
         onClick={() => onChange(null)}
         className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
           active === null
-            ? 'bg-indigo-600 text-white'
-            : 'bg-white border border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700'
+            ? 'bg-[#F59E0B] text-white'
+            : 'bg-white border border-[#E5E0D0] text-gray-500 hover:border-[#D5D0C0] hover:text-gray-700'
         }`}
       >
         All
@@ -29,8 +29,8 @@ export function ContextFilter({ contexts, active, onChange }: Props) {
           onClick={() => onChange(ctx.id)}
           className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
             active === ctx.id
-              ? 'bg-indigo-600 text-white'
-              : 'bg-white border border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700'
+              ? 'bg-[#F59E0B] text-white'
+              : 'bg-white border border-[#E5E0D0] text-gray-500 hover:border-[#D5D0C0] hover:text-gray-700'
           }`}
           style={
             active === ctx.id && ctx.color

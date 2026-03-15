@@ -13,9 +13,10 @@ interface Props {
   userId: string
   onClose: () => void
   onAction: (action: SelectionAction) => void
+  disableSplit?: boolean
 }
 
-export function SelectionMenu({ position, userId, onClose, onAction }: Props) {
+export function SelectionMenu({ position, userId, onClose, onAction, disableSplit }: Props) {
   const [step, setStep] = useState<Step>('main')
   const [projects, setProjects] = useState<Project[]>([])
   const [loadingProjects, setLoadingProjects] = useState(false)
@@ -35,23 +36,19 @@ export function SelectionMenu({ position, userId, onClose, onAction }: Props) {
     onClose()
   }
 
-  // Flip below the selection when near the top of the viewport to avoid clipping
-  const MENU_HEIGHT_ESTIMATE = 260
-  const flipDown = position.y < MENU_HEIGHT_ESTIMATE + 16
+  // Position to the left of the journal block, vertically centred on the selection
   const style: React.CSSProperties = {
     position: 'fixed',
     left: position.x,
     top: position.y,
-    transform: flipDown
-      ? 'translate(-50%, 8px)'
-      : 'translate(-50%, calc(-100% - 8px))',
+    transform: 'translate(calc(-100% - 8px), -50%)',
     zIndex: 50,
   }
 
   return (
     <div
       style={style}
-      className="bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[176px]"
+      className="bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 min-w-[176px]"
       onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -67,9 +64,11 @@ export function SelectionMenu({ position, userId, onClose, onAction }: Props) {
           </MenuSection>
           <Sep />
           <MenuSection>
-            <Item onClick={() => act({ type: 'split_block' })}>
-              <SplitIcon /> Split to Block
-            </Item>
+            {!disableSplit && (
+              <Item onClick={() => act({ type: 'split_block' })}>
+                <SplitIcon /> Split to Block
+              </Item>
+            )}
             <Item onClick={openProject}>
               <LinkIcon /> Link to Project…
             </Item>
@@ -110,7 +109,7 @@ function MenuSection({ children }: { children: React.ReactNode }) {
 }
 
 function Sep() {
-  return <div className="h-px bg-gray-100 my-1" />
+  return <div className="h-px bg-[#E5E0D0] my-1" />
 }
 
 function BackButton({ onClick }: { onClick: () => void }) {
@@ -137,7 +136,7 @@ function Item({
     <button
       onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
       onClick={onClick}
-      className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 text-left hover:bg-gray-50 transition-colors ${className}`}
+      className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 text-left hover:bg-[#FFFEF7] transition-colors ${className}`}
     >
       {children}
     </button>

@@ -21,19 +21,27 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const message = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 512,
-    messages: [
-      {
-        role: 'user',
-        content: `Condense the following text into a concise summary that preserves all key information. Return only the summary, no preamble.\n\n${text}`,
-      },
-    ],
-  })
+  try {
+    const message = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 512,
+      messages: [
+        {
+          role: 'user',
+          content: `Condense the following text into a concise summary that preserves all key information. Return only the summary, no preamble.\n\n${text}`,
+        },
+      ],
+    })
 
-  const summary =
-    message.content[0]?.type === 'text' ? message.content[0].text : text
+    const summary =
+      message.content[0]?.type === 'text' ? message.content[0].text : text
 
-  return Response.json({ summary })
+    return Response.json({ summary })
+  } catch (err) {
+    console.error('Summarize API error:', err)
+    return Response.json(
+      { error: err instanceof Error ? err.message : 'Summarization failed' },
+      { status: 500 },
+    )
+  }
 }

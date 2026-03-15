@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { UserPreferencesPanel } from './UserPreferencesPanel'
+import { versionString, buildDateString } from '@/lib/version'
 
 const navItems = [
   {
@@ -66,8 +67,8 @@ export function Sidebar({ email, displayName, userId, onAutosaveChange }: Sideba
 
   return (
     <>
-      <aside className="w-60 flex-shrink-0 bg-white border-r border-gray-100 flex flex-col">
-        <div className="px-5 py-5 border-b border-gray-100">
+      <aside className="w-60 flex-shrink-0 bg-white border-r border-[#E5E0D0] flex flex-col">
+        <div className="px-5 py-5 border-b border-[#E5E0D0]">
           <span className="text-lg font-semibold text-gray-900 tracking-tight">PDA</span>
         </div>
 
@@ -80,11 +81,11 @@ export function Sidebar({ email, displayName, userId, onAutosaveChange }: Sideba
                 href={item.href}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
                   active
-                    ? 'bg-indigo-50 text-indigo-700 font-medium'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                    ? 'bg-[#FEF3C7] text-[#92400E] font-medium'
+                    : 'text-gray-600 hover:bg-[#FEF3C7]/50 hover:text-gray-900'
                 }`}
               >
-                <span className={active ? 'text-indigo-500' : 'text-gray-400'}>
+                <span className={active ? 'text-[#D97706]' : 'text-[#78716C]'}>
                   {item.icon}
                 </span>
                 {item.label}
@@ -93,13 +94,18 @@ export function Sidebar({ email, displayName, userId, onAutosaveChange }: Sideba
           })}
         </nav>
 
-        <div className="px-4 py-4 border-t border-gray-100">
+        <div className="px-4 pt-3 pb-1 border-t border-[#E5E0D0]">
+          <p className="text-[10px] text-gray-400 leading-tight">{versionString()}</p>
+          <p className="text-[10px] text-gray-400 leading-tight">Built {buildDateString()}</p>
+        </div>
+
+        <div className="px-4 py-4 border-t border-[#E5E0D0]">
           <button
             onClick={() => setPrefsOpen(true)}
-            className="flex items-center gap-3 w-full text-left rounded-lg hover:bg-gray-50 p-1 -m-1 transition-colors"
+            className="flex items-center gap-3 w-full text-left rounded-lg hover:bg-[#FEF3C7]/50 p-1 -m-1 transition-colors"
           >
-            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-              <span className="text-xs font-medium text-indigo-700">
+            <div className="w-8 h-8 rounded-full bg-[#FEF3C7] flex items-center justify-center flex-shrink-0">
+              <span className="text-xs font-medium text-[#92400E]">
                 {(displayName || email || '?')[0].toUpperCase()}
               </span>
             </div>

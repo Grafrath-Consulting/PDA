@@ -6,13 +6,16 @@ import { Block, Context } from './types'
 import { JournalBlock } from './components/JournalBlock'
 import { BlockFeed } from './components/BlockFeed'
 import { ContextFilter } from './components/ContextFilter'
-import { ArchivedSection } from './components/ArchivedSection'
+import { ArchivedSection, ArchivedSectionHandle } from './components/ArchivedSection'
 import { RightPanel } from './components/RightPanel'
 
 const PAGE_SIZE = 20
 const PANEL_STORAGE_KEY = 'journal-panel-open'
 const FORMATTING_VISIBLE_KEY = 'tiptap-toolbar-visible'
 const DEFAULT_AUTOSAVE_INTERVAL = 30
+const SORT_MODE_KEY = 'journal-sort-mode'
+
+type SortMode = 'created_desc' | 'manual'
 
 interface Props {
   userId: string
@@ -28,9 +31,17 @@ export function JournalPage({ userId }: Props) {
   const [panelOpen, setPanelOpen] = useState(true)
   const [autosaveInterval, setAutosaveInterval] = useState(DEFAULT_AUTOSAVE_INTERVAL)
   const [formattingVisible, setFormattingVisible] = useState(false)
+  const [sortMode, setSortMode] = useState<SortMode>(() => {
+    if (typeof window !== 'undefined') {
+      const cached = localStorage.getItem(SORT_MODE_KEY)
+      if (cached === 'manual' || cached === 'created_desc') return cached
+    }
+    return 'created_desc'
+  })
 
   const contextFilterRef = useRef(contextFilter)
   contextFilterRef.current = contextFilter
+  const archiveRef = useRef<ArchivedSectionHandle>(null)
 
   useEffect(() => {
     const saved = localStorage.getItem(PANEL_STORAGE_KEY)
@@ -47,20 +58,31 @@ export function JournalPage({ userId }: Props) {
     })
   }
 
-  // Fetch autosave preference
+  // Fetch autosave preference and sort mode
   useEffect(() => {
     const supabase = createClient()
     supabase
       .from('profiles')
-      .select('autosave_interval_seconds')
+      .select('autosave_interval_seconds, journal_sort_mode')
       .eq('id', userId)
       .single()
       .then(({ data }) => {
         if (data?.autosave_interval_seconds) {
           setAutosaveInterval(data.autosave_interval_seconds)
         }
+        if (data?.journal_sort_mode) {
+          setSortMode(data.journal_sort_mode as SortMode)
+          localStorage.setItem(SORT_MODE_KEY, data.journal_sort_mode)
+        }
       })
   }, [userId])
+
+  async function saveSortMode(mode: SortMode) {
+    setSortMode(mode)
+    localStorage.setItem(SORT_MODE_KEY, mode)
+    const supabase = createClient()
+    await supabase.from('profiles').update({ journal_sort_mode: mode }).eq('id', userId)
+  }
 
   function togglePanel() {
     setPanelOpen((prev) => {
@@ -133,7 +155,16 @@ export function JournalPage({ userId }: Props) {
   }
 
   function handleNewBlock(block: Block) {
-    setBlocks((prev) => [block, ...prev])
+    const minOrder = blocks.reduce((m, b) => Math.min(m, b.sort_order ?? 0), 0)
+    const withOrder = { ...block, sort_order: minOrder - 1 }
+    setBlocks(prev => [withOrder, ...prev])
+    if (sortMode === 'manual') {
+      const supabase = createClient()
+      supabase.from('journal_blocks')
+        .update({ sort_order: minOrder - 1 })
+        .eq('id', block.id)
+        .then(({ error }) => { if (error) console.error(error) })
+    }
   }
 
   function handleBlockUpdate(updated: Block) {
@@ -144,32 +175,115 @@ export function JournalPage({ userId }: Props) {
     setBlocks((prev) => prev.filter((b) => b.id !== blockId))
   }
 
-  function handleSplitBlock(newBlock: Block) {
+  function handleBlockArchived(block: Block) {
+    archiveRef.current?.addBlock(block)
+  }
+
+  function handleSplitBlock(newBlock: Block, updatedSourceBlock: Block) {
     setBlocks((prev) => {
-      const idx = prev.findIndex((b) => b.created_at <= newBlock.created_at)
-      if (idx === -1) return [...prev, newBlock]
-      return [...prev.slice(0, idx), newBlock, ...prev.slice(idx)]
+      const withUpdatedSource = prev.map((b) =>
+        b.id === updatedSourceBlock.id ? updatedSourceBlock : b
+      )
+      const idx = withUpdatedSource.findIndex(
+        (b) => b.created_at <= newBlock.created_at
+      )
+      if (idx === -1) return [...withUpdatedSource, newBlock]
+      return [
+        ...withUpdatedSource.slice(0, idx),
+        newBlock,
+        ...withUpdatedSource.slice(idx),
+      ]
     })
   }
 
+  function handleReorder(activeId: string, overId: string) {
+    // Ensure every block has a numeric sort_order before computing
+    const sorted = sortedBlocks.map((b, i) => ({
+      ...b,
+      sort_order: b.sort_order ?? i,
+    }))
+    const oldIdx = sorted.findIndex(b => b.id === activeId)
+    const newIdx = sorted.findIndex(b => b.id === overId)
+    if (oldIdx === -1 || newIdx === -1 || oldIdx === newIdx) return
+
+    const reordered = [...sorted]
+    const [moved] = reordered.splice(oldIdx, 1)
+    reordered.splice(newIdx, 0, moved)
+
+    const above = reordered[newIdx - 1]?.sort_order ?? null
+    const below = reordered[newIdx + 1]?.sort_order ?? null
+    const newSortOrder =
+      above !== null && below !== null ? (above + below) / 2
+      : above !== null ? above + 1
+      : below !== null ? below - 1
+      : newIdx
+
+    const updated = { ...moved, sort_order: newSortOrder }
+    setBlocks(prev => prev.map(b => b.id === activeId ? updated : b))
+
+    const supabase = createClient()
+    supabase.from('journal_blocks')
+      .update({ sort_order: newSortOrder })
+      .eq('id', activeId)
+      .then(({ error }) => { if (error) console.error(error) })
+  }
+
+  // Derive sorted blocks for rendering
+  const sortedBlocks = sortMode === 'manual'
+    ? [...blocks].sort((a, b) => (a.sort_order ?? Infinity) - (b.sort_order ?? Infinity))
+    : [...blocks].sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="h-14 bg-white border-b border-gray-100 flex items-center justify-between px-6 flex-shrink-0">
+      <header className="h-14 bg-white border-b border-[#E5E0D0] flex items-center justify-between px-6 flex-shrink-0">
         <h1 className="text-sm font-medium text-gray-900">Journal</h1>
-        <button
-          onClick={togglePanel}
-          title={panelOpen ? 'Close focus panel' : 'Open focus panel'}
-          className={`p-1.5 rounded-lg transition-colors ${
-            panelOpen
-              ? 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
-              : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600'
-          }`}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <line x1="15" y1="3" x2="15" y2="21" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => saveSortMode('created_desc')}
+            title="Sort by newest first"
+            className={`p-1.5 rounded-lg transition-colors ${
+              sortMode === 'created_desc'
+                ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                : 'text-[#78716C] hover:bg-amber-50 hover:text-amber-700'
+            }`}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </button>
+          <button
+            onClick={() => saveSortMode('manual')}
+            title="Manual sort (drag to reorder)"
+            className={`p-1.5 rounded-lg transition-colors ${
+              sortMode === 'manual'
+                ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                : 'text-[#78716C] hover:bg-amber-50 hover:text-amber-700'
+            }`}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+              <circle cx="9" cy="6" r="2" /><circle cx="15" cy="6" r="2" />
+              <circle cx="9" cy="12" r="2" /><circle cx="15" cy="12" r="2" />
+              <circle cx="9" cy="18" r="2" /><circle cx="15" cy="18" r="2" />
+            </svg>
+          </button>
+          <button
+            onClick={togglePanel}
+            title={panelOpen ? 'Close focus panel' : 'Open focus panel'}
+            className={`p-1.5 rounded-lg transition-colors ${
+              panelOpen
+                ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                : 'text-[#78716C] hover:bg-amber-50 hover:text-amber-700'
+            }`}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="15" y1="3" x2="15" y2="21" />
+            </svg>
+          </button>
+        </div>
       </header>
 
       <div className="flex-1 flex overflow-hidden">
@@ -191,19 +305,22 @@ export function JournalPage({ userId }: Props) {
             />
 
             <BlockFeed
-              blocks={blocks}
+              blocks={sortedBlocks}
               loading={loading && !initialised}
               hasMore={hasMore}
               onLoadMore={loadMore}
               onBlockUpdate={handleBlockUpdate}
               onBlockRemove={handleBlockRemove}
+              onBlockArchived={handleBlockArchived}
               onSplitBlock={handleSplitBlock}
+              sortMode={sortMode}
+              onReorder={handleReorder}
               autosaveInterval={autosaveInterval}
               formattingVisible={formattingVisible}
               onToggleFormatting={toggleFormatting}
             />
 
-            <ArchivedSection userId={userId} onRestored={handleNewBlock} />
+            <ArchivedSection ref={archiveRef} userId={userId} onRestored={handleNewBlock} />
           </div>
         </div>
 

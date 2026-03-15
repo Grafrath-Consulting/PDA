@@ -58,8 +58,8 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
       <div className="fixed inset-0 z-40" onClick={onClose} />
 
       {/* Panel */}
-      <div className="fixed left-0 top-0 bottom-0 w-72 bg-white border-r border-gray-200 shadow-xl z-50 flex flex-col animate-slide-in-left">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+      <div className="fixed left-0 top-0 bottom-0 w-72 bg-white border-r border-[#E5E0D0] shadow-xl z-50 flex flex-col animate-slide-in-left">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#E5E0D0]">
           <h2 className="text-sm font-semibold text-gray-900">Settings</h2>
           <button
             onClick={onClose}
@@ -97,7 +97,7 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
                 value={autosaveInterval}
                 onChange={(e) => handleIntervalChange(Number(e.target.value))}
                 disabled={saving}
-                className="w-full text-sm text-gray-800 border border-gray-200 rounded-lg px-3 py-2 bg-white outline-none focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 transition-colors"
+                className="w-full text-sm text-gray-800 border border-[#E5E0D0] rounded-lg px-3 py-2 bg-white outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-300 transition-colors"
               >
                 {INTERVAL_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>

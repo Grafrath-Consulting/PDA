@@ -12,6 +12,7 @@ export interface Block {
   is_archived: boolean
   pinned: boolean
   position: number
+  sort_order?: number | null
 }
 
 export interface Context {
