@@ -90,6 +90,12 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
           onSubmitRef.current?.()
           return true
         }
+        // Prevent ProseMirror's deleteWordForward from consuming Ctrl+Delete.
+        // Returning true skips ProseMirror's keymap but does not stop DOM
+        // bubbling, so JournalBlock's onKeyDown wrapper handler still fires.
+        if (event.key === 'Delete' && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+          return true
+        }
         return false
       },
     },

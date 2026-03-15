@@ -123,7 +123,7 @@ export function BlockFeed({
 
   if (loading) {
     return (
-      <div className="space-y-3">
+      <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
           <div key={i} className="bg-white rounded-xl border border-[#E5E0D0] h-24 animate-pulse" />
         ))}
@@ -165,7 +165,7 @@ export function BlockFeed({
           onDragEnd={handleDragEnd}
         >
           <SortableContext items={blocks.map(b => b.id)} strategy={verticalListSortingStrategy}>
-            <div className="space-y-3">
+            <div className="space-y-2">
               {blocks.map((block) => (
                 <SortableBlock key={block.id} block={block} isDragActive={!!activeBlock}>
                   {renderBlock(block)}
@@ -182,7 +182,7 @@ export function BlockFeed({
           </DragOverlay>
         </DndContext>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {blocks.map((block) => renderBlock(block))}
         </div>
       )}
