@@ -39,7 +39,8 @@ interface ExistingBlockProps extends BaseProps {
   onSaved?: never
   onUpdate: (block: Block) => void
   onRemove: (blockId: string) => void
-  onSplitBlock: (newBlock: Block) => void
+  onBlockArchived?: (block: Block) => void
+  onSplitBlock: (newBlock: Block, updatedSourceBlock: Block) => void
 }
 
 type Props = NewEntryProps | ExistingBlockProps
@@ -117,6 +118,12 @@ function htmlToText(html: string): string {
   return div.textContent ?? ''
 }
 
+/** Normalise raw block content to HTML suitable for TipTap */
+function toEditorHTML(raw: string | null): string {
+  if (!raw) return ''
+  return raw.startsWith('<') ? raw : `<p>${raw.replace(/\n/g, '</p><p>')}</p>`
+}
+
 const ICON_SIZE = 14
 
 function taskIcon() {
@@ -143,15 +150,18 @@ function historyIcon() {
 function trashIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
 }
-function aaIcon() {
+function formatBarIcon() {
   return <span className="text-[10px] font-semibold leading-none">Aa</span>
 }
+
+// Module-level: only one block can be active at a time.
+// When a new block activates, it calls the previous block's save+deactivate directly.
+let deactivatePreviousBlock: (() => void) | null = null
 
 export function JournalBlock(props: Props) {
   const { autosaveInterval = 30, formattingVisible, onToggleFormatting } = props
   const isNewEntry = !props.block
 
-  const [isEditing, setIsEditing] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
   const [popoverOpen, setPopoverOpen] = useState(false)
@@ -162,23 +172,22 @@ export function JournalBlock(props: Props) {
   const cardRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-
-  const blockContentRef = useRef(props.block?.content ?? '')
-  if (props.block) blockContentRef.current = props.block.content ?? ''
-
-  // Live editor content — updated on every keystroke via onChange.
-  // These are the source of truth for save operations (avoids reliance
-  // on editorRef which may be null if next/dynamic doesn't forward refs).
-  const liveHTMLRef = useRef('')
-  const liveTextRef = useRef('')
 
   const savingRef = useRef(false)
-  const isEditingRef = useRef(isEditing || isNewEntry)
-  isEditingRef.current = isEditing || isNewEntry
+
+  // Live editor content — updated on every keystroke via onChange.
+  // Initialised from block content so save sees real data even before onChange fires.
+  const liveHTMLRef = useRef(toEditorHTML(props.block?.content ?? ''))
+  const liveTextRef = useRef(htmlToText(props.block?.content ?? ''))
+  const focusedRef = useRef(isNewEntry || focused)
+  focusedRef.current = isNewEntry || focused
 
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedHTMLRef = useRef(props.block?.content ?? '')
+
+  // Track the last props.block.content we synced into the editor,
+  // so we can detect external updates and push them in.
+  const lastSyncedContentRef = useRef(props.block?.content ?? null)
 
   // Close popover on outside click
   useEffect(() => {
@@ -202,6 +211,20 @@ export function JournalBlock(props: Props) {
 
   useEffect(() => clearAutosaveTimer, [])
 
+  // ── Sync content from props into the editor when block is updated externally ──
+  useEffect(() => {
+    const incoming = props.block?.content ?? null
+    if (incoming === lastSyncedContentRef.current) return
+    lastSyncedContentRef.current = incoming
+    // Don't overwrite the editor while the user is actively editing
+    if (focusedRef.current) return
+    const html = toEditorHTML(incoming)
+    editorRef.current?.setContent(html)
+    liveHTMLRef.current = html
+    liveTextRef.current = htmlToText(html)
+    lastSavedHTMLRef.current = html
+  }, [props.block?.content])
+
   // ── pointerup → open selection menu (existing blocks only) ──────────
   useEffect(() => {
     if (isNewEntry) return
@@ -223,7 +246,10 @@ export function JournalBlock(props: Props) {
         const rect = range.getBoundingClientRect()
         if (!rect.width && !rect.height) return
 
-        setMenuState({ selText, x: rect.left + rect.width / 2, y: rect.top })
+        const cardRect = cardRef.current?.getBoundingClientRect()
+        const menuX = cardRect ? cardRect.left : rect.left
+        const menuY = rect.top + rect.height / 2
+        setMenuState({ selText, x: menuX, y: menuY })
       })
     }
 
@@ -242,24 +268,99 @@ export function JournalBlock(props: Props) {
     return () => document.removeEventListener('mousedown', handler)
   }, [menuState])
 
-  // ── Click-to-edit (existing blocks only) ────────────────────────────
-  function handleContentClick() {
-    if (isNewEntry || isEditing) return
+  // ── Mousedown-to-activate (existing blocks only) ────────────────────
+  // Clicking a non-focused block sets it to focused/editable. The actual
+  // editor focus + cursor placement is deferred to requestAnimationFrame
+  // so React has time to re-render with editable={true} first.
+  function handleContentMouseDown(e: React.MouseEvent) {
+    if (e.button !== 0) return // left click only
+    // If already focused, clicking inside the card but OUTSIDE the editor
+    // (padding, timestamp, etc.) should keep the editor focused rather than
+    // letting the browser steal focus. Clicks inside the editor are left to
+    // ProseMirror so it handles cursor placement natively.
+    if (focused || isNewEntry) {
+      const tiptapEl = cardRef.current?.querySelector('.tiptap-wrapper')
+      if (!tiptapEl?.contains(e.target as Node)) {
+        e.preventDefault()
+        const ce = cardRef.current?.querySelector('[contenteditable="true"]') as HTMLElement
+        if (ce) {
+          ce.focus()
+          const sel = window.getSelection()
+          if (sel) {
+            sel.selectAllChildren(ce)
+            sel.collapseToEnd()
+          }
+        }
+      }
+      return
+    }
+    if (popoverOpen) return
     const selection = window.getSelection()
     if (selection && !selection.isCollapsed) return
-    startEdit()
+    // Directly deactivate the previously focused block (save + unfocus).
+    // This is reliable regardless of DOM focus state — no blur chain dependency.
+    deactivatePreviousBlock?.()
+    lastSavedHTMLRef.current = liveHTMLRef.current
+    setFocused(true)
+    // Register this block's deactivation so the *next* activated block can call it
+    deactivatePreviousBlock = () => saveExistingBlock()
+    const x = e.clientX, y = e.clientY
+    const tiptapEl = cardRef.current?.querySelector('.tiptap-wrapper')
+    const clickedInEditor = tiptapEl?.contains(e.target as Node)
+    requestAnimationFrame(() => {
+      if (clickedInEditor) {
+        editorRef.current?.focusAtCoords(x, y)
+      } else {
+        // Bypass TipTap's API — directly focus the contenteditable element
+        // and place the cursor at the end using native browser APIs.
+        // This avoids issues with TipTap's command chain silently failing
+        // when the editor just transitioned from non-editable to editable.
+        const ce = cardRef.current?.querySelector('[contenteditable="true"]') as HTMLElement
+        if (ce) {
+          ce.focus()
+          const sel = window.getSelection()
+          if (sel) {
+            sel.selectAllChildren(ce)
+            sel.collapseToEnd()
+          }
+        }
+      }
+    })
   }
 
   function handleContextMenu(e: React.MouseEvent) {
     if (isNewEntry) return
     e.preventDefault()
-    if (isEditing) return
+    if (focused) return
     const selection = window.getSelection()
     const hasSelection = selection && !selection.isCollapsed && selection.toString().trim()
     if (!hasSelection) {
-      const content = htmlToText(blockContentRef.current)
-      setMenuState({ selText: content, x: e.clientX, y: e.clientY })
+      const content = htmlToText(liveHTMLRef.current || toEditorHTML(props.block?.content ?? ''))
+      const cardRect = cardRef.current?.getBoundingClientRect()
+      setMenuState({ selText: content, x: cardRect?.left ?? e.clientX, y: e.clientY })
     }
+  }
+
+  // ── Push new content into the always-mounted editor + sync refs ────
+  // Note: we intentionally do NOT update lastSyncedContentRef here.
+  // If editorRef.current is null (e.g. timing/dynamic import), setContent
+  // silently no-ops. By leaving lastSyncedContentRef stale, the content
+  // sync useEffect will detect the mismatch when props.block.content
+  // updates (via onUpdate) and push the content into the editor as a
+  // reliable fallback — which works because deactivate() clears focused.
+  function syncEditorContent(html: string) {
+    editorRef.current?.setContent(html)
+    liveHTMLRef.current = html
+    liveTextRef.current = htmlToText(html)
+    lastSavedHTMLRef.current = html
+  }
+
+  // ── Deactivate (unfocus) an existing block ──────────────────────────
+  function deactivate() {
+    deactivatePreviousBlock = null
+    clearAutosaveTimer()
+    setFocused(false)
+    savingRef.current = false
   }
 
   // ── Action handlers (existing blocks only) ──────────────────────────
@@ -274,9 +375,8 @@ export function JournalBlock(props: Props) {
   async function handleToolbarAction(action: SelectionAction) {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    const content = isEditingRef.current
-      ? liveHTMLRef.current
-      : blockContentRef.current
+    await flushEdits()
+    const content = liveHTMLRef.current || toEditorHTML(p.block.content)
     const fullText = htmlToText(content)
     await executeAction(action, fullText)
   }
@@ -285,9 +385,7 @@ export function JournalBlock(props: Props) {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
     const block = p.block
-    const currentContent = isEditingRef.current
-      ? liveHTMLRef.current
-      : blockContentRef.current
+    const currentContent = liveHTMLRef.current || toEditorHTML(block.content)
 
     const supabase = createClient()
 
@@ -307,8 +405,8 @@ export function JournalBlock(props: Props) {
         task_type: action.taskType,
         assignee_id: action.assigneeId ?? null,
       })
-      if (isEmpty) p.onRemove(block.id)
-      else { p.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
+      if (isEmpty) { p.onRemove(block.id); p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true }) }
+      else { syncEditorContent(newContent); p.onUpdate({ ...block, content: newContent, status: newStatus }); deactivate() }
       return
     }
 
@@ -319,12 +417,30 @@ export function JournalBlock(props: Props) {
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
+      const splitCreatedAt = new Date(
+        new Date(block.created_at).getTime() - 1
+      ).toISOString()
+      const splitSortOrder = (block.sort_order ?? 0) - 0.5
       const { data: newBlock } = await supabase.from('journal_blocks')
-        .insert({ user_id: block.user_id, context_id: block.context_id, content: selText, status: 'partially_handled', created_at: block.created_at })
+        .insert({ user_id: block.user_id, context_id: block.context_id, content: selText, status: 'partially_handled', created_at: splitCreatedAt, sort_order: splitSortOrder })
         .select().single()
-      if (newBlock) p.onSplitBlock(newBlock as Block)
-      if (isEmpty) p.onRemove(block.id)
-      else { p.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
+      const updatedSourceBlock = { ...block, content: newContent, status: newStatus }
+      if (newBlock) p.onSplitBlock(newBlock as Block, updatedSourceBlock as Block)
+      if (isEmpty) { p.onRemove(block.id); p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true }) }
+      else {
+        const htmlToApply = toEditorHTML(newContent)
+        syncEditorContent(newContent)
+        deactivate()
+        // Re-apply after React re-renders and TipTap editable-change effects settle.
+        // This guards against TipTap reverting content when editable flips to false.
+        requestAnimationFrame(() => {
+          editorRef.current?.setContent(htmlToApply)
+          liveHTMLRef.current = htmlToApply
+          liveTextRef.current = htmlToText(htmlToApply)
+          lastSavedHTMLRef.current = htmlToApply
+          lastSyncedContentRef.current = newContent
+        })
+      }
       return
     }
 
@@ -350,8 +466,8 @@ export function JournalBlock(props: Props) {
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
-      if (isEmpty) p.onRemove(block.id)
-      else { p.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
+      if (isEmpty) { p.onRemove(block.id); p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true }) }
+      else { syncEditorContent(newContent); p.onUpdate({ ...block, content: newContent, status: newStatus }); deactivate() }
       return
     }
 
@@ -361,12 +477,18 @@ export function JournalBlock(props: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: selText }),
       })
+      if (!res.ok) {
+        const errText = await res.text()
+        console.error('Summarize API error:', res.status, errText)
+        return
+      }
       const json = await res.json()
       if (!json.summary) return
       const newContent = replaceTextInHTML(currentContent, selText, json.summary)
       await supabase.from('journal_blocks').update({ content: newContent, status: 'partially_handled' }).eq('id', block.id)
+      syncEditorContent(newContent)
       p.onUpdate({ ...block, content: newContent, status: 'partially_handled' })
-      exitEdit()
+      deactivate()
       return
     }
 
@@ -377,32 +499,30 @@ export function JournalBlock(props: Props) {
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
-      if (isEmpty) p.onRemove(block.id)
-      else { p.onUpdate({ ...block, content: newContent, status: newStatus }); exitEdit() }
+      if (isEmpty) { p.onRemove(block.id); p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true }) }
+      else { syncEditorContent(newContent); p.onUpdate({ ...block, content: newContent, status: newStatus }); deactivate() }
     }
-  }
-
-  // ── Inline edit ──────────────────────────────────────────────────────
-  function startEdit() {
-    if (isEditing) return
-    savingRef.current = false
-    const content = props.block?.content ?? ''
-    lastSavedHTMLRef.current = content
-    liveHTMLRef.current = content
-    liveTextRef.current = htmlToText(content)
-    setIsEditing(true)
-  }
-
-  function exitEdit() {
-    clearAutosaveTimer()
-    setIsEditing(false)
-    setFocused(false)
-    savingRef.current = false
   }
 
   // Keep a ref to props so async callbacks always see the latest values
   const propsRef = useRef(props)
   propsRef.current = props
+
+  // Flush pending editor content to DB without creating a block_version.
+  // Called before dot-menu actions so they operate on current content.
+  async function flushEdits() {
+    if (!focusedRef.current || savingRef.current) return
+    const p = propsRef.current
+    if (!('block' in p) || !p.block) return
+    const html = liveHTMLRef.current
+    if (html === lastSavedHTMLRef.current) return
+    const supabase = createClient()
+    await supabase
+      .from('journal_blocks')
+      .update({ content: html })
+      .eq('id', p.block.id)
+    lastSavedHTMLRef.current = html
+  }
 
   // ── Save: new entry → INSERT, existing → UPDATE + block_version ─────
   const saveNewEntry = useCallback(async () => {
@@ -438,21 +558,25 @@ export function JournalBlock(props: Props) {
 
   const saveExistingBlock = useCallback(async () => {
     const p = propsRef.current as ExistingBlockProps
-    if (!p.block || savingRef.current) return
+    if (!p.block) return
+
+    // Always deactivate visually, even if a save is already in flight
+    clearAutosaveTimer()
+    setFocused(false)
+
+    if (savingRef.current) return
 
     const html = liveHTMLRef.current
     const text = liveTextRef.current.trim()
 
     savingRef.current = true
-    clearAutosaveTimer()
-    setIsEditing(false)
-    setFocused(false)
 
     const supabase = createClient()
     const block = p.block
 
     const oldText = htmlToText(block.content ?? '').trim()
-    if (text === oldText) {
+    const oldHtml = block.content ?? ''
+    if (text === oldText && html === oldHtml) {
       savingRef.current = false
       return
     }
@@ -460,6 +584,7 @@ export function JournalBlock(props: Props) {
     if (!text) {
       await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
       p.onRemove(block.id)
+      p.onBlockArchived?.({ ...block, status: 'archived', is_archived: true })
       savingRef.current = false
       return
     }
@@ -479,7 +604,9 @@ export function JournalBlock(props: Props) {
       .select()
       .single()
     lastSavedHTMLRef.current = html
-    p.onUpdate((saved as Block) ?? { ...block, content: html })
+    const savedBlock = (saved as Block) ?? { ...block, content: html }
+    lastSyncedContentRef.current = savedBlock.content
+    p.onUpdate(savedBlock)
     savingRef.current = false
   }, [])
 
@@ -498,7 +625,7 @@ export function JournalBlock(props: Props) {
     : async () => {
         const p = propsRef.current as ExistingBlockProps
         if (!p.block || savingRef.current) return
-        if (!isEditingRef.current) return
+        if (!focusedRef.current) return
         const html = liveHTMLRef.current
         if (html === lastSavedHTMLRef.current) return
 
@@ -508,7 +635,6 @@ export function JournalBlock(props: Props) {
           .update({ content: html })
           .eq('id', p.block.id)
         lastSavedHTMLRef.current = html
-        blockContentRef.current = html
       }
 
   function handleEditorChange(html: string, text: string) {
@@ -519,24 +645,57 @@ export function JournalBlock(props: Props) {
       if (trimmed && !focused) setFocused(true)
       if (!trimmed) { setFocused(false); clearAutosaveTimer(); return }
     }
+    // Don't start autosave timers for unfocused existing blocks
+    if (!isNewEntry && !focusedRef.current) return
     clearAutosaveTimer()
     autosaveTimerRef.current = setTimeout(() => autosaveRef.current(), autosaveInterval * 1000)
   }
 
   function handleEditorKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Escape' && !isNewEntry) {
+    if (e.key === 'Escape' && !isNewEntry && focused) {
       e.preventDefault()
-      exitEdit()
+      // Revert content to last saved state
+      const revertTo = lastSavedHTMLRef.current
+      editorRef.current?.setContent(revertTo)
+      liveHTMLRef.current = revertTo
+      liveTextRef.current = htmlToText(revertTo)
+      deactivate()
     }
   }
 
   function handleBlur(e: React.FocusEvent) {
+    // If focus moved to another element inside the card, stay active
     if (cardRef.current?.contains(e.relatedTarget as Node)) return
+    // When clicking non-focusable areas (padding) inside the card,
+    // relatedTarget is null. Defer to let the browser settle focus,
+    // then check whether the click was actually outside the card.
+    if (!e.relatedTarget) {
+      requestAnimationFrame(() => {
+        // If focus has already landed inside this card, do nothing.
+        if (cardRef.current?.contains(document.activeElement)) return
+        if (isNewEntry) {
+          const text = liveTextRef.current.trim()
+          if (!text) { setFocused(false); return }
+          saveNewEntry()
+        } else if (focusedRef.current) {
+          // Extra guard: if this block was just activated in the same rAF
+          // batch (e.g. padding click on an inactive block), focusedRef is
+          // true but saveExistingBlock would deactivate it immediately.
+          // Only save/deactivate if the active element is truly outside the card.
+          if (!cardRef.current?.contains(document.activeElement)) {
+            deactivatePreviousBlock = null
+            saveExistingBlock()
+          }
+        }
+      })
+      return
+    }
     if (isNewEntry) {
       const text = liveTextRef.current.trim()
       if (!text) { setFocused(false); return }
       saveNewEntry()
-    } else if (isEditing) {
+    } else if (focused) {
+      deactivatePreviousBlock = null // already deactivating, prevent double-save
       saveExistingBlock()
     }
   }
@@ -544,72 +703,80 @@ export function JournalBlock(props: Props) {
   async function markDone() {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    exitEdit()
+    await flushEdits()
+    deactivate()
     const supabase = createClient()
     await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', p.block.id)
     p.onRemove(p.block.id)
+    p.onBlockArchived?.({ ...p.block, status: 'archived', is_archived: true })
   }
 
   async function deleteBlock() {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    exitEdit()
+    await flushEdits()
+    deactivate()
     const supabase = createClient()
-    await supabase.from('journal_blocks').update({ deleted_at: new Date().toISOString() }).eq('id', p.block.id)
+    const deletedAt = new Date().toISOString()
+    await supabase.from('journal_blocks').update({ deleted_at: deletedAt }).eq('id', p.block.id)
     p.onRemove(p.block.id)
+    p.onBlockArchived?.({ ...p.block, deleted_at: deletedAt })
   }
 
   // ── Derived values ──────────────────────────────────────────────────
   const block = props.block
   const showModified = block ? isMeaningfullyModified(block.created_at, block.updated_at) : false
-  const contentHTML = block
-    ? ((block.content ?? '').startsWith('<') ? block.content ?? '' : `<p>${(block.content ?? '').replace(/\n/g, '</p><p>')}</p>`)
-    : ''
-  const editorActive = isNewEntry || isEditing
-  const showToolbarInEditor = editorActive && focused && formattingVisible
+  const contentHTML = block ? toEditorHTML(block.content) : ''
+  const showToolbar = focused && formattingVisible
 
-  // Build popover menu items (existing blocks only)
-  const popoverItems = block ? [
+  // Build popover menu items — identical chrome for new entry and existing blocks.
+  const popoverItems: { key: string; label: string; icon: React.ReactNode; onClick: () => void; className?: string }[] = [
     { key: 'task', label: 'Create Task', icon: taskIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'my_task' }) } },
     { key: 'waiting', label: 'Waiting On', icon: waitingIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' }) } },
     { key: 'link', label: 'Link to Project', icon: linkIcon(), onClick: () => { setPopoverOpen(false) } },
     { key: 'info', label: 'Label as Info', icon: infoIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'label_info' }) } },
     { key: 'ai', label: 'AI Summarize', icon: sparkleIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'summarize' }) } },
-    { key: 'format', label: 'Aa', icon: aaIcon(), onClick: () => { setPopoverOpen(false); onToggleFormatting() }, className: formattingVisible ? 'text-indigo-600 bg-indigo-50' : undefined },
+    { key: 'format', label: 'Formatting', icon: formatBarIcon(), onClick: () => { setPopoverOpen(false); onToggleFormatting() }, className: formattingVisible ? 'text-amber-700 bg-amber-50' : undefined },
     { key: 'done', label: 'Mark as Done', icon: checkIcon(), onClick: () => { setPopoverOpen(false); markDone() } },
-    { key: 'history', label: 'View History', icon: historyIcon(), onClick: () => { setPopoverOpen(false); setShowHistory(true) } },
+    { key: 'history', label: 'View History', icon: historyIcon(), onClick: () => { setPopoverOpen(false); if (block) setShowHistory(true) } },
     { key: 'delete', label: 'Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); deleteBlock() }, className: 'text-red-500 hover:bg-red-50' },
-  ] as { key: string; label: string; icon: React.ReactNode; onClick: () => void; className?: string }[] : []
+  ]
+
+  // Disable split when selection covers entire block content
+  const splitWouldEmpty = menuState
+    ? htmlToText(liveHTMLRef.current || toEditorHTML(block?.content ?? '')).trim() === menuState.selText.trim()
+    : false
 
   return (
     <div
       ref={cardRef}
-      className={`relative group bg-white rounded-xl border shadow-sm transition-colors ${
-        (isNewEntry && focused) ? 'border-indigo-200 shadow-md' : 'border-gray-100 hover:border-gray-200'
+      className={`relative group rounded-xl shadow-sm transition-colors ${
+        focused
+          ? 'border-l-[3px] border-l-[#F59E0B] border border-[#E5E0D0] bg-[#FFFBEB] shadow-md'
+          : 'border border-[#E5E0D0] bg-white pl-[2px] hover:border-[#D5D0C0]'
       }`}
-      onClick={handleContentClick}
+      onMouseDown={handleContentMouseDown}
     >
-      {/* Popover trigger — existing blocks only */}
-      {block && (
-        <button
-          ref={triggerRef}
-          type="button"
-          title="Actions"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => { e.stopPropagation(); setPopoverOpen(prev => !prev) }}
-          className={`absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all ${
-            popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-          }`}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg>
-        </button>
-      )}
+      {/* Popover trigger */}
+      <button
+        ref={triggerRef}
+        type="button"
+        title="Actions"
+        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+        onClick={(e) => { e.stopPropagation(); setPopoverOpen(prev => !prev) }}
+        className={`absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all ${
+          popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        }`}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg>
+      </button>
 
       {/* Popover menu */}
-      {popoverOpen && block && (
+      {popoverOpen && (
         <div
           ref={popoverRef}
-          className="absolute top-9 right-2 z-20 bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[172px]"
+          className="absolute top-9 right-2 z-20 bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 min-w-[172px]"
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
           {popoverItems.map((item) => (
@@ -617,7 +784,7 @@ export function JournalBlock(props: Props) {
               key={item.key}
               onMouseDown={(e) => e.preventDefault()}
               onClick={item.onClick}
-              className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-gray-50 transition-colors ${
+              className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-[#FFFEF7] transition-colors ${
                 item.className ?? 'text-gray-700'
               }`}
             >
@@ -628,44 +795,45 @@ export function JournalBlock(props: Props) {
         </div>
       )}
 
-      {/* Content */}
-      <div className="px-4 pt-3 pb-1">
-        {editorActive ? (
-          <div
-            onKeyDown={handleEditorKeyDown}
-            onFocus={() => setFocused(true)}
-            onBlur={handleBlur}
-          >
-            <TipTapEditor
-              key={isNewEntry ? editorKey : undefined}
-              ref={editorRef}
-              content={contentHTML}
-              placeholder={isNewEntry ? "What's on your mind? Press Ctrl+Enter to save." : undefined}
-              autoFocus={isNewEntry || isEditing}
-              onSubmit={handleSave}
-              onChange={handleEditorChange}
-              toolbarVisible={showToolbarInEditor}
-            />
-          </div>
-        ) : (
-          <div
-            ref={contentRef}
-            onContextMenu={handleContextMenu}
-            className="tiptap-content text-sm text-gray-800 leading-relaxed select-text cursor-text"
-            dangerouslySetInnerHTML={{ __html: contentHTML }}
-          />
-        )}
+      {/* Content — always-mounted TipTap editor for active blocks */}
+      <div
+        className={`px-4 pb-1 ${showToolbar ? 'pt-1' : 'pt-3'}`}
+        onKeyDown={handleEditorKeyDown}
+        onFocus={() => {
+          if (isNewEntry) {
+            // Deactivate any previously focused existing block.
+            // handleContentMouseDown returns early for new entry blocks so this
+            // is the only place we can intercept focus arriving at the composer.
+            deactivatePreviousBlock?.()
+            deactivatePreviousBlock = null
+            if (!focused) setFocused(true)
+          }
+        }}
+        onBlur={handleBlur}
+        onContextMenu={handleContextMenu}
+      >
+        <TipTapEditor
+          key={isNewEntry ? editorKey : undefined}
+          ref={editorRef}
+          content={contentHTML}
+          placeholder={isNewEntry ? "What's on your mind? Press Ctrl+Enter to save." : undefined}
+          autoFocus={isNewEntry}
+          onSubmit={handleSave}
+          onChange={handleEditorChange}
+          editable={isNewEntry || focused}
+          toolbarVisible={showToolbar}
+        />
       </div>
 
       {/* Bottom bar */}
-      <div className="flex items-center justify-between px-4 pb-2 pt-1">
+      <div className="flex items-center justify-between px-4 pb-2 pt-1 select-none">
         <span className="text-xs text-gray-400">
           {block
-            ? <>{formatTimestamp(block.created_at)}{showModified && <span> · edited {formatTimestamp(block.updated_at)}</span>}</>
+            ? <>Created {formatTimestamp(block.created_at)}{showModified && <span> · Modified {formatTimestamp(block.updated_at)}</span>}</>
             : 'New Entry'
           }
         </span>
-        {editorActive && focused && (
+        {focused && (
           <span className="text-xs text-gray-400">
             Ctrl+Enter to save{!isNewEntry && ' · Esc to cancel'} · click outside to save
           </span>
@@ -679,6 +847,7 @@ export function JournalBlock(props: Props) {
             userId={block.user_id}
             onClose={() => setMenuState(null)}
             onAction={handleSelectionAction}
+            disableSplit={splitWouldEmpty}
           />
         </div>
       )}

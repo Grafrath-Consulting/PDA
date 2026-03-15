@@ -8,13 +8,29 @@ import { TableRow } from '@tiptap/extension-table-row'
 import { TableCell } from '@tiptap/extension-table-cell'
 import { TableHeader } from '@tiptap/extension-table-header'
 import Placeholder from '@tiptap/extension-placeholder'
-import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react'
+import { Extension } from '@tiptap/core'
+import { useState, useEffect, useLayoutEffect, useImperativeHandle, useRef, forwardRef, useCallback } from 'react'
+
+const TabHandler = Extension.create({
+  name: 'tabHandler',
+  addKeyboardShortcuts() {
+    return {
+      Tab: ({ editor }) => {
+        editor.commands.insertContent('\t')
+        return true
+      },
+      'Shift-Tab': () => true, // prevent reverse-focus navigation
+    }
+  },
+})
 
 export interface TipTapEditorHandle {
   getHTML: () => string
   getText: () => string
   clear: () => void
   focus: () => void
+  focusAtCoords: (x: number, y: number) => void
+  setContent: (html: string) => void
 }
 
 interface Props {
@@ -30,7 +46,7 @@ interface Props {
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
-  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '60px', editable = true, toolbarVisible = false },
+  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false },
   ref
 ) {
   // Keep refs so the closures inside useEditor always call the latest callbacks
@@ -38,6 +54,12 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   onSubmitRef.current = onSubmit
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const lastHTMLRef = useRef(content)
+
+  // Force re-render on every transaction so toolbar buttons reflect
+  // the current mark/node state at the cursor position.
+  const [, setTxCount] = useState(0)
+  const bumpTx = useCallback(() => setTxCount(c => c + 1), [])
 
   const editor = useEditor({
     extensions: [
@@ -51,6 +73,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       TableCell,
       TableHeader,
       Placeholder.configure({ placeholder: placeholder ?? '' }),
+      TabHandler,
     ],
     content,
     editable,
@@ -58,7 +81,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
     autofocus: autoFocus ? 'end' : false,
     editorProps: {
       attributes: {
-        class: 'outline-none prose-sm max-w-none',
+        class: 'outline-none max-w-none',
         style: `min-height: ${minHeight}`,
       },
       handleKeyDown(_view, event) {
@@ -70,8 +93,17 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
         return false
       },
     },
-    onUpdate({ editor: ed }) {
-      onChangeRef.current?.(ed.getHTML(), ed.getText())
+    // Use onTransaction instead of onUpdate so mark-only changes (bold,
+    // italic, underline…) are detected.  onUpdate only fires when
+    // transaction.docChanged is true, which can be false for stored-mark
+    // changes.  Comparing getHTML() covers all meaningful mutations.
+    onTransaction({ editor: ed }) {
+      bumpTx()
+      const html = ed.getHTML()
+      if (html !== lastHTMLRef.current) {
+        lastHTMLRef.current = html
+        onChangeRef.current?.(html, ed.getText())
+      }
     },
   })
 
@@ -79,21 +111,76 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
     getHTML: () => editor?.getHTML() ?? '',
     getText: () => editor?.getText() ?? '',
     clear: () => { editor?.commands.clearContent(true) },
-    focus: () => { editor?.commands.focus('end') },
+    focus: () => {
+      if (!editor) return
+      editor.setEditable(true)
+      // Use TipTap's own chain which correctly sequences focus then selection.
+      // focus('end') internally: establishes DOM focus first, then moves
+      // cursor to end and scrolls. This is more reliable than manually
+      // calling setTextSelection + view.focus() in sequence.
+      editor.chain().focus('end').run()
+    },
+    focusAtCoords: (x: number, y: number) => {
+      if (!editor) return
+      editor.setEditable(true)
+      const docSize = editor.state.doc.content.size
+      const result = editor.view.posAtCoords({ left: x, top: y })
+      let resolved = result?.pos ?? null
+
+      // Guard: if resolved to 0 but click wasn't near the top of the editor, discard
+      if (resolved === 0) {
+        const editorRect = editor.view.dom.getBoundingClientRect()
+        if (y > editorRect.top + 20) {
+          resolved = null
+        }
+      }
+
+      // Guard: out of document bounds
+      if (resolved !== null && (resolved < 0 || resolved > docSize)) {
+        resolved = null
+      }
+
+      if (resolved !== null) {
+        editor.commands.setTextSelection(resolved)
+        editor.view.focus()
+      } else {
+        editor.commands.setTextSelection(docSize)
+        editor.view.focus()
+      }
+    },
+    setContent: (html: string) => {
+      if (!editor) return
+      lastHTMLRef.current = html
+      editor.commands.setContent(html)
+      // Re-sync lastHTMLRef after TipTap normalizes the HTML
+      lastHTMLRef.current = editor.getHTML()
+    },
   }), [editor])
 
-  useEffect(() => {
+  // useLayoutEffect so editable is set synchronously after render,
+  // before paint and before requestAnimationFrame callbacks.
+  useLayoutEffect(() => {
     if (editor && editor.isEditable !== editable) {
       editor.setEditable(editable)
     }
   }, [editor, editable])
+
+  useEffect(() => {
+    if (!editor) return
+    if (editable) return  // never overwrite content while user is editing
+    if (content === lastHTMLRef.current) return  // nothing changed
+    lastHTMLRef.current = content
+    editor.commands.setContent(content)
+    // Re-sync after TipTap normalizes the HTML
+    lastHTMLRef.current = editor.getHTML()
+  }, [editor, content, editable])
 
   if (!editor) return null
 
   return (
     <div className={`tiptap-wrapper relative ${className}`}>
       {toolbarVisible && (
-        <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-gray-100 bg-gray-50/50 rounded-t-lg flex-wrap">
+        <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-[#E5E0D0] bg-[#FFFEF7]/50 rounded-t-lg flex-wrap">
           <ToolbarBtn
             active={editor.isActive('bold')}
             onClick={() => editor.chain().focus().toggleBold().run()}
@@ -115,7 +202,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
           >
             <span className="underline text-xs">U</span>
           </ToolbarBtn>
-          <div className="w-px h-4 bg-gray-200 mx-1" />
+          <div className="w-px h-4 bg-[#E5E0D0] mx-1" />
           <ToolbarBtn
             active={editor.isActive('bulletList')}
             onClick={() => editor.chain().focus().toggleBulletList().run()}
@@ -130,7 +217,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="1" y="8" fontSize="7" fill="currentColor" stroke="none" fontFamily="sans-serif">1</text><text x="1" y="14" fontSize="7" fill="currentColor" stroke="none" fontFamily="sans-serif">2</text><text x="1" y="20" fontSize="7" fill="currentColor" stroke="none" fontFamily="sans-serif">3</text></svg>
           </ToolbarBtn>
-          <div className="w-px h-4 bg-gray-200 mx-1" />
+          <div className="w-px h-4 bg-[#E5E0D0] mx-1" />
           <ToolbarBtn
             active={editor.isActive('blockquote')}
             onClick={() => editor.chain().focus().toggleBlockquote().run()}
@@ -182,10 +269,10 @@ function ToolbarBtn({
       onMouseDown={e => e.preventDefault()}
       onClick={onClick}
       title={title}
-      className={`p-1.5 rounded transition-colors ${
+      className={`p-1 rounded transition-colors ${
         active
-          ? 'bg-indigo-100 text-indigo-700'
-          : 'text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+          ? 'bg-amber-100 text-amber-800'
+          : 'text-[#78716C] hover:bg-amber-50 hover:text-amber-800'
       }`}
     >
       {children}

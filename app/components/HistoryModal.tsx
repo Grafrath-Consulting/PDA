@@ -42,7 +42,7 @@ export function HistoryModal({ blockId, onClose }: Props) {
         className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[70vh] flex flex-col"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#E5E0D0]">
           <h3 className="text-sm font-semibold text-gray-900">Edit History</h3>
           <button
             onClick={onClose}
@@ -58,7 +58,7 @@ export function HistoryModal({ blockId, onClose }: Props) {
           {loading && (
             <div className="space-y-3">
               {[...Array(2)].map((_, i) => (
-                <div key={i} className="h-16 bg-gray-50 rounded-lg animate-pulse" />
+                <div key={i} className="h-16 bg-[#FFFEF7] rounded-lg animate-pulse" />
               ))}
             </div>
           )}
@@ -76,7 +76,7 @@ export function HistoryModal({ blockId, onClose }: Props) {
                 )}
               </div>
               {v.content
-                ? <div className="tiptap-content text-sm text-gray-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: v.content }} />
+                ? <div className="tiptap-content text-gray-700" dangerouslySetInnerHTML={{ __html: v.content }} />
                 : <p className="text-gray-300 italic text-sm">(empty)</p>
               }
             </div>

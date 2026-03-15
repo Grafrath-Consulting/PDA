@@ -11,10 +11,10 @@ export default async function TasksPage() {
   const email = user.email ?? ''
 
   return (
-    <div className="flex h-screen bg-gray-50 font-[family-name:var(--font-geist-sans)]">
+    <div className="flex h-screen bg-[#FFFEF7] font-[family-name:var(--font-geist-sans)]">
       <Sidebar email={email} displayName={displayName} userId={user.id} />
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-14 bg-white border-b border-gray-100 flex items-center px-6 flex-shrink-0">
+        <header className="h-14 bg-white border-b border-[#E5E0D0] flex items-center px-6 flex-shrink-0">
           <h1 className="text-sm font-medium text-gray-900">Tasks</h1>
         </header>
         <main className="flex-1 flex items-center justify-center">

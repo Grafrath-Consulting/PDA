@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
+  --background: #FFFEF7;
   --foreground: #171717;
 }
 
@@ -54,13 +54,13 @@ body {
 .tiptap-wrapper .tiptap ul { list-style: disc; padding-left: 1.5em; margin: 0.25em 0; }
 .tiptap-wrapper .tiptap ol { list-style: decimal; padding-left: 1.5em; margin: 0.25em 0; }
 .tiptap-wrapper .tiptap blockquote {
-  border-left: 3px solid #e5e7eb;
+  border-left: 3px solid #E5E0D0;
   padding-left: 0.75em;
   margin: 0.5em 0;
   color: #6b7280;
 }
 .tiptap-wrapper .tiptap pre {
-  background: #f3f4f6;
+  background: #F5F3EB;
   border-radius: 0.375rem;
   padding: 0.5em 0.75em;
   margin: 0.5em 0;
@@ -69,7 +69,7 @@ body {
   overflow-x: auto;
 }
 .tiptap-wrapper .tiptap code {
-  background: #f3f4f6;
+  background: #F5F3EB;
   border-radius: 0.25rem;
   padding: 0.125em 0.25em;
   font-family: var(--font-geist-mono), monospace;
@@ -82,28 +82,35 @@ body {
 }
 .tiptap-wrapper .tiptap th,
 .tiptap-wrapper .tiptap td {
-  border: 1px solid #e5e7eb;
+  border: 1px solid #E5E0D0;
   padding: 0.375em 0.5em;
   text-align: left;
   font-size: 0.8125rem;
 }
 .tiptap-wrapper .tiptap th {
-  background: #f9fafb;
+  background: #FAF8F2;
   font-weight: 600;
 }
 
-/* Read-mode rendered content (same styles) */
-.tiptap-content p { margin: 0.25em 0; }
+/* Shared paragraph styles for display (.tiptap-content) and editor (.ProseMirror) */
+.tiptap-content,
+.ProseMirror { font-size: 0.875rem; line-height: 1.5rem; }
+.tiptap-content p,
+.ProseMirror p { margin: 0; line-height: 1.5rem; }
+.tiptap-content p:empty,
+.tiptap-content p:has(> br:only-child),
+.ProseMirror p:empty,
+.ProseMirror p:has(> br:only-child) { min-height: 1.5rem; }
 .tiptap-content ul { list-style: disc; padding-left: 1.5em; margin: 0.25em 0; }
 .tiptap-content ol { list-style: decimal; padding-left: 1.5em; margin: 0.25em 0; }
 .tiptap-content blockquote {
-  border-left: 3px solid #e5e7eb;
+  border-left: 3px solid #E5E0D0;
   padding-left: 0.75em;
   margin: 0.5em 0;
   color: #6b7280;
 }
 .tiptap-content pre {
-  background: #f3f4f6;
+  background: #F5F3EB;
   border-radius: 0.375rem;
   padding: 0.5em 0.75em;
   margin: 0.5em 0;
@@ -112,7 +119,7 @@ body {
   overflow-x: auto;
 }
 .tiptap-content code {
-  background: #f3f4f6;
+  background: #F5F3EB;
   border-radius: 0.25rem;
   padding: 0.125em 0.25em;
   font-family: var(--font-geist-mono), monospace;
@@ -125,12 +132,12 @@ body {
 }
 .tiptap-content th,
 .tiptap-content td {
-  border: 1px solid #e5e7eb;
+  border: 1px solid #E5E0D0;
   padding: 0.375em 0.5em;
   text-align: left;
   font-size: 0.8125rem;
 }
 .tiptap-content th {
-  background: #f9fafb;
+  background: #FAF8F2;
   font-weight: 600;
 }
