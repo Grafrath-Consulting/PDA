@@ -24,6 +24,11 @@ interface Props {
   autosaveInterval?: number
   formattingVisible: boolean
   onToggleFormatting: () => void
+  blockProperties?: Map<string, Set<string>>
+  onBlockPropertiesChanged?: (blockId: string, newIds: Set<string>) => void
+  searchHighlight?: string
+  similarityScores?: Record<string, number>
+  matchedChunks?: Record<string, string>
 }
 
 function SortableBlock({
@@ -86,6 +91,11 @@ export function BlockFeed({
   autosaveInterval = 30,
   formattingVisible,
   onToggleFormatting,
+  blockProperties,
+  onBlockPropertiesChanged,
+  searchHighlight,
+  similarityScores,
+  matchedChunks,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [activeBlock, setActiveBlock] = useState<Block | null>(null)
@@ -123,7 +133,7 @@ export function BlockFeed({
 
   if (loading) {
     return (
-      <div className="space-y-2">
+      <div className="space-y-[14px]">
         {[...Array(3)].map((_, i) => (
           <div key={i} className="bg-white rounded-xl border border-[#E5E0D0] h-24 animate-pulse" />
         ))}
@@ -151,6 +161,10 @@ export function BlockFeed({
         autosaveInterval={autosaveInterval}
         formattingVisible={formattingVisible}
         onToggleFormatting={onToggleFormatting}
+        appliedPropertyIds={blockProperties?.get(block.id)}
+        onPropertyChanged={onBlockPropertiesChanged ? (ids) => onBlockPropertiesChanged(block.id, ids) : undefined}
+        similarityScore={similarityScores?.[block.id]}
+        searchHighlight={matchedChunks?.[block.id] ?? searchHighlight}
       />
     )
   }
@@ -165,7 +179,7 @@ export function BlockFeed({
           onDragEnd={handleDragEnd}
         >
           <SortableContext items={blocks.map(b => b.id)} strategy={verticalListSortingStrategy}>
-            <div className="space-y-2">
+            <div className="space-y-[14px]">
               {blocks.map((block) => (
                 <SortableBlock key={block.id} block={block} isDragActive={!!activeBlock}>
                   {renderBlock(block)}
@@ -182,7 +196,7 @@ export function BlockFeed({
           </DragOverlay>
         </DndContext>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-[14px]">
           {blocks.map((block) => renderBlock(block))}
         </div>
       )}

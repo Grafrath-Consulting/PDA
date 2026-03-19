@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { AiSettingsPanel } from '@/app/components/AiSettingsPanel'
 
 interface Props {
   email: string
@@ -87,6 +88,9 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
               </div>
             </div>
           </section>
+
+          {/* AI section */}
+          <AiSettingsPanel userId={userId} />
 
           {/* Preferences section */}
           <section>

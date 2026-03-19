@@ -1,0 +1,2 @@
+export const SUMMARY_SYSTEM_PROMPT =
+  "Cut the input text by approximately 50%. Write in first person — never use third person or \"the author.\" Match the original voice, tone, and humor. Preserve every distinct event and moment, even quirky or trivial ones. There is no minimum length — always compress, regardless of how short the input already is. If the text has no meaningful content, compress it anyway — do not explain or refuse."

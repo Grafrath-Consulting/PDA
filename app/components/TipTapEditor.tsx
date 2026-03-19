@@ -8,8 +8,15 @@ import { TableRow } from '@tiptap/extension-table-row'
 import { TableCell } from '@tiptap/extension-table-cell'
 import { TableHeader } from '@tiptap/extension-table-header'
 import Placeholder from '@tiptap/extension-placeholder'
+import Link from '@tiptap/extension-link'
+import Highlight from '@tiptap/extension-highlight'
 import { Extension } from '@tiptap/core'
-import { useState, useEffect, useLayoutEffect, useImperativeHandle, useRef, forwardRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useImperativeHandle, useRef, forwardRef, useCallback, useMemo, lazy, Suspense } from 'react'
+import { highlightHTML } from '@/lib/highlight-html'
+import { createPortal } from 'react-dom'
+import data from '@emoji-mart/data'
+
+const EmojiPicker = lazy(() => import('@emoji-mart/react'))
 
 const TabHandler = Extension.create({
   name: 'tabHandler',
@@ -31,6 +38,7 @@ export interface TipTapEditorHandle {
   focus: () => void
   focusAtCoords: (x: number, y: number) => void
   setContent: (html: string) => void
+  openLinkEditor: (prefilledText?: string) => void
 }
 
 interface Props {
@@ -43,10 +51,12 @@ interface Props {
   minHeight?: string
   editable?: boolean
   toolbarVisible?: boolean
+  onReady?: (handle: TipTapEditorHandle) => void
+  searchHighlight?: string
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
-  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false },
+  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, onReady, searchHighlight },
   ref
 ) {
   // Keep refs so the closures inside useEditor always call the latest callbacks
@@ -55,6 +65,162 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
   const lastHTMLRef = useRef(content)
+
+  // Emoji picker state
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const [emojiPickerPos, setEmojiPickerPos] = useState<{ top: number; right: number } | null>(null)
+  const emojiRef = useRef<HTMLDivElement>(null)
+  const emojiButtonRef = useRef<HTMLButtonElement>(null)
+
+  // Close emoji picker on click outside
+  useEffect(() => {
+    if (!emojiOpen) return
+    function handleClick(e: MouseEvent) {
+      if (emojiRef.current && !emojiRef.current.contains(e.target as Node)) setEmojiOpen(false)
+    }
+    const id = setTimeout(() => document.addEventListener('mousedown', handleClick), 0)
+    return () => { clearTimeout(id); document.removeEventListener('mousedown', handleClick) }
+  }, [emojiOpen])
+
+  // Link editing state
+  const [linkEditing, setLinkEditing] = useState(false)
+  const [linkUrl, setLinkUrl] = useState('')
+  const [linkText, setLinkText] = useState('')
+  const [linkPopoverPos, setLinkPopoverPos] = useState<{ top: number; left: number } | null>(null)
+  const linkInputRef = useRef<HTMLInputElement>(null)
+  const linkPopoverRef = useRef<HTMLDivElement>(null)
+
+  // Helper: resolve the full text of a link mark at the current cursor position.
+  // If the selection is collapsed inside a link, expand to the full mark range
+  // by scanning the parent node's inline children for the matching link mark.
+  function getLinkTextAtCursor(ed: NonNullable<typeof editor>) {
+    const { from, to } = ed.state.selection
+    if (from !== to) {
+      return ed.state.doc.textBetween(from, to, '')
+    }
+    // Selection is collapsed — find the link mark range in the parent node
+    const $pos = ed.state.doc.resolve(from)
+    const linkMark = $pos.marks().find(m => m.type.name === 'link')
+    if (!linkMark) return ''
+    const parent = $pos.parent
+    const parentStart = $pos.start() // absolute position of parent's first child
+    let start = from
+    let end = from
+    // Iterate the parent's inline children to find the text node(s) with this link mark
+    let offset = 0
+    parent.forEach((child) => {
+      const childStart = parentStart + offset
+      const childEnd = childStart + child.nodeSize
+      if (child.isText && child.marks.some(m => m.type.name === 'link' && m.attrs.href === linkMark.attrs.href)) {
+        // This text node is part of the link
+        if (childStart < from && childEnd >= from) {
+          // Cursor is inside this node
+          start = childStart
+          end = childEnd
+        } else if (childEnd <= from && childStart >= start) {
+          // Before cursor, extend start backward
+          start = Math.min(start, childStart)
+        } else if (childStart >= from && childStart <= end) {
+          // After cursor, extend end forward
+          end = Math.max(end, childEnd)
+        }
+      }
+      offset += child.nodeSize
+    })
+    // Second pass: now that we know the cursor's node, extend to adjacent link nodes
+    offset = 0
+    parent.forEach((child) => {
+      const childStart = parentStart + offset
+      const childEnd = childStart + child.nodeSize
+      if (child.isText && child.marks.some(m => m.type.name === 'link' && m.attrs.href === linkMark.attrs.href)) {
+        if (childStart <= end && childEnd >= start) {
+          start = Math.min(start, childStart)
+          end = Math.max(end, childEnd)
+        }
+      }
+      offset += child.nodeSize
+    })
+    return ed.state.doc.textBetween(start, end, '')
+  }
+
+  function openLinkEditor(ed: NonNullable<typeof editor>, prefilledText?: string) {
+    if (ed.isActive('link')) {
+      const attrs = ed.getAttributes('link')
+      setLinkUrl(attrs.href ?? '')
+      setLinkText(prefilledText ?? getLinkTextAtCursor(ed))
+    } else {
+      const { from, to } = ed.state.selection
+      setLinkText(prefilledText ?? ed.state.doc.textBetween(from, to, ''))
+      setLinkUrl('')
+    }
+
+    // Position the popover near the link or cursor in the editor.
+    // Fall back to the editor element's position if coordsAtPos returns bad values
+    // (e.g. when the editor just became editable and has no real selection).
+    let pos: { top: number; left: number } | null = null
+    try {
+      const domAtPos = ed.view.domAtPos(ed.state.selection.from)
+      const node = domAtPos.node instanceof HTMLElement ? domAtPos.node : domAtPos.node.parentElement
+      const anchor = node?.closest('a') ?? (node?.tagName === 'A' ? node : null)
+      if (anchor) {
+        const rect = anchor.getBoundingClientRect()
+        pos = { top: rect.bottom + 4, left: rect.left }
+      } else {
+        const coords = ed.view.coordsAtPos(ed.state.selection.from)
+        if (coords.bottom > 0 && coords.left > 0) {
+          pos = { top: coords.bottom + 4, left: coords.left }
+        }
+      }
+    } catch {
+      // domAtPos or coordsAtPos can throw if the view isn't ready
+    }
+    // Fallback: position below the editor element
+    if (!pos) {
+      const editorEl = ed.view.dom
+      const rect = editorEl.getBoundingClientRect()
+      pos = { top: rect.top + 20, left: rect.left + 16 }
+    }
+    setLinkPopoverPos(pos)
+    setLinkEditing(true)
+    setTimeout(() => linkInputRef.current?.focus(), 0)
+  }
+
+  // Close link popover on click outside
+  useEffect(() => {
+    if (!linkEditing) return
+    function handleClick(e: MouseEvent) {
+      if (linkPopoverRef.current && !linkPopoverRef.current.contains(e.target as Node)) {
+        setLinkEditing(false)
+      }
+    }
+    // Delay listener to avoid catching the click that opened the popover
+    const id = setTimeout(() => document.addEventListener('mousedown', handleClick), 0)
+    return () => { clearTimeout(id); document.removeEventListener('mousedown', handleClick) }
+  }, [linkEditing])
+
+  function normalizeUrl(url: string): string {
+    const trimmed = url.trim()
+    if (!trimmed) return trimmed
+    // If the URL has no protocol, assume https
+    if (!/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(trimmed)) {
+      return `https://${trimmed}`
+    }
+    return trimmed
+  }
+
+  function applyLink(ed: NonNullable<typeof editor>) {
+    const href = normalizeUrl(linkUrl)
+    if (!href) { setLinkEditing(false); return }
+    if (linkText) {
+      ed.chain().focus()
+        .extendMarkRange('link')
+        .insertContent({ type: 'text', text: linkText, marks: [{ type: 'link', attrs: { href } }] })
+        .run()
+    } else {
+      ed.chain().focus().setLink({ href }).run()
+    }
+    setLinkEditing(false)
+  }
 
   // Force re-render on every transaction so toolbar buttons reflect
   // the current mark/node state at the cursor position.
@@ -65,13 +231,22 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
     extensions: [
       StarterKit.configure({
         heading: false,
-        horizontalRule: false,
       }),
       Underline,
+      Highlight.configure({ multicolor: false }),
       Table.configure({ resizable: false }),
       TableRow,
       TableCell,
       TableHeader,
+      Link.configure({
+        openOnClick: 'whenNotEditable', // click opens link only in read-only mode
+        autolink: true,                 // auto-detect URLs as the user types
+        HTMLAttributes: {
+          class: 'tiptap-link',
+          target: '_blank',
+          rel: 'noopener noreferrer',
+        },
+      }),
       Placeholder.configure({ placeholder: placeholder ?? '' }),
       TabHandler,
     ],
@@ -161,7 +336,43 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       // Re-sync lastHTMLRef after TipTap normalizes the HTML
       lastHTMLRef.current = editor.getHTML()
     },
+    openLinkEditor: (prefilledText?: string) => {
+      if (!editor) return
+      openLinkEditor(editor, prefilledText)
+    },
   }), [editor])
+
+  // Notify parent via callback when handle is ready (bypasses next/dynamic ref issues)
+  const onReadyRef = useRef(onReady)
+  onReadyRef.current = onReady
+  useEffect(() => {
+    if (!editor) return
+    const handle: TipTapEditorHandle = {
+      getHTML: () => editor.getHTML(),
+      getText: () => editor.getText(),
+      clear: () => editor.commands.clearContent(true),
+      focus: () => { editor.setEditable(true); editor.chain().focus('end').run() },
+      focusAtCoords: (x: number, y: number) => {
+        editor.setEditable(true)
+        const docSize = editor.state.doc.content.size
+        const result = editor.view.posAtCoords({ left: x, top: y })
+        let resolved = result?.pos ?? null
+        if (resolved === 0) {
+          const editorRect = editor.view.dom.getBoundingClientRect()
+          if (y > editorRect.top + 20) resolved = null
+        }
+        if (resolved !== null && (resolved < 0 || resolved > docSize)) resolved = null
+        if (resolved !== null) { editor.commands.setTextSelection(resolved); editor.view.focus() }
+        else { editor.commands.setTextSelection(docSize); editor.view.focus() }
+      },
+      setContent: (html: string) => { lastHTMLRef.current = html; editor.commands.setContent(html); lastHTMLRef.current = editor.getHTML() },
+      openLinkEditor: (prefilledText?: string) => openLinkEditor(editor, prefilledText),
+    }
+    onReadyRef.current?.(handle)
+  }, [editor])
+
+  const prevEditableRef = useRef(editable)
+  const prevContentRef = useRef(content)
 
   // useLayoutEffect so editable is set synchronously after render,
   // before paint and before requestAnimationFrame callbacks.
@@ -173,13 +384,28 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
 
   useEffect(() => {
     if (!editor) return
+    const wasEditable = prevEditableRef.current
+    const contentChanged = content !== prevContentRef.current
+    prevEditableRef.current = editable
+    prevContentRef.current = content
     if (editable) return  // never overwrite content while user is editing
+    // When editable just transitioned from true→false but the content
+    // prop hasn't changed, skip the sync to prevent a flash of stale
+    // content while the save is in flight. If content DID change in the
+    // same render (e.g. AI summarize), apply it immediately.
+    if (wasEditable && !contentChanged) return
     if (content === lastHTMLRef.current) return  // nothing changed
     lastHTMLRef.current = content
     editor.commands.setContent(content)
     // Re-sync after TipTap normalizes the HTML
     lastHTMLRef.current = editor.getHTML()
   }, [editor, content, editable])
+
+  const showHighlightLayer = !!searchHighlight && !editable
+  const highlightedHTML = useMemo(
+    () => showHighlightLayer ? highlightHTML(content, searchHighlight!) : '',
+    [showHighlightLayer, content, searchHighlight]
+  )
 
   if (!editor) return null
 
@@ -207,6 +433,20 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
             title="Underline"
           >
             <span className="underline text-xs">U</span>
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive('strike')}
+            onClick={() => editor.chain().focus().toggleStrike().run()}
+            title="Strikethrough"
+          >
+            <span className="line-through text-xs">S</span>
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive('highlight')}
+            onClick={() => editor.chain().focus().toggleHighlight().run()}
+            title="Highlight"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/><line x1="2" y1="20" x2="6" y2="20" stroke="#FBBF24" strokeWidth="3"/></svg>
           </ToolbarBtn>
           <div className="w-px h-4 bg-[#E5E0D0] mx-1" />
           <ToolbarBtn
@@ -251,26 +491,177 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
           </ToolbarBtn>
+          <ToolbarBtn
+            active={false}
+            onClick={() => editor.chain().focus().setHorizontalRule().run()}
+            title="Horizontal Rule"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </ToolbarBtn>
+          <div className="w-px h-4 bg-[#E5E0D0] mx-1" />
+          <div className="relative">
+            <ToolbarBtn
+              active={editor.isActive('link')}
+              onClick={() => openLinkEditor(editor)}
+              title="Link"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+            </ToolbarBtn>
+          </div>
+          <div className="relative">
+            <ToolbarBtn
+              active={emojiOpen}
+              onClick={() => {
+                const rect = emojiButtonRef.current?.getBoundingClientRect()
+                if (rect) setEmojiPickerPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right })
+                setEmojiOpen(prev => !prev)
+              }}
+              title="Emoji"
+              ref={emojiButtonRef}
+            >
+              <span className="text-xs leading-none">😀</span>
+            </ToolbarBtn>
+          </div>
         </div>
       )}
-      <EditorContent editor={editor} />
+      {/* Read-only highlight layer — shown only when not editing and search is active */}
+      {showHighlightLayer && (
+        <div
+          className="tiptap-content"
+          style={{ minHeight }}
+          dangerouslySetInnerHTML={{ __html: highlightedHTML }}
+        />
+      )}
+
+      {/* TipTap editor — hidden (not unmounted) when showing highlight layer */}
+      <div style={showHighlightLayer ? { display: 'none' } : undefined}>
+        <EditorContent
+          editor={editor}
+          onContextMenu={(e) => {
+            // Right-click on a link opens the link editor
+            const target = e.target as HTMLElement
+            const anchor = target.closest('a')
+            if (anchor && editor.isActive('link')) {
+              e.preventDefault()
+              openLinkEditor(editor)
+            }
+          }}
+        />
+      </div>
+
+      {/* Link editing popover — positioned near the link in the content */}
+      {linkEditing && linkPopoverPos && (
+        <div
+          ref={linkPopoverRef}
+          className="fixed z-50 bg-white border border-[#E5E0D0] rounded-lg shadow-xl p-3 min-w-[260px]"
+          style={{ top: linkPopoverPos.top, left: linkPopoverPos.left }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="space-y-2">
+            <div>
+              <label className="block text-[10px] font-medium text-gray-500 mb-0.5">URL</label>
+              <input
+                ref={linkInputRef}
+                type="url"
+                value={linkUrl}
+                onChange={(e) => setLinkUrl(e.target.value)}
+                placeholder="https://"
+                className="w-full px-2 py-1 text-xs text-gray-900 border border-gray-200 rounded outline-none focus:ring-1 focus:ring-amber-300"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); applyLink(editor) }
+                  if (e.key === 'Escape') { setLinkEditing(false); editor.chain().focus().run() }
+                }}
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Text</label>
+              <input
+                type="text"
+                value={linkText}
+                onChange={(e) => setLinkText(e.target.value)}
+                placeholder="Link text"
+                className="w-full px-2 py-1 text-xs text-gray-900 border border-gray-200 rounded outline-none focus:ring-1 focus:ring-amber-300"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); applyLink(editor) }
+                  if (e.key === 'Escape') { setLinkEditing(false); editor.chain().focus().run() }
+                }}
+              />
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyLink(editor)}
+                className="px-2.5 py-1 text-xs text-white bg-gray-900 hover:bg-gray-800 rounded transition-colors"
+              >
+                Apply
+              </button>
+              {editor.isActive('link') && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    editor.chain().focus().unsetLink().run()
+                    setLinkEditing(false)
+                  }}
+                  className="px-2.5 py-1 text-xs text-red-500 hover:text-red-700 transition-colors"
+                >
+                  Remove
+                </button>
+              )}
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { setLinkEditing(false); editor.chain().focus().run() }}
+                className="px-2.5 py-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {emojiOpen && emojiPickerPos && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={emojiRef}
+          style={{ position: 'fixed', top: emojiPickerPos.top, right: emojiPickerPos.right, zIndex: 9999 }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <Suspense fallback={<div className="bg-white border border-[#E5E0D0] rounded-lg shadow-xl p-4 text-xs text-gray-400">Loading...</div>}>
+            <EmojiPicker
+              data={data}
+              onEmojiSelect={(emoji: { native: string }) => {
+                editor.chain().focus().insertContent(emoji.native).run()
+                setEmojiOpen(false)
+              }}
+              theme="light"
+              previewPosition="none"
+              skinTonePosition="search"
+              set="native"
+            />
+          </Suspense>
+        </div>,
+        document.body
+      )}
     </div>
   )
 })
 
-function ToolbarBtn({
-  active,
-  onClick,
-  title,
-  children,
-}: {
+const ToolbarBtn = forwardRef<HTMLButtonElement, {
   active: boolean
   onClick: () => void
   title: string
   children: React.ReactNode
-}) {
+}>(function ToolbarBtn({
+  active,
+  onClick,
+  title,
+  children,
+}, ref) {
   return (
     <button
+      ref={ref}
       type="button"
       onMouseDown={e => e.preventDefault()}
       onClick={onClick}
@@ -284,4 +675,4 @@ function ToolbarBtn({
       {children}
     </button>
   )
-}
+})

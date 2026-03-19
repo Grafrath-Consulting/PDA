@@ -7,11 +7,18 @@ import { Block, BlockStatus, SelectionAction } from '../types'
 import { SelectionMenu } from './SelectionMenu'
 import { HistoryModal } from './HistoryModal'
 import type { TipTapEditorHandle } from './TipTapEditor'
+import { useWorkspace } from '@/context/WorkspaceContext'
+import { getScheme } from '@/constants/workspaceColorSchemes'
+import { useProperties } from '@/context/PropertiesContext'
+import { PropertyBubbles } from './PropertyBubbles'
+import { PropertyEditor } from './PropertyEditor'
+import { AttachmentRow, Attachment } from './AttachmentRow'
 
 const TipTapEditor = dynamic(() => import('./TipTapEditor').then(m => m.TipTapEditor), { ssr: false })
 
 interface MenuState {
   selText: string
+  selHTML: string
   x: number
   y: number
 }
@@ -41,6 +48,10 @@ interface ExistingBlockProps extends BaseProps {
   onRemove: (blockId: string) => void
   onBlockArchived?: (block: Block) => void
   onSplitBlock: (newBlock: Block, updatedSourceBlock: Block) => void
+  appliedPropertyIds?: Set<string>
+  onPropertyChanged?: (newIds: Set<string>) => void
+  similarityScore?: number
+  searchHighlight?: string
 }
 
 type Props = NewEntryProps | ExistingBlockProps
@@ -65,16 +76,28 @@ function removeTextFromHTML(html: string, needle: string): string {
   div.innerHTML = html
   const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT)
   let remaining = needle
+  let started = false
   const nodesToProcess: { node: Text; startIdx: number; endIdx: number }[] = []
 
   while (walker.nextNode() && remaining.length > 0) {
     const node = walker.currentNode as Text
     const text = node.textContent ?? ''
-    const idx = remaining === needle ? text.indexOf(remaining.slice(0, Math.min(remaining.length, text.length))) : 0
-    if (idx === -1) continue
-    const removeLen = Math.min(remaining.length, text.length - idx)
-    nodesToProcess.push({ node, startIdx: idx, endIdx: idx + removeLen })
-    remaining = remaining.slice(removeLen)
+    if (!started) {
+      // Find where the needle starts in this text node
+      const matchLen = Math.min(remaining.length, text.length)
+      const idx = text.indexOf(remaining.slice(0, matchLen))
+      if (idx === -1) continue
+      started = true
+      const removeLen = Math.min(remaining.length, text.length - idx)
+      nodesToProcess.push({ node, startIdx: idx, endIdx: idx + removeLen })
+      remaining = remaining.slice(removeLen)
+    } else {
+      // Continuation: verify the text node content matches the remaining needle
+      const matchLen = Math.min(remaining.length, text.length)
+      if (text.slice(0, matchLen) !== remaining.slice(0, matchLen)) break
+      nodesToProcess.push({ node, startIdx: 0, endIdx: matchLen })
+      remaining = remaining.slice(matchLen)
+    }
   }
 
   if (remaining.length > 0) {
@@ -113,6 +136,7 @@ function replaceTextInHTML(html: string, needle: string, replacement: string): s
 }
 
 function htmlToText(html: string): string {
+  if (typeof document === 'undefined') return html.replace(/<[^>]*>/g, '')
   const div = document.createElement('div')
   div.innerHTML = html
   return div.textContent ?? ''
@@ -124,25 +148,83 @@ function toEditorHTML(raw: string | null): string {
   return raw.startsWith('<') ? raw : `<p>${raw.replace(/\n/g, '</p><p>')}</p>`
 }
 
+const THUMB_SIZE = 160
+
+/** Generate a thumbnail blob from an image File using canvas. Returns null for non-images. */
+async function generateThumbnail(file: File): Promise<Blob | null> {
+  if (!file.type.startsWith('image/')) return null
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const scale = Math.min(THUMB_SIZE / img.width, THUMB_SIZE / img.height, 1)
+      const w = Math.round(img.width * scale)
+      const h = Math.round(img.height * scale)
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { resolve(null); return }
+      ctx.drawImage(img, 0, 0, w, h)
+      canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.7)
+    }
+    img.onerror = () => resolve(null)
+    img.src = URL.createObjectURL(file)
+  })
+}
+
+const REFUSAL_PHRASES = [
+  "i can't summarize", "i cannot summarize",
+  "i'm unable to", "i am unable to",
+  "there's nothing to summarize", "there is nothing to summarize",
+  "no content to summarize", "no text to summarize",
+  "please paste", "please provide", "please share",
+  "i'd be happy to help", "i would be happy to help",
+]
+
+function isSummaryRefusal(summary: string, inputText: string): boolean {
+  const lower = summary.toLowerCase().trim()
+  // Check for refusal phrases
+  if (REFUSAL_PHRASES.some(p => lower.includes(p))) return true
+  // A valid compression should be significantly shorter — allow some slack
+  // for short inputs where rephrasing may not reduce length much.
+  const inputLen = inputText.trim().length
+  if (inputLen > 100 && summary.trim().length > inputLen) return true
+  return false
+}
+
+interface Person {
+  id: string
+  name: string
+}
+
 const ICON_SIZE = 14
 
 function taskIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
 }
+function archiveIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></svg>
+}
+function convertIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>
+}
+function moveIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><polyline points="12 5 19 12 12 19" /></svg>
+}
+function cutIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+}
+function copyIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+}
 function waitingIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-}
-function linkIcon() {
-  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
 }
 function infoIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
 }
 function sparkleIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
-}
-function checkIcon() {
-  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
 }
 function historyIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5" /><path d="M3 8a9 9 0 1 1 1.36 4.69" /></svg>
@@ -161,19 +243,49 @@ let deactivatePreviousBlock: (() => void) | null = null
 export function JournalBlock(props: Props) {
   const { autosaveInterval = 30, formattingVisible, onToggleFormatting } = props
   const isNewEntry = !props.block
+  const { activeWorkspace, activeScheme, activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
+  const { propertiesForWorkspace } = useProperties()
+  const [propertyEditorOpen, setPropertyEditorOpen] = useState(false)
+  const [moveMenuOpen, setMoveMenuOpen] = useState(false)
 
   const [showHistory, setShowHistory] = useState(false)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [focused, setFocused] = useState(false)
   const [editorKey, setEditorKey] = useState(0)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [summarizing, setSummarizing] = useState(false)
+  const [people, setPeople] = useState<Person[]>([])
+  const [peopleLoaded, setPeopleLoaded] = useState(false)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [attachmentsLoaded, setAttachmentsLoaded] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Staged state for new entries (before block exists)
+  const [pendingPropertyIds, setPendingPropertyIds] = useState<Set<string>>(new Set())
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const hasPendingData = pendingPropertyIds.size > 0 || pendingFiles.length > 0
+  const pendingPropertyIdsRef = useRef(pendingPropertyIds)
+  pendingPropertyIdsRef.current = pendingPropertyIds
+  const pendingFilesRef = useRef(pendingFiles)
+  pendingFilesRef.current = pendingFiles
 
   const editorRef = useRef<TipTapEditorHandle>(null)
+  // Fallback handle from onReady callback — next/dynamic doesn't always forward refs
+  const editorHandleRef = useRef<TipTapEditorHandle | null>(null)
+  const getEditor = () => editorRef.current ?? editorHandleRef.current
   const cardRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
 
   const savingRef = useRef(false)
+  const suppressBlurRef = useRef(false)
+  const workspaceRef = useRef(activeWorkspace)
+  workspaceRef.current = activeWorkspace
+  const workspacesRef = useRef(workspaces)
+  workspacesRef.current = workspaces
 
   // Live editor content — updated on every keystroke via onChange.
   // Initialised from block content so save sees real data even before onChange fires.
@@ -231,6 +343,10 @@ export function JournalBlock(props: Props) {
     if (isNewEntry) return
     function onPointerUp(e: PointerEvent) {
       requestAnimationFrame(() => {
+        // Ignore if the pointer event originated inside the selection menu
+        const target = e.target as Node
+        if ((target as HTMLElement).closest?.('.selection-menu-container')) return
+
         const selection = window.getSelection()
         if (!selection || selection.isCollapsed) return
         const selText = selection.toString().trim()
@@ -239,7 +355,6 @@ export function JournalBlock(props: Props) {
         const anchor = selection.anchorNode
         if (!cardRef.current?.contains(anchor)) return
 
-        const target = e.target as Node
         if (triggerRef.current?.contains(target)) return
         if (popoverRef.current?.contains(target)) return
 
@@ -247,10 +362,16 @@ export function JournalBlock(props: Props) {
         const rect = range.getBoundingClientRect()
         if (!rect.width && !rect.height) return
 
+        // Capture the HTML of the selected range
+        const fragment = range.cloneContents()
+        const tempDiv = document.createElement('div')
+        tempDiv.appendChild(fragment)
+        const selHTML = tempDiv.innerHTML
+
         const cardRect = cardRef.current?.getBoundingClientRect()
         const menuX = cardRect ? cardRect.left : rect.left
         const menuY = rect.top + rect.height / 2
-        setMenuState({ selText, x: menuX, y: menuY })
+        setMenuState({ selText, selHTML, x: menuX, y: menuY })
       })
     }
 
@@ -332,14 +453,6 @@ export function JournalBlock(props: Props) {
   function handleContextMenu(e: React.MouseEvent) {
     if (isNewEntry) return
     e.preventDefault()
-    if (focused) return
-    const selection = window.getSelection()
-    const hasSelection = selection && !selection.isCollapsed && selection.toString().trim()
-    if (!hasSelection) {
-      const content = htmlToText(liveHTMLRef.current || toEditorHTML(props.block?.content ?? ''))
-      const cardRect = cardRef.current?.getBoundingClientRect()
-      setMenuState({ selText: content, x: cardRect?.left ?? e.clientX, y: e.clientY })
-    }
   }
 
   // ── Push new content into the always-mounted editor + sync refs ────
@@ -369,8 +482,29 @@ export function JournalBlock(props: Props) {
     if (!menuState || !props.block) return
     const { selText } = menuState
     setMenuState(null)
+
+    if (action.type === 'insert_link') {
+      const selectedText = selText
+      suppressBlurRef.current = true
+      if (focused) {
+        getEditor()?.openLinkEditor(selectedText)
+        suppressBlurRef.current = false
+      } else {
+        lastSavedHTMLRef.current = liveHTMLRef.current
+        setFocused(true)
+        deactivatePreviousBlock = () => saveExistingBlock()
+        // Double rAF: first for React re-render with editable=true,
+        // second for TipTap's useLayoutEffect to call editor.setEditable(true)
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          suppressBlurRef.current = false
+          getEditor()?.openLinkEditor(selectedText)
+        }))
+      }
+      return
+    }
+
     window.getSelection()?.removeAllRanges()
-    await executeAction(action, selText)
+    await executeAction(action, selText, menuState.selHTML)
   }
 
   async function handleToolbarAction(action: SelectionAction) {
@@ -382,7 +516,7 @@ export function JournalBlock(props: Props) {
     await executeAction(action, fullText)
   }
 
-  async function executeAction(action: SelectionAction, selText: string) {
+  async function executeAction(action: SelectionAction, selText: string, selHTML?: string) {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
     const block = p.block
@@ -393,7 +527,7 @@ export function JournalBlock(props: Props) {
     if (action.type === 'create_task') {
       const newContent = removeTextFromHTML(currentContent, selText)
       const isEmpty = !htmlToText(newContent).trim()
-      const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
+      const newStatus: BlockStatus = isEmpty ? 'archived' : 'active'
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
@@ -414,7 +548,7 @@ export function JournalBlock(props: Props) {
     if (action.type === 'split_block') {
       const newContent = removeTextFromHTML(currentContent, selText)
       const isEmpty = !htmlToText(newContent).trim()
-      const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
+      const newStatus: BlockStatus = isEmpty ? 'archived' : 'active'
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
@@ -423,7 +557,7 @@ export function JournalBlock(props: Props) {
       ).toISOString()
       const splitSortOrder = (block.sort_order ?? 0) - 0.5
       const { data: newBlock } = await supabase.from('journal_blocks')
-        .insert({ user_id: block.user_id, context_id: block.context_id, content: selText, status: 'partially_handled', created_at: splitCreatedAt, sort_order: splitSortOrder })
+        .insert({ user_id: block.user_id, context_id: block.context_id, content: selHTML || selText, status: 'active', created_at: splitCreatedAt, sort_order: splitSortOrder })
         .select().single()
       const updatedSourceBlock = { ...block, content: newContent, status: newStatus }
       if (newBlock) p.onSplitBlock(newBlock as Block, updatedSourceBlock as Block)
@@ -445,25 +579,15 @@ export function JournalBlock(props: Props) {
       return
     }
 
-    if (action.type === 'link_project') {
-      const { data: project } = await supabase.from('projects').select('name').eq('id', action.projectId).single()
-      if (!project) return
-      const tagName = `proj:${project.name}`
-      let { data: tag } = await supabase.from('tags').select('id').eq('user_id', block.user_id).eq('name', tagName).maybeSingle()
-      if (!tag) {
-        const { data: created } = await supabase.from('tags').insert({ user_id: block.user_id, name: tagName, color: '#6366f1' }).select('id').single()
-        tag = created
-      }
-      if (tag) await supabase.from('taggings').insert({ tag_id: tag.id, entity_type: 'block', entity_id: block.id })
-      await supabase.from('journal_blocks').update({ status: 'partially_handled' }).eq('id', block.id)
-      p.onUpdate({ ...block, status: 'partially_handled' })
+    if (action.type === 'insert_link') {
+      editorRef.current?.openLinkEditor()
       return
     }
 
     if (action.type === 'label_info') {
       const newContent = removeTextFromHTML(currentContent, selText)
       const isEmpty = !htmlToText(newContent).trim()
-      const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
+      const newStatus: BlockStatus = isEmpty ? 'archived' : 'active'
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
@@ -473,30 +597,62 @@ export function JournalBlock(props: Props) {
     }
 
     if (action.type === 'summarize') {
-      const res = await fetch('/api/ai/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: selText }),
-      })
-      if (!res.ok) {
-        const errText = await res.text()
-        console.error('Summarize API error:', res.status, errText)
-        return
+      const fullText = htmlToText(currentContent).trim()
+      const isFullBlock = selText.trim() === fullText
+      const textToSummarize = isFullBlock
+        ? htmlToText(liveHTMLRef.current || currentContent)
+        : selText
+      setSummarizing(true)
+      setErrorMessage(null)
+      try {
+        const res = await fetch('/api/ai/summarize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: textToSummarize }),
+        })
+        if (!res.ok) {
+          try {
+            const errJson = await res.json()
+            if (errJson.error === 'no_api_key') {
+              setErrorMessage('AI features require an API key. Add yours in Settings \u2192 AI.')
+            } else {
+              setErrorMessage(errJson.message ?? 'Summarization failed')
+            }
+          } catch {
+            setErrorMessage('Summarization failed')
+          }
+          return
+        }
+        const json = await res.json()
+        if (!json.summary) {
+          setErrorMessage('Summarization returned empty result.')
+          return
+        }
+        if (isSummaryRefusal(json.summary, textToSummarize)) {
+          setErrorMessage("Couldn't summarize — try selecting more meaningful text.")
+          return
+        }
+        const newContent = isFullBlock
+          ? `<p>${json.summary.replace(/\n/g, '</p><p>')}</p>`
+          : replaceTextInHTML(currentContent, selText, json.summary)
+        if (newContent === currentContent) {
+          setErrorMessage('Summary could not be applied — text mismatch.')
+          return
+        }
+        await supabase.from('journal_blocks').update({ content: newContent, status: 'active' }).eq('id', block.id)
+        syncEditorContent(newContent)
+        p.onUpdate({ ...block, content: newContent, status: 'active' })
+        deactivate()
+      } finally {
+        setSummarizing(false)
       }
-      const json = await res.json()
-      if (!json.summary) return
-      const newContent = replaceTextInHTML(currentContent, selText, json.summary)
-      await supabase.from('journal_blocks').update({ content: newContent, status: 'partially_handled' }).eq('id', block.id)
-      syncEditorContent(newContent)
-      p.onUpdate({ ...block, content: newContent, status: 'partially_handled' })
-      deactivate()
       return
     }
 
     if (action.type === 'delete_selection') {
       const newContent = removeTextFromHTML(currentContent, selText)
       const isEmpty = !htmlToText(newContent).trim()
-      const newStatus: BlockStatus = isEmpty ? 'archived' : 'partially_handled'
+      const newStatus: BlockStatus = isEmpty ? 'archived' : 'active'
       await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
@@ -536,26 +692,83 @@ export function JournalBlock(props: Props) {
     clearAutosaveTimer()
 
     const p = propsRef.current as NewEntryProps
+    // In global view, route to the user's default workspace (if any)
+    const wsId = workspaceRef.current?.id
+      ?? workspacesRef.current.find(w => w.is_default)?.id
+      ?? null
     const supabase = createClient()
     const { data, error } = await supabase
       .from('journal_blocks')
       .insert({
         user_id: p.userId,
         context_id: p.contextId ?? null,
+        workspace_id: wsId,
         content: html,
-        status: 'unprocessed',
+        status: 'active',
       })
       .select()
       .single()
 
     savingRef.current = false
     if (error) { console.error(error); return null }
+
+    const saved = data as Block | null
+    if (saved) {
+      // Flush pending properties
+      const pendingProps = pendingPropertyIdsRef.current
+      if (pendingProps.size > 0) {
+        const rows = Array.from(pendingProps).map(pvId => ({
+          entry_id: saved.id,
+          property_value_id: pvId,
+        }))
+        await supabase.from('entry_properties').insert(rows)
+      }
+      // Flush pending files
+      const files = pendingFilesRef.current
+      if (files.length > 0) {
+        for (const file of files) {
+          const storagePath = `${saved.user_id}/${saved.id}/${file.name}`
+          const { error: upErr } = await supabase.storage.from('attachments').upload(storagePath, file, { upsert: true })
+          if (!upErr) {
+            let thumbnailPath: string | null = null
+            const thumb = await generateThumbnail(file)
+            if (thumb) {
+              thumbnailPath = `${saved.user_id}/${saved.id}/.thumbs/${file.name}.jpg`
+              await supabase.storage.from('attachments').upload(thumbnailPath, thumb, { upsert: true, contentType: 'image/jpeg' })
+            }
+            await supabase.from('attachments').insert({
+              user_id: saved.user_id,
+              block_id: saved.id,
+              file_name: file.name,
+              file_path: storagePath,
+              file_size: file.size,
+              mime_type: file.type || null,
+              thumbnail_path: thumbnailPath,
+            })
+            await supabase.from('attachment_events').insert({
+              block_id: saved.id,
+              user_id: saved.user_id,
+              event_type: 'added',
+              filename: file.name,
+              file_size: file.size,
+            })
+          }
+        }
+      }
+    }
+
     liveHTMLRef.current = ''
     liveTextRef.current = ''
+    setPendingPropertyIds(new Set())
+    setPendingFiles([])
     setFocused(false)
     setEditorKey(k => k + 1)
-    if (data) p.onSaved(data as Block)
-    return (data as Block) ?? null
+    if (saved) {
+      p.onSaved(saved)
+      // Fire-and-forget: embed block for semantic search
+      fetch('/api/ai/embed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blockId: saved.id }) }).catch(() => {})
+    }
+    return saved
   }, [])
 
   const saveExistingBlock = useCallback(async () => {
@@ -591,13 +804,23 @@ export function JournalBlock(props: Props) {
       return
     }
 
-    // Write block_version before updating
-    await supabase.from('block_versions').insert({
-      block_id: block.id,
-      content: block.content,
-      content_html: block.content,
-      edited_at: new Date().toISOString(),
-    })
+    // Write block_version before updating — skip if the most recent version
+    // already has the same content (avoids duplicates from rapid edits).
+    const { data: latestVersion } = await supabase
+      .from('block_versions')
+      .select('content')
+      .eq('block_id', block.id)
+      .order('edited_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (latestVersion?.content !== block.content) {
+      await supabase.from('block_versions').insert({
+        block_id: block.id,
+        content: block.content,
+        content_html: block.content,
+        edited_at: new Date().toISOString(),
+      })
+    }
 
     const { data: saved } = await supabase
       .from('journal_blocks')
@@ -610,6 +833,8 @@ export function JournalBlock(props: Props) {
     lastSyncedContentRef.current = savedBlock.content
     p.onUpdate(savedBlock)
     savingRef.current = false
+    // Fire-and-forget: embed block for semantic search
+    fetch('/api/ai/embed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blockId: block.id }) }).catch(() => {})
   }, [])
 
   const handleSave = isNewEntry ? saveNewEntry : saveExistingBlock
@@ -645,7 +870,7 @@ export function JournalBlock(props: Props) {
     const trimmed = text.trim()
     if (isNewEntry) {
       if (trimmed && !focused) setFocused(true)
-      if (!trimmed) { setFocused(false); clearAutosaveTimer(); return }
+      if (!trimmed && !hasPendingData) { setFocused(false); clearAutosaveTimer(); return }
     }
     // Don't start autosave timers for unfocused existing blocks
     if (!isNewEntry && !focusedRef.current) return
@@ -669,7 +894,7 @@ export function JournalBlock(props: Props) {
         user_id: p.userId,
         context_id: p.contextId ?? null,
         content: html,
-        status: 'unprocessed',
+        status: 'active',
       })
       .select()
       .single()
@@ -720,17 +945,39 @@ export function JournalBlock(props: Props) {
     }
 
     if (action.type === 'summarize') {
-      const res = await fetch('/api/ai/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: fullText }),
-      })
-      if (!res.ok) return
-      const json = await res.json()
-      if (!json.summary) return
-      await supabase2.from('journal_blocks')
-        .update({ content: json.summary, status: 'partially_handled' })
-        .eq('id', saved.id)
+      setSummarizing(true)
+      setErrorMessage(null)
+      try {
+        const res = await fetch('/api/ai/summarize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: fullText }),
+        })
+        if (!res.ok) {
+          try {
+            const errJson = await res.json()
+            if (errJson.error === 'no_api_key') {
+              setErrorMessage('AI features require an API key. Add yours in Settings \u2192 AI.')
+            } else {
+              setErrorMessage(errJson.message ?? 'Summarization failed')
+            }
+          } catch {
+            setErrorMessage('Summarization failed')
+          }
+          return
+        }
+        const json = await res.json()
+        if (!json.summary) return
+        if (isSummaryRefusal(json.summary, fullText)) {
+          setErrorMessage("Couldn't summarize — try selecting more meaningful text.")
+          return
+        }
+        await supabase2.from('journal_blocks')
+          .update({ content: json.summary, status: 'active' })
+          .eq('id', saved.id)
+      } finally {
+        setSummarizing(false)
+      }
     }
   }
 
@@ -783,6 +1030,8 @@ export function JournalBlock(props: Props) {
       liveHTMLRef.current = ''
       liveTextRef.current = ''
       clearAutosaveTimer()
+      setPendingPropertyIds(new Set())
+      setPendingFiles([])
       setEditorKey(k => k + 1)
       return
     }
@@ -800,7 +1049,7 @@ export function JournalBlock(props: Props) {
       }
       if (e.key === 'D') {
         e.preventDefault()
-        markDone()
+        archiveBlock()
         return
       }
       if (e.key === 'S') {
@@ -818,6 +1067,8 @@ export function JournalBlock(props: Props) {
   }
 
   function handleBlur(e: React.FocusEvent) {
+    // Suppress blur when insert_link is transitioning the block to editable
+    if (suppressBlurRef.current) return
     // If focus moved to another element inside the card, stay active
     if (cardRef.current?.contains(e.relatedTarget as Node)) return
     // When clicking non-focusable areas (padding) inside the card,
@@ -829,7 +1080,9 @@ export function JournalBlock(props: Props) {
         if (cardRef.current?.contains(document.activeElement)) return
         if (isNewEntry) {
           const text = liveTextRef.current.trim()
-          if (!text) { setFocused(false); return }
+          const hasPending = pendingPropertyIdsRef.current.size > 0 || pendingFilesRef.current.length > 0
+          if (!text && !hasPending) { setFocused(false); return }
+          if (!text) { setFocused(false); return } // unfocus but keep pending data
           saveNewEntry()
         } else if (focusedRef.current) {
           // Extra guard: if this block was just activated in the same rAF
@@ -846,7 +1099,9 @@ export function JournalBlock(props: Props) {
     }
     if (isNewEntry) {
       const text = liveTextRef.current.trim()
-      if (!text) { setFocused(false); return }
+      const hasPending = pendingPropertyIdsRef.current.size > 0 || pendingFilesRef.current.length > 0
+      if (!text && !hasPending) { setFocused(false); return }
+      if (!text) { setFocused(false); return } // unfocus but keep pending data
       saveNewEntry()
     } else if (focused) {
       deactivatePreviousBlock = null // already deactivating, prevent double-save
@@ -854,15 +1109,21 @@ export function JournalBlock(props: Props) {
     }
   }
 
-  async function markDone() {
-    const p = propsRef.current as ExistingBlockProps
-    if (!p.block) return
-    await flushEdits()
-    deactivate()
-    const supabase = createClient()
-    await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', p.block.id)
-    p.onRemove(p.block.id)
-    p.onBlockArchived?.({ ...p.block, status: 'archived', is_archived: true })
+  function copyBlockToClipboard() {
+    const html = liveHTMLRef.current || toEditorHTML(props.block?.content ?? '')
+    const plain = htmlToText(html)
+    // Write both HTML and plain text so pasting into rich editors preserves formatting
+    try {
+      navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+        }),
+      ])
+    } catch {
+      // Fallback for browsers that don't support ClipboardItem
+      navigator.clipboard.writeText(plain)
+    }
   }
 
   async function deleteBlock() {
@@ -877,23 +1138,271 @@ export function JournalBlock(props: Props) {
     p.onBlockArchived?.({ ...p.block, deleted_at: deletedAt })
   }
 
+  async function archiveBlock() {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    await flushEdits()
+    deactivate()
+    const supabase = createClient()
+    const archivedAt = new Date().toISOString()
+    await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true, archived_at: archivedAt }).eq('id', p.block.id)
+    p.onRemove(p.block.id)
+    p.onBlockArchived?.({ ...p.block, status: 'archived', is_archived: true, archived_at: archivedAt })
+  }
+
+  async function toggleEntryType() {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    const current = p.block.entry_type
+    const next = current === 'info' ? 'task' : 'info'
+
+    if (next === 'info' && (p.block.due_date || p.block.owner_id)) {
+      if (!window.confirm('Converting to Info will clear the due date and owner. Continue?')) return
+    }
+
+    const supabase = createClient()
+    const updates: Record<string, unknown> = { entry_type: next }
+    if (next === 'info') {
+      updates.owner_id = null
+      updates.due_date = null
+      updates.due_date_type = null
+    }
+    await supabase.from('journal_blocks').update(updates).eq('id', p.block.id)
+    p.onUpdate({ ...p.block, entry_type: next, ...(next === 'info' ? { owner_id: null, due_date: null, due_date_type: null } : {}) })
+  }
+
+  async function updateTaskField(field: string, value: unknown) {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    const supabase = createClient()
+    await supabase.from('journal_blocks').update({ [field]: value }).eq('id', p.block.id)
+    p.onUpdate({ ...p.block, [field]: value })
+  }
+
+  async function toggleComplete() {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    const next = p.block.status === 'complete' ? 'active' : 'complete'
+    const supabase = createClient()
+    await supabase.from('journal_blocks').update({ status: next }).eq('id', p.block.id)
+    p.onUpdate({ ...p.block, status: next })
+  }
+
+  async function moveToWorkspace(targetWsId: string | null) {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    setMoveMenuOpen(false)
+    setPopoverOpen(false)
+    const supabase = createClient()
+    await supabase.from('journal_blocks').update({ workspace_id: targetWsId }).eq('id', p.block.id)
+    // In single-workspace view, block has left this workspace — remove it from feed
+    if (!isGlobalView && targetWsId !== activeWorkspaceId) {
+      p.onRemove(p.block.id)
+    } else {
+      p.onUpdate({ ...p.block, workspace_id: targetWsId })
+    }
+  }
+
+  // Lazy-load people when a task block is visible
+  const blockForPeople = props.block
+  useEffect(() => {
+    if (isNewEntry || peopleLoaded) return
+    if (!blockForPeople || blockForPeople.entry_type !== 'task') return
+    const supabase = createClient()
+    supabase
+      .from('people')
+      .select('id, name')
+      .eq('user_id', blockForPeople.user_id)
+      .order('name')
+      .then(({ data }) => {
+        setPeople((data ?? []) as Person[])
+        setPeopleLoaded(true)
+      })
+  }, [isNewEntry, blockForPeople, peopleLoaded])
+
+  // Load attachments for existing blocks
+  useEffect(() => {
+    if (isNewEntry || attachmentsLoaded || !props.block) return
+    const supabase = createClient()
+    supabase
+      .from('attachments')
+      .select('id, file_name, file_path, file_size, mime_type, thumbnail_path')
+      .eq('block_id', props.block.id)
+      .order('created_at')
+      .then(({ data }) => {
+        setAttachments((data ?? []) as Attachment[])
+        setAttachmentsLoaded(true)
+      })
+  }, [isNewEntry, props.block?.id, attachmentsLoaded])
+
+  const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
+  const MAX_ATTACHMENTS = 50
+
+  async function uploadFiles(files: FileList | File[]) {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block || uploading) return
+
+    const fileArray = Array.from(files)
+
+    // Client-side validation
+    if (attachments.length + fileArray.length > MAX_ATTACHMENTS) {
+      setErrorMessage(`Cannot add more files — maximum ${MAX_ATTACHMENTS} attachments per block.`)
+      return
+    }
+    for (const f of fileArray) {
+      if (f.size > MAX_FILE_SIZE) {
+        setErrorMessage(`"${f.name}" is ${(f.size / (1024 * 1024)).toFixed(1)} MB — maximum file size is 20 MB.`)
+        return
+      }
+    }
+
+    setUploading(true)
+    const supabase = createClient()
+    const newAttachments: Attachment[] = []
+
+    for (const file of fileArray) {
+      const storagePath = `${p.block.user_id}/${p.block.id}/${file.name}`
+      const { error: uploadErr } = await supabase.storage
+        .from('attachments')
+        .upload(storagePath, file, { upsert: true })
+
+      if (uploadErr) {
+        console.error('Upload failed:', uploadErr)
+        const reason = uploadErr.message || 'unknown error'
+        const sizeStr = file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${(file.size / 1024).toFixed(0)} KB`
+        setErrorMessage(`Failed to upload "${file.name}" (${sizeStr}): ${reason}`)
+        continue
+      }
+
+      // Generate and upload thumbnail for images
+      let thumbnailPath: string | null = null
+      const thumb = await generateThumbnail(file)
+      if (thumb) {
+        thumbnailPath = `${p.block.user_id}/${p.block.id}/.thumbs/${file.name}.jpg`
+        await supabase.storage.from('attachments').upload(thumbnailPath, thumb, { upsert: true, contentType: 'image/jpeg' })
+      }
+
+      const { data: row, error: insertErr } = await supabase
+        .from('attachments')
+        .insert({
+          user_id: p.block.user_id,
+          block_id: p.block.id,
+          file_name: file.name,
+          file_path: storagePath,
+          file_size: file.size,
+          mime_type: file.type || null,
+          thumbnail_path: thumbnailPath,
+        })
+        .select('id, file_name, file_path, file_size, mime_type, thumbnail_path')
+        .single()
+
+      if (insertErr) {
+        console.error('Insert failed:', insertErr)
+        setErrorMessage(`Uploaded "${file.name}" but failed to save record: ${insertErr.message || 'unknown error'}`)
+        continue
+      }
+      if (row) {
+        newAttachments.push(row as Attachment)
+        // Log attachment event
+        await supabase.from('attachment_events').insert({
+          block_id: p.block.id,
+          user_id: p.block.user_id,
+          event_type: 'added',
+          filename: file.name,
+          file_size: file.size,
+        })
+      }
+    }
+
+    setAttachments(prev => [...prev, ...newAttachments])
+    setUploading(false)
+  }
+
+  async function deleteAttachment(attachmentId: string, filePath: string) {
+    const att = attachments.find(a => a.id === attachmentId)
+    const supabase = createClient()
+    const toRemove = [filePath]
+    if (att?.thumbnail_path) toRemove.push(att.thumbnail_path)
+    await supabase.storage.from('attachments').remove(toRemove)
+    await supabase.from('attachments').delete().eq('id', attachmentId)
+    // Log attachment event
+    if (att && props.block) {
+      await supabase.from('attachment_events').insert({
+        block_id: props.block.id,
+        user_id: props.block.user_id,
+        event_type: 'deleted',
+        filename: att.file_name,
+        file_size: att.file_size,
+      })
+    }
+    setAttachments(prev => prev.filter(a => a.id !== attachmentId))
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    const files = e.dataTransfer.files
+    if (files.length === 0) return
+    if (block) {
+      uploadFiles(files)
+    } else {
+      // New entry — stage files locally
+      const newFiles = Array.from(files)
+      const tooLarge = newFiles.find(f => f.size > MAX_FILE_SIZE)
+      if (tooLarge) { setErrorMessage(`"${tooLarge.name}" is ${(tooLarge.size / (1024 * 1024)).toFixed(1)} MB — maximum file size is 20 MB.`); return }
+      setPendingFiles(prev => {
+        if (prev.length + newFiles.length > MAX_ATTACHMENTS) { setErrorMessage(`Cannot add more files — maximum ${MAX_ATTACHMENTS} attachments per block.`); return prev }
+        return [...prev, ...newFiles]
+      })
+    }
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
   // ── Derived values ──────────────────────────────────────────────────
   const block = props.block
   const showModified = block ? isMeaningfullyModified(block.created_at, block.updated_at) : false
   const contentHTML = block ? toEditorHTML(block.content) : ''
   const showToolbar = focused && formattingVisible
 
-  // Build popover menu items — identical chrome for new entry and existing blocks.
-  const popoverItems: { key: string; label: string; shortcut?: string; icon: React.ReactNode; onClick: () => void; className?: string }[] = [
-    { key: 'task', label: 'Create Task', shortcut: '⌥⇧T', icon: taskIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'my_task' }) } },
-    { key: 'waiting', label: 'Waiting On', shortcut: '⌥⇧W', icon: waitingIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' }) } },
-    { key: 'link', label: 'Link to Project', icon: linkIcon(), onClick: () => { setPopoverOpen(false) } },
-    { key: 'info', label: 'Label as Info', icon: infoIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'label_info' }) } },
-    { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', icon: sparkleIcon(), onClick: () => { setPopoverOpen(false); handleToolbarAction({ type: 'summarize' }) } },
+  const isTask = block?.entry_type === 'task'
+  const isComplete = block?.status === 'complete'
+
+  // Route an action through the correct handler depending on new entry vs existing block
+  function popoverAction(action: SelectionAction) {
+    setPopoverOpen(false)
+    if (isNewEntry) {
+      handleNewEntryShortcut(action)
+    } else {
+      handleToolbarAction(action)
+    }
+  }
+
+  // Build popover menu items — shown for both new entry and existing blocks.
+  const popoverItems: { key: string; label: string; shortcut?: string; icon: React.ReactNode; onClick: () => void; className?: string; separator?: boolean }[] = [
+    ...(block ? [{
+      key: 'convert', label: isTask ? 'Convert to Info' : 'Convert to Task', icon: convertIcon(),
+      onClick: () => { setPopoverOpen(false); toggleEntryType() },
+    }] : []),
+    { key: 'task', label: 'Create Task', shortcut: '⌥⇧T', icon: taskIcon(), onClick: () => popoverAction({ type: 'create_task', taskType: 'my_task' }) },
+    { key: 'waiting', label: 'Waiting On', shortcut: '⌥⇧W', icon: waitingIcon(), onClick: () => popoverAction({ type: 'create_task', taskType: 'waiting_on' }) },
+    { key: 'info', label: 'Label as Info', icon: infoIcon(), onClick: () => popoverAction({ type: 'label_info' }) },
+    { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', icon: sparkleIcon(), onClick: () => popoverAction({ type: 'summarize' }) },
     { key: 'format', label: 'Formatting', shortcut: '⌥⇧F', icon: formatBarIcon(), onClick: () => { setPopoverOpen(false); onToggleFormatting() }, className: formattingVisible ? 'text-amber-700 bg-amber-50' : undefined },
-    { key: 'done', label: 'Mark as Done', shortcut: '⌥⇧D', icon: checkIcon(), onClick: () => { setPopoverOpen(false); markDone() } },
-    { key: 'history', label: 'View History', icon: historyIcon(), onClick: () => { setPopoverOpen(false); if (block) setShowHistory(true) } },
-    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
+    ...(block ? [
+      { key: 'history', label: 'View History', icon: historyIcon(), onClick: () => { setPopoverOpen(false); setShowHistory(true) } },
+      { key: 'copyblock', label: 'Copy Block', icon: copyIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard() } },
+      { key: 'cutblock', label: 'Cut Block', icon: cutIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard(); deleteBlock() } },
+    ] : []),
+    ...(block && workspaces.length > 0 ? [{
+      key: 'move', label: 'Move to…', icon: moveIcon(),
+      onClick: () => setMoveMenuOpen(prev => !prev),
+    }] : []),
+    ...(block ? [{ key: 'archive', label: 'Archive', icon: archiveIcon(), onClick: () => { setPopoverOpen(false); archiveBlock() }, separator: true }] : []),
+    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
   ]
 
   // Disable split when selection covers entire block content
@@ -901,29 +1410,173 @@ export function JournalBlock(props: Props) {
     ? htmlToText(liveHTMLRef.current || toEditorHTML(block?.content ?? '')).trim() === menuState.selText.trim()
     : false
 
+  // Workspace-tinted background for the new entry composer
+  const composerMuted = isNewEntry && activeScheme ? activeScheme.muted : undefined
+
+  // In global view, show a workspace color left border on existing blocks.
+  // Use a consistent border-l-[3px] for ALL states in global view so focus/unfocus
+  // is just a color swap, never a geometry change — no layout shift or flicker.
+  const showWsBorder = isGlobalView && !isNewEntry && block
+  let wsLeftColor: string | undefined
+  if (showWsBorder) {
+    if (focused) {
+      wsLeftColor = activeScheme?.primary ?? '#F59E0B'
+    } else if (block.workspace_id) {
+      const ws = workspaces.find(w => w.id === block.workspace_id)
+      if (ws) {
+        wsLeftColor = getScheme(ws.color_scheme)?.primary ?? '#D1D5DB'
+      } else {
+        wsLeftColor = '#D1D5DB' // gray fallback
+      }
+    } else {
+      wsLeftColor = '#D1D5DB' // null workspace = neutral gray
+    }
+  }
+
+  // Derive border left color for focused/workspace states
+  let borderLeftColor: string | undefined
+  if (!isDragOver) {
+    if (showWsBorder) {
+      borderLeftColor = wsLeftColor
+    } else if (focused) {
+      borderLeftColor = activeScheme?.primary ?? '#F59E0B'
+    }
+  }
+
+  const appliedProps = block
+    ? ((props as ExistingBlockProps).appliedPropertyIds ?? new Set<string>())
+    : pendingPropertyIds
+  const hasAppliedProps = appliedProps.size > 0
+
   return (
     <div
+      id={block ? `block-${block.id}` : undefined}
       ref={cardRef}
       className={`relative group rounded-xl shadow-sm transition-colors ${
-        focused
-          ? 'border-l-[3px] border-l-[#F59E0B] border border-[#E5E0D0] bg-[#FFFBEB] shadow-md'
-          : 'border border-[#E5E0D0] bg-white pl-[2px] hover:border-[#D5D0C0]'
-      }`}
+        hasAppliedProps ? 'mt-4' : ''
+      } ${
+        isDragOver
+          ? 'border-2 border-amber-400 bg-amber-50/50 shadow-md'
+          : showWsBorder
+            ? `border-l-[3px] border border-[#E5E0D0] ${focused ? 'shadow-md' : 'hover:border-[#D5D0C0]'}`
+            : focused
+              ? 'border-l-[3px] border border-[#E5E0D0] shadow-md'
+              : 'border border-[#E5E0D0] pl-[2px] hover:border-[#D5D0C0]'
+      } ${isDragOver ? '' : composerMuted ? '' : focused && !isNewEntry ? '' : 'bg-white'}`}
+      style={{
+        ...(composerMuted && !isDragOver
+          ? { backgroundColor: composerMuted }
+          : focused && !isNewEntry && !isDragOver
+            ? { backgroundColor: activeScheme?.muted ?? '#FFFBEB' }
+            : {}),
+        ...(borderLeftColor ? { borderLeftColor } : {}),
+      }}
       onMouseDown={handleContentMouseDown}
+      onDrop={(e) => { setIsDragOver(false); handleDrop(e) }}
+      onDragOver={handleDragOver}
+      onDragEnter={(e) => { e.preventDefault(); setIsDragOver(true) }}
+      onDragLeave={(e) => {
+        if (!cardRef.current?.contains(e.relatedTarget as Node)) setIsDragOver(false)
+      }}
     >
-      {/* Popover trigger */}
-      <button
-        ref={triggerRef}
-        type="button"
-        title="Actions"
-        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
-        onClick={(e) => { e.stopPropagation(); setPopoverOpen(prev => !prev) }}
-        className={`absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all ${
-          popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-        }`}
+      {/* Hidden file input for paperclip button */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          if (!e.target.files?.length) return
+          if (block) {
+            uploadFiles(e.target.files)
+          } else {
+            // New entry — stage files locally
+            const newFiles = Array.from(e.target.files)
+            const tooLarge = newFiles.find(f => f.size > MAX_FILE_SIZE)
+            if (tooLarge) { setErrorMessage(`"${tooLarge.name}" is ${(tooLarge.size / (1024 * 1024)).toFixed(1)} MB — maximum file size is 20 MB.`); e.target.value = ''; return }
+            setPendingFiles(prev => {
+              if (prev.length + newFiles.length > MAX_ATTACHMENTS) { setErrorMessage(`Cannot add more files — maximum ${MAX_ATTACHMENTS} attachments per block.`); return prev }
+              return [...prev, ...newFiles]
+            })
+          }
+          e.target.value = ''
+        }}
+      />
+
+      {/* ── STICKY TAG ROW — straddles the top border ── */}
+      <div
+        className="absolute top-0 left-4 right-14 -translate-y-1/2 z-10 flex items-center gap-1 pointer-events-none"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg>
-      </button>
+        <div className="flex items-center gap-1 overflow-hidden pointer-events-auto">
+          <PropertyBubbles
+            appliedValueIds={appliedProps}
+            properties={propertiesForWorkspace(activeWorkspaceId)}
+            onClickValue={() => setPropertyEditorOpen(true)}
+          />
+        </div>
+        {/* Add-tag button — sits after last pill */}
+        <div className="relative pointer-events-auto">
+          <button
+            type="button"
+            title="Add property"
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onClick={(e) => { e.stopPropagation(); setPropertyEditorOpen(prev => !prev) }}
+            className={`w-5 h-5 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400 transition-all ${
+              propertyEditorOpen ? 'opacity-100' : hasAppliedProps ? 'opacity-60 hover:opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100'
+            }`}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+          </button>
+        </div>
+      </div>
+
+      {/* Property editor popover — rendered at card level to avoid z-index issues with the tag row */}
+      {propertyEditorOpen && (
+        block ? (
+          <PropertyEditor
+            blockId={block.id}
+            appliedValueIds={appliedProps}
+            properties={propertiesForWorkspace(activeWorkspaceId)}
+            onChanged={(newIds) => (props as ExistingBlockProps).onPropertyChanged?.(newIds)}
+            onClose={() => setPropertyEditorOpen(false)}
+          />
+        ) : (
+          <PropertyEditor
+            blockId="__pending__"
+            appliedValueIds={pendingPropertyIds}
+            properties={propertiesForWorkspace(activeWorkspaceId)}
+            onChanged={(newIds) => setPendingPropertyIds(newIds)}
+            onClose={() => setPropertyEditorOpen(false)}
+          />
+        )
+      )}
+
+      {/* ── ACTION ICONS — pinned top-right corner ── */}
+      <div className={`absolute top-0 right-2 -translate-y-1/2 z-10 flex items-center gap-0.5 transition-opacity ${
+        popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+      }`}>
+        {/* Attach file */}
+        <button
+          type="button"
+          title="Attach file"
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click() }}
+          className="w-6 h-6 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+        </button>
+        {/* Actions menu (⋮) — always shown */}
+        <button
+          ref={triggerRef}
+          type="button"
+          title="Actions"
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onClick={(e) => { e.stopPropagation(); setPopoverOpen(prev => !prev) }}
+          className="w-6 h-6 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg>
+        </button>
+      </div>
 
       {/* Popover menu */}
       {popoverOpen && (
@@ -934,31 +1587,59 @@ export function JournalBlock(props: Props) {
           onClick={(e) => e.stopPropagation()}
         >
           {popoverItems.map((item) => (
-            <button
-              key={item.key}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={item.onClick}
-              className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-[#FFFEF7] transition-colors ${
-                item.className ?? 'text-gray-700'
-              }`}
-            >
-              <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">{item.icon}</span>
-              <span className="flex-1">{item.label}</span>
-              {item.shortcut && <span className="text-[10px] text-gray-400 ml-3">{item.shortcut}</span>}
-            </button>
+            <div key={item.key}>
+              {item.separator && <div className="h-px bg-gray-100 my-1" />}
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={item.onClick}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-[#FFFEF7] transition-colors ${
+                  item.className ?? 'text-gray-700'
+                }`}
+              >
+                <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">{item.icon}</span>
+                <span className="flex-1">{item.label}</span>
+                {item.shortcut && <span className="text-[10px] text-gray-400 ml-3">{item.shortcut}</span>}
+              </button>
+              {/* Move-to-workspace submenu */}
+              {item.key === 'move' && moveMenuOpen && (
+                <div className="bg-gray-50 py-1">
+                  {workspaces.map(ws => (
+                    <button
+                      key={ws.id}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => moveToWorkspace(ws.id)}
+                      className={`w-full flex items-center gap-2 px-5 py-1.5 text-xs text-left hover:bg-[#FFFEF7] transition-colors ${
+                        block?.workspace_id === ws.id ? 'text-amber-700 font-medium' : 'text-gray-600'
+                      }`}
+                    >
+                      {ws.emoji && <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0" style={{ backgroundColor: getScheme(ws.color_scheme)?.muted ?? '#F3F4F6' }}>{ws.emoji}</span>}
+                      <span className="truncate">{ws.name}</span>
+                      {block?.workspace_id === ws.id && <span className="text-[10px] text-gray-400 ml-auto">current</span>}
+                    </button>
+                  ))}
+                  <button
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => moveToWorkspace(null)}
+                    className={`w-full flex items-center gap-2 px-5 py-1.5 text-xs text-left hover:bg-[#FFFEF7] transition-colors ${
+                      block?.workspace_id === null ? 'text-amber-700 font-medium' : 'text-gray-500'
+                    }`}
+                  >
+                    <span>Unassigned</span>
+                    {block?.workspace_id === null && <span className="text-[10px] text-gray-400 ml-auto">current</span>}
+                  </button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
 
-      {/* Content — always-mounted TipTap editor for active blocks */}
+      {/* ── CONTENT ── */}
       <div
-        className={`px-4 pb-0 ${showToolbar ? 'pt-1' : 'pt-2'}`}
+        className={`relative px-4 pb-0 ${showToolbar ? 'pt-1' : 'pt-2'}`}
         onKeyDown={handleEditorKeyDown}
         onFocus={() => {
           if (isNewEntry) {
-            // Deactivate any previously focused existing block.
-            // handleContentMouseDown returns early for new entry blocks so this
-            // is the only place we can intercept focus arriving at the composer.
             deactivatePreviousBlock?.()
             deactivatePreviousBlock = null
             if (!focused) setFocused(true)
@@ -967,32 +1648,171 @@ export function JournalBlock(props: Props) {
         onBlur={handleBlur}
         onContextMenu={handleContextMenu}
       >
-        <TipTapEditor
-          key={isNewEntry ? editorKey : undefined}
-          ref={editorRef}
-          content={contentHTML}
-          placeholder={isNewEntry ? "What's on your mind? Press Ctrl+Enter to save." : undefined}
-          autoFocus={isNewEntry}
-          onSubmit={handleSave}
-          onChange={handleEditorChange}
-          editable={isNewEntry || focused}
-          toolbarVisible={showToolbar}
-        />
+        <div className={`${summarizing ? 'opacity-30 pointer-events-none' : ''} ${isComplete && !focused ? 'opacity-50 line-through decoration-gray-400' : ''}`}>
+          <TipTapEditor
+            key={isNewEntry ? editorKey : undefined}
+            ref={editorRef}
+            content={contentHTML}
+            placeholder={isNewEntry
+              ? 'Type to create a new entry \u00b7 Ctrl+Enter to save \u00b7 Esc to cancel'
+              : undefined}
+            autoFocus={isNewEntry}
+            onSubmit={handleSave}
+            onChange={handleEditorChange}
+            editable={isNewEntry || focused}
+            toolbarVisible={showToolbar}
+            onReady={(handle) => { editorHandleRef.current = handle }}
+            searchHighlight={!isNewEntry && !focused ? (props as ExistingBlockProps).searchHighlight : undefined}
+          />
+        </div>
+        {summarizing && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="flex items-center gap-2 text-sm text-amber-700">
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Summarizing…
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Bottom bar */}
-      <div className="flex items-center justify-between px-4 pb-1.5 pt-0 select-none">
-        <span className="text-[11px] text-gray-400">
+      {/* ── ATTACHMENTS + UPLOADING INDICATOR ── */}
+      {(block && attachments.length > 0) || (isNewEntry && pendingFiles.length > 0) || uploading ? (
+        <div className="flex flex-wrap items-center gap-1.5 px-4 py-1.5">
+          {/* Saved attachments */}
+          {block && attachments.length > 0 && (
+            <AttachmentRow
+              attachments={attachments}
+              onDelete={deleteAttachment}
+              readOnly={!focused}
+            />
+          )}
+          {/* Pending files for new entries */}
+          {isNewEntry && pendingFiles.map((f, i) => (
+            <div key={`${f.name}-${i}`} className="relative group/pf">
+              <button
+                title={f.name}
+                onClick={(e) => { e.stopPropagation(); const url = URL.createObjectURL(f); window.open(url, '_blank'); setTimeout(() => URL.revokeObjectURL(url), 1000) }}
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-gray-200 hover:border-gray-400 transition-colors bg-gray-50 max-w-[180px] cursor-pointer"
+              >
+                <span className="text-[11px] text-gray-600 truncate">{f.name}</span>
+                <span className="text-[9px] text-gray-400 flex-shrink-0">{f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(0)} KB` : `${(f.size / (1024 * 1024)).toFixed(1)} MB`}</span>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setPendingFiles(prev => prev.filter((_, j) => j !== i)) }}
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+                className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover/pf:opacity-100 transition-opacity"
+              >
+                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+              </button>
+            </div>
+          ))}
+          {/* Uploading spinner — inline with attachments */}
+          {uploading && (
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 px-1">
+              <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Uploading…
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {/* ── ERROR MESSAGE ── */}
+      {errorMessage && (
+        <div className="mx-4 mb-1 flex items-center gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-1.5 text-xs text-red-700">
+          <span className="flex-1">{errorMessage}</span>
+          <button
+            type="button"
+            onClick={() => setErrorMessage(null)}
+            className="text-red-400 hover:text-red-600 flex-shrink-0"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      )}
+
+      {/* ── TASK FIELDS PANEL ── */}
+      {block && isTask && (
+        <div
+          className="flex items-center gap-3 px-4 py-1.5 border-t border-gray-100 flex-wrap"
+          onMouseDown={(e) => { e.stopPropagation() }}
+        >
+          <button
+            onClick={toggleComplete}
+            className={`flex items-center gap-1.5 text-xs transition-colors ${
+              isComplete ? 'text-green-600' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <span className={`w-4 h-4 rounded border flex items-center justify-center ${
+              isComplete ? 'bg-green-100 border-green-400' : 'border-gray-300 hover:border-gray-400'
+            }`}>
+              {isComplete && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
+            </span>
+            {isComplete ? 'Done' : 'To Do'}
+          </button>
+          <span className="w-px h-4 bg-gray-200" />
+          <div className="flex items-center gap-1">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+            <select
+              value={block.owner_id ?? ''}
+              onChange={(e) => updateTaskField('owner_id', e.target.value || null)}
+              className="text-xs bg-transparent border-none outline-none cursor-pointer text-gray-600 hover:text-gray-900 py-0.5 -ml-0.5 pr-4"
+            >
+              <option value="">Me</option>
+              {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <span className="w-px h-4 bg-gray-200" />
+          <div className="flex items-center gap-1">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+            <input
+              type="date"
+              value={block.due_date ?? ''}
+              onChange={(e) => updateTaskField('due_date', e.target.value || null)}
+              className="text-xs bg-transparent border-none outline-none cursor-pointer text-gray-600 hover:text-gray-900 py-0.5 w-[110px]"
+            />
+            {block.due_date && (
+              <div className="flex items-center rounded overflow-hidden border border-gray-200">
+                <button
+                  onClick={() => updateTaskField('due_date_type', 'hard')}
+                  className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                    block.due_date_type === 'hard' ? 'bg-red-100 text-red-700' : 'text-gray-400 hover:text-gray-600'
+                  }`}
+                >Hard</button>
+                <button
+                  onClick={() => updateTaskField('due_date_type', 'soft')}
+                  className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                    block.due_date_type === 'soft' || !block.due_date_type ? 'bg-amber-100 text-amber-700' : 'text-gray-400 hover:text-gray-600'
+                  }`}
+                >Soft</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── FOOTER ── */}
+      <div className="flex items-center px-4 pb-1.5 pt-0 select-none">
+        <span className="text-[11px] text-gray-400" suppressHydrationWarning>
           {block
-            ? <>Created {formatTimestamp(block.created_at)}{showModified && <span> · Modified {formatTimestamp(block.updated_at)}</span>}</>
-            : 'New Entry'
+            ? <>Created {formatTimestamp(block.created_at)}{showModified && <span> · Modified {formatTimestamp(block.updated_at)}</span>}{(props as ExistingBlockProps).similarityScore != null && <span className="ml-1.5 px-1.5 py-0 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium">{Math.round((props as ExistingBlockProps).similarityScore! * 100)}% match</span>}</>
+            : (() => {
+                if (activeWorkspace) return `New ${activeWorkspace.name} Entry`
+                const defaultWs = workspaces.find(w => w.is_default)
+                if (defaultWs) return <>New {defaultWs.name} Entry <span className="text-gray-300">(Default Workspace)</span></>
+                return 'New Entry'
+              })()
           }
+          {isNewEntry && isGlobalView && !workspaces.some(w => w.is_default) && workspaces.length > 0 && (
+            <span className="text-[10px] text-amber-500 ml-1">Tip: set a default workspace in settings</span>
+          )}
         </span>
-        {focused && (
-          <span className="text-[11px] text-gray-400">
-            Ctrl+Enter (or click outside) to save{!isNewEntry && ' · Esc to cancel'} · Ctrl+Del to delete
-          </span>
-        )}
       </div>
 
       {menuState && block && (
@@ -1000,6 +1820,7 @@ export function JournalBlock(props: Props) {
           <SelectionMenu
             position={{ x: menuState.x, y: menuState.y }}
             userId={block.user_id}
+            selectedText={menuState.selText}
             onClose={() => setMenuState(null)}
             onAction={handleSelectionAction}
             disableSplit={splitWouldEmpty}
@@ -1008,7 +1829,43 @@ export function JournalBlock(props: Props) {
       )}
 
       {showHistory && block && (
-        <HistoryModal blockId={block.id} onClose={() => setShowHistory(false)} />
+        <HistoryModal
+          blockId={block.id}
+          onClose={() => setShowHistory(false)}
+          onRevert={async (content) => {
+            const p = propsRef.current as ExistingBlockProps
+            if (!p.block) return
+
+            // Take the block out of edit mode first to prevent
+            // autosave/blur from overwriting the reverted content
+            setFocused(false)
+            clearAutosaveTimer()
+            deactivatePreviousBlock = null
+
+            const supabase = createClient()
+            const { data: latestVersion } = await supabase
+              .from('block_versions')
+              .select('content')
+              .eq('block_id', p.block.id)
+              .order('edited_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            if (latestVersion?.content !== p.block.content) {
+              await supabase.from('block_versions').insert({
+                block_id: p.block.id,
+                content: p.block.content,
+                content_html: p.block.content,
+                edited_at: new Date().toISOString(),
+              })
+            }
+            await supabase.from('journal_blocks').update({ content }).eq('id', p.block.id)
+            liveHTMLRef.current = content
+            liveTextRef.current = htmlToText(content)
+            lastSavedHTMLRef.current = content
+            p.onUpdate({ ...p.block, content })
+            setShowHistory(false)
+          }}
+        />
       )}
     </div>
   )

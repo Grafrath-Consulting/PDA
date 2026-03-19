@@ -1,11 +1,17 @@
-export type BlockStatus = 'unprocessed' | 'partially_handled' | 'archived'
+export type BlockStatus = 'active' | 'complete' | 'archived'
 
 export interface Block {
   id: string
   user_id: string
   context_id: string | null
+  workspace_id: string | null
   content: string | null
   status: BlockStatus
+  entry_type: 'info' | 'task'
+  owner_id: string | null
+  due_date: string | null
+  due_date_type: 'hard' | 'soft' | null
+  archived_at: string | null
   created_at: string
   updated_at: string
   deleted_at: string | null
@@ -33,8 +39,8 @@ export interface BlockVersion {
 export type SelectionAction =
   | { type: 'create_task'; taskType: 'my_task' | 'delegated' | 'waiting_on'; assigneeId?: string }
   | { type: 'split_block' }
-  | { type: 'link_project'; projectId: string }
   | { type: 'label_info' }
   | { type: 'summarize' }
   | { type: 'delete_selection' }
+  | { type: 'insert_link' }
   | { type: 'mark_done' }
