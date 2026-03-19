@@ -1,7 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@/lib/supabase/server'
-
-const anthropic = new Anthropic()
+import { getUserApiKey, getUserPrompt } from '@/lib/get-user-ai-config'
 
 export async function POST(request: Request) {
   const supabase = createClient()
@@ -21,27 +19,52 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
+  const apiKey = await getUserApiKey(user.id)
+  if (!apiKey) {
+    return Response.json({ error: 'no_api_key', message: 'No API key configured. Add your Anthropic API key in Settings \u2192 AI.' }, { status: 402 })
+  }
+
+  const systemPrompt = await getUserPrompt(user.id, 'summarize')
+
   try {
-    const message = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 512,
-      messages: [
-        {
-          role: 'user',
-          content: `Condense the following text into a concise summary that preserves all key information. Return only the summary, no preamble.\n\n${text}`,
-        },
-      ],
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 512,
+        system: systemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content: text,
+          },
+        ],
+      }),
     })
 
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}))
+      console.error('[summarize] Anthropic error:', res.status, JSON.stringify(errBody))
+      const msg = errBody?.error?.message ?? 'Summarization failed'
+      return Response.json({ error: true, message: msg }, { status: res.status })
+    }
+
+    const data = await res.json()
     const summary =
-      message.content[0]?.type === 'text' ? message.content[0].text : text
+      data.content[0]?.type === 'text' ? data.content[0].text : text
 
     return Response.json({ summary })
-  } catch (err) {
+  } catch (err: unknown) {
     console.error('Summarize API error:', err)
-    return Response.json(
-      { error: err instanceof Error ? err.message : 'Summarization failed' },
-      { status: 500 },
-    )
+    const apiErr = err as { status?: number; error?: { error?: { message?: string } } }
+    const message = apiErr?.error?.error?.message
+      ?? (err instanceof Error ? err.message : 'Summarization failed')
+    const status = apiErr?.status ?? 500
+    return Response.json({ error: true, message }, { status })
   }
 }

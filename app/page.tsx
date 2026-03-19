@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Sidebar } from '@/components/Sidebar'
 import { JournalPage } from './JournalPage'
+import { WorkspaceProvider } from '@/context/WorkspaceContext'
+import { PropertiesProvider } from '@/context/PropertiesContext'
 
 export default async function Journal() {
   const supabase = createClient()
@@ -13,9 +15,13 @@ export default async function Journal() {
   const email = user.email ?? ''
 
   return (
-    <div className="flex h-screen bg-[#FFFEF7] font-[family-name:var(--font-geist-sans)]">
-      <Sidebar email={email} displayName={displayName} userId={user.id} />
-      <JournalPage userId={user.id} />
-    </div>
+    <WorkspaceProvider userId={user.id}>
+      <PropertiesProvider userId={user.id}>
+        <div className="flex h-screen bg-[#FFFEF7] font-[family-name:var(--font-geist-sans)]">
+          <Sidebar email={email} displayName={displayName} userId={user.id} />
+          <JournalPage userId={user.id} />
+        </div>
+      </PropertiesProvider>
+    </WorkspaceProvider>
   )
 }

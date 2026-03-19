@@ -141,3 +141,42 @@ body {
   background: #FAF8F2;
   font-weight: 600;
 }
+
+/* Highlight styles — editor and display */
+.tiptap-wrapper .tiptap mark,
+.tiptap-content mark {
+  background-color: #FEF08A;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* Horizontal rule styles — editor and display */
+.tiptap-wrapper .tiptap hr,
+.tiptap-content hr {
+  border: none;
+  border-top: 1px solid #E5E0D0;
+  margin: 0.75em 0;
+}
+
+/* Link styles — editor and display */
+.tiptap-wrapper .tiptap a,
+.tiptap-wrapper .tiptap .tiptap-link,
+.tiptap-content a {
+  color: #2563EB;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.tiptap-wrapper .tiptap a:hover,
+.tiptap-wrapper .tiptap .tiptap-link:hover,
+.tiptap-content a:hover {
+  color: #1D4ED8;
+}
+
+/* Search result highlighting */
+.search-highlight {
+  background-color: #d9f99d;
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
