@@ -1410,9 +1410,6 @@ export function JournalBlock(props: Props) {
     ? htmlToText(liveHTMLRef.current || toEditorHTML(block?.content ?? '')).trim() === menuState.selText.trim()
     : false
 
-  // Workspace-tinted background for the new entry composer
-  const composerMuted = isNewEntry && activeScheme ? activeScheme.muted : undefined
-
   // In global view, show a workspace color left border on existing blocks.
   // Use a consistent border-l-[3px] for ALL states in global view so focus/unfocus
   // is just a color swap, never a geometry change — no layout shift or flicker.
@@ -1462,11 +1459,9 @@ export function JournalBlock(props: Props) {
             : focused
               ? 'border-l-[3px] border border-[#E5E0D0] shadow-md'
               : 'border border-[#E5E0D0] pl-[2px] hover:border-[#D5D0C0]'
-      } ${isDragOver ? '' : composerMuted ? '' : focused && !isNewEntry ? '' : 'bg-white'}`}
+      } ${isDragOver ? '' : focused && !isNewEntry ? '' : 'bg-white'}`}
       style={{
-        ...(composerMuted && !isDragOver
-          ? { backgroundColor: composerMuted }
-          : focused && !isNewEntry && !isDragOver
+        ...(focused && !isNewEntry && !isDragOver
             ? { backgroundColor: activeScheme?.muted ?? '#FFFBEB' }
             : {}),
         ...(borderLeftColor ? { borderLeftColor } : {}),
