@@ -94,7 +94,7 @@ body {
 
 /* Shared paragraph styles for display (.tiptap-content) and editor (.ProseMirror) */
 .tiptap-content,
-.ProseMirror { font-size: 0.875rem; line-height: 1.5rem; }
+.ProseMirror { font-size: 0.875rem; line-height: 1.5rem; color: #1f2937; }
 .tiptap-content p,
 .ProseMirror p { margin: 0; line-height: 1.5rem; }
 .tiptap-content p:empty,

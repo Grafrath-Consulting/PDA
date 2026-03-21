@@ -1,12 +1,26 @@
-export function highlightHTML(html: string, query: string): string {
-  if (!query.trim()) return html
+const STOP_WORDS = new Set([
+  'a', 'an', 'the', 'is', 'it', 'in', 'on', 'at', 'to', 'of', 'or',
+  'and', 'but', 'for', 'nor', 'so', 'yet', 'be', 'by', 'do', 'go',
+  'he', 'if', 'me', 'my', 'no', 'up', 'us', 'we',
+])
+
+export function highlightHTML(html: string, needle: string | string[]): string {
   if (typeof document === 'undefined') return html
+
+  // Build list of terms to highlight
+  const rawTerms = Array.isArray(needle) ? needle : needle.split(/\s+/)
+  const terms = rawTerms
+    .map(t => t.trim())
+    .filter(t => t.length > 2 && !STOP_WORDS.has(t.toLowerCase()))
+
+  if (terms.length === 0) return html
+
+  // Build a single regex matching any of the terms
+  const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const regex = new RegExp(`(${escaped.join('|')})`, 'gi')
 
   const div = document.createElement('div')
   div.innerHTML = html
-
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const regex = new RegExp(escaped, 'gi')
 
   function walkAndHighlight(node: Node) {
     if (node.nodeType === Node.TEXT_NODE) {

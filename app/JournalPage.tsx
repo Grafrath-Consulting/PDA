@@ -774,7 +774,7 @@ export function JournalPage({ userId }: Props) {
               onToggleFormatting={toggleFormatting}
               blockProperties={blockProperties}
               onBlockPropertiesChanged={handleBlockPropertiesChanged}
-              searchHighlight={aiSearchMode ? undefined : debouncedSearch}
+              searchHighlight={debouncedSearch || undefined}
               similarityScores={aiSearchMode ? aiSearchScores : undefined}
               matchedChunks={aiSearchMode ? aiMatchedChunks : undefined}
             />

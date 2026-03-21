@@ -51,7 +51,7 @@ interface ExistingBlockProps extends BaseProps {
   appliedPropertyIds?: Set<string>
   onPropertyChanged?: (newIds: Set<string>) => void
   similarityScore?: number
-  searchHighlight?: string
+  searchHighlight?: string | string[]
 }
 
 type Props = NewEntryProps | ExistingBlockProps
