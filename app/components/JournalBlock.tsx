@@ -52,6 +52,7 @@ interface ExistingBlockProps extends BaseProps {
   onPropertyChanged?: (newIds: Set<string>) => void
   similarityScore?: number
   searchHighlight?: string | string[]
+  matchedChunk?: string
 }
 
 type Props = NewEntryProps | ExistingBlockProps
@@ -1658,6 +1659,7 @@ export function JournalBlock(props: Props) {
             toolbarVisible={showToolbar}
             onReady={(handle) => { editorHandleRef.current = handle }}
             searchHighlight={!isNewEntry && !focused ? (props as ExistingBlockProps).searchHighlight : undefined}
+            matchedChunk={!isNewEntry && !focused ? (props as ExistingBlockProps).matchedChunk : undefined}
           />
         </div>
         {summarizing && (

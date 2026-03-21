@@ -51,11 +51,12 @@ export function JournalPage({ userId }: Props) {
   const [filterDateFrom, setFilterDateFrom] = useState('')
   const [filterDateTo, setFilterDateTo] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const [aiSearchMode, setAiSearchMode] = useState(false)
-  const [aiSearchResults, setAiSearchResults] = useState<Block[] | null>(null)
-  const [aiSearchScores, setAiSearchScores] = useState<Record<string, number>>({})
-  const [aiMatchedChunks, setAiMatchedChunks] = useState<Record<string, string>>({})
-  const [aiSearchLoading, setAiSearchLoading] = useState(false)
+  const [searchMode, setSearchMode] = useState<'smart' | 'exact'>('smart')
+  const [smartSearchResults, setSmartSearchResults] = useState<Block[] | null>(null)
+  const [smartSearchScores, setSmartSearchScores] = useState<Record<string, number>>({})
+  const [smartSearchChunks, setSmartSearchChunks] = useState<Record<string, string>>({})
+  const [smartSearchLoading, setSmartSearchLoading] = useState(false)
+  const [aiParsedInfo, setAiParsedInfo] = useState<{ searchTerms: string; filters: Record<string, unknown>; reasoning: string } | null>(null)
 
   // Property filter state (in-memory only)
   const [activePropertyFilters, setActivePropertyFilters] = useState<Set<string>>(new Set())
@@ -113,10 +114,10 @@ export function JournalPage({ userId }: Props) {
 
   // Debounce search text (longer delay for AI search)
   useEffect(() => {
-    const delay = aiSearchMode ? 600 : 300
+    const delay = searchMode === 'smart' ? 800 : 400
     const id = setTimeout(() => setDebouncedSearch(searchText), delay)
     return () => clearTimeout(id)
-  }, [searchText, aiSearchMode])
+  }, [searchText, searchMode])
 
   // Toggle advanced panel with localStorage persistence
   function toggleAdvanced() {
@@ -129,17 +130,18 @@ export function JournalPage({ userId }: Props) {
 
   const hasActiveFilters = searchText.length > 0 || filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || filterDateFrom || filterDateTo || activePropertyFilters.size > 0
 
-  // AI semantic search
+  // Smart search (combined exact + semantic + AI parsing)
   useEffect(() => {
-    if (!aiSearchMode || !debouncedSearch) {
-      setAiSearchResults(null)
-      setAiSearchScores({})
-      setAiMatchedChunks({})
+    if (searchMode !== 'smart' || !debouncedSearch) {
+      setSmartSearchResults(null)
+      setSmartSearchScores({})
+      setSmartSearchChunks({})
+      setAiParsedInfo(null)
       return
     }
     let cancelled = false
-    setAiSearchLoading(true)
-    fetch('/api/ai/search', {
+    setSmartSearchLoading(true)
+    fetch('/api/smart-search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -150,20 +152,15 @@ export function JournalPage({ userId }: Props) {
       .then(res => res.json())
       .then(data => {
         if (cancelled) return
-        if (data.error === 'embedding_not_configured') {
-          setAiSearchResults([])
-          setAiSearchScores({})
-          setAiMatchedChunks({})
-        } else {
-          setAiSearchResults(data.results ?? [])
-          setAiSearchScores(data.scores ?? {})
-          setAiMatchedChunks(data.matchedChunks ?? {})
-        }
+        setSmartSearchResults(data.results ?? [])
+        setSmartSearchScores(data.scores ?? {})
+        setSmartSearchChunks(data.matchedChunks ?? {})
+        setAiParsedInfo(data.aiParsed ?? null)
       })
-      .catch(() => { if (!cancelled) { setAiSearchResults([]); setAiMatchedChunks({}) } })
-      .finally(() => { if (!cancelled) setAiSearchLoading(false) })
+      .catch(() => { if (!cancelled) { setSmartSearchResults([]); setSmartSearchChunks({}); setAiParsedInfo(null) } })
+      .finally(() => { if (!cancelled) setSmartSearchLoading(false) })
     return () => { cancelled = true }
-  }, [aiSearchMode, debouncedSearch, isGlobalView, activeWorkspaceId])
+  }, [searchMode, debouncedSearch, isGlobalView, activeWorkspaceId])
 
   function toggleFormatting() {
     setFormattingVisible(prev => {
@@ -300,10 +297,12 @@ export function JournalPage({ userId }: Props) {
 
   useEffect(() => {
     if (!initialised) return
+    // In smart mode, the smart search API handles everything — skip exact fetch
+    if (searchMode === 'smart' && debouncedSearch) return
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo])
+  }, [contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, searchMode])
 
   // Batch-load entry_properties for all visible blocks
   useEffect(() => {
@@ -514,11 +513,11 @@ export function JournalPage({ userId }: Props) {
             type="text"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder={aiSearchMode ? "Describe what you\u2019re looking for\u2026" : "Filter entries\u2026 (Ctrl+K)"}
-            className={`w-full pl-8 pr-16 py-1.5 text-xs rounded-lg border outline-none transition-colors text-gray-900 placeholder-gray-400 ${aiSearchLoading ? 'animate-pulse' : ''}`}
+            placeholder={searchMode === 'smart' ? "Search entries\u2026 (Ctrl+K)" : "Filter entries\u2026 (Ctrl+K)"}
+            className={`w-full pl-8 pr-16 py-1.5 text-xs rounded-lg border outline-none transition-colors text-gray-900 placeholder-gray-400 ${smartSearchLoading ? 'animate-pulse' : ''}`}
             style={{
               backgroundColor: activeScheme ? 'rgba(255,255,255,0.15)' : '#F9FAFB',
-              borderColor: aiSearchLoading ? '#F59E0B' : (hasActiveFilters ? '#F59E0B' : (activeScheme ? 'rgba(255,255,255,0.2)' : '#E5E0D0')),
+              borderColor: smartSearchLoading ? '#F59E0B' : (hasActiveFilters ? '#F59E0B' : (activeScheme ? 'rgba(255,255,255,0.2)' : '#E5E0D0')),
               color: activeScheme ? (activeScheme.textOnColor ?? '#FFFFFF') : '#111827',
             }}
             onKeyDown={(e) => { if (e.key === 'Escape') { setSearchText(''); searchInputRef.current?.blur() } }}
@@ -624,8 +623,7 @@ export function JournalPage({ userId }: Props) {
 
           {/* Filter toggles row */}
           <div className="flex items-center gap-4 flex-wrap text-[11px]">
-            <div className={`flex items-center gap-1.5 ${aiSearchMode ? 'opacity-40 pointer-events-none' : ''}`}
-              title={aiSearchMode ? 'Bypassed during AI search' : undefined}>
+            <div className={`flex items-center gap-1.5 ${''}`}>
               <span className="text-gray-400 font-medium">Type:</span>
               {([['info', 'Info'], ['task', 'Task']] as const).map(([t, label]) => (
                 <button key={t} onClick={() => setFilterEntryTypes(prev => {
@@ -638,8 +636,7 @@ export function JournalPage({ userId }: Props) {
                 </button>
               ))}
             </div>
-            <div className={`flex items-center gap-1.5 ${aiSearchMode ? 'opacity-40 pointer-events-none' : ''}`}
-              title={aiSearchMode ? 'Bypassed during AI search' : undefined}>
+            <div className={`flex items-center gap-1.5 ${''}`}>
               <span className="text-gray-400 font-medium">Status:</span>
               {([['active', 'Open'], ['archived', 'Archived'], ['deleted', 'Deleted']] as const).map(([s, label]) => (
                 <button key={s} onClick={() => setFilterStatuses(prev => {
@@ -652,8 +649,7 @@ export function JournalPage({ userId }: Props) {
                 </button>
               ))}
             </div>
-            <div className={`flex items-center gap-1.5 ${aiSearchMode ? 'opacity-40 pointer-events-none' : ''}`}
-              title={aiSearchMode ? 'Bypassed during AI search' : undefined}>
+            <div className={`flex items-center gap-1.5 ${''}`}>
               <label className="flex items-center gap-1 text-gray-500">
                 From
                 <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)}
@@ -669,28 +665,28 @@ export function JournalPage({ userId }: Props) {
             <div className="flex items-center bg-gray-100 rounded-md p-0.5">
               <button
                 type="button"
-                onClick={() => setAiSearchMode(false)}
+                onClick={() => setSearchMode('smart')}
                 className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                  !aiSearchMode
+                  searchMode === 'smart'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Smart
+              </button>
+              <button
+                type="button"
+                onClick={() => setSearchMode('exact')}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                  searchMode === 'exact'
                     ? 'bg-white text-gray-900 shadow-sm'
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
                 Exact
               </button>
-              <button
-                type="button"
-                onClick={() => setAiSearchMode(true)}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                  aiSearchMode
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                AI (Semantic)
-              </button>
             </div>
-            {hasActiveFilters && !aiSearchMode && (
+            {hasActiveFilters && (
               <button onClick={() => { setSearchText(''); setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); clearPropertyFilters() }}
                 className="text-[11px] text-gray-400 hover:text-gray-600 underline">
                 Clear all
@@ -726,7 +722,7 @@ export function JournalPage({ userId }: Props) {
             })()}
 
             {/* Search status */}
-            {debouncedSearch && !aiSearchMode && (
+            {debouncedSearch && searchMode === 'exact' && (
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 {loading ? 'Searching\u2026' : (
                   <>
@@ -736,16 +732,35 @@ export function JournalPage({ userId }: Props) {
                 )}
               </div>
             )}
-            {aiSearchMode && debouncedSearch && (
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                {aiSearchLoading ? (
-                  <span>AI searching\u2026</span>
-                ) : aiSearchResults ? (
-                  <>
-                    <span>{aiSearchResults.length} result{aiSearchResults.length !== 1 ? 's' : ''} for &ldquo;{debouncedSearch}&rdquo;</span>
-                    <button onClick={() => { setSearchText(''); setAiSearchMode(false) }} className="text-amber-600 hover:text-amber-800 underline">Clear AI search</button>
-                  </>
-                ) : null}
+            {searchMode === 'smart' && debouncedSearch && (
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  {smartSearchLoading ? (
+                    <span>Searching\u2026</span>
+                  ) : smartSearchResults ? (
+                    <>
+                      <span>{smartSearchResults.length} result{smartSearchResults.length !== 1 ? 's' : ''} for &ldquo;{debouncedSearch}&rdquo;</span>
+                      <button onClick={() => setSearchText('')} className="text-amber-600 hover:text-amber-800 underline">Clear search</button>
+                    </>
+                  ) : null}
+                </div>
+                {aiParsedInfo && (
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span className="text-[10px] text-gray-400">AI:</span>
+                    {aiParsedInfo.filters.dateFrom && (
+                      <span className="ai-filter-pill">{aiParsedInfo.filters.dateFrom as string} &ndash; {(aiParsedInfo.filters.dateTo as string) || 'now'}</span>
+                    )}
+                    {aiParsedInfo.filters.entryTypes && (
+                      <span className="ai-filter-pill">{(aiParsedInfo.filters.entryTypes as string[]).join(', ')}</span>
+                    )}
+                    {aiParsedInfo.filters.propertyValues && (
+                      <span className="ai-filter-pill">{(aiParsedInfo.filters.propertyValues as string[]).join(', ')}</span>
+                    )}
+                    {aiParsedInfo.reasoning && (
+                      <span className="text-[10px] text-gray-400 italic">{aiParsedInfo.reasoning}</span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -759,24 +774,24 @@ export function JournalPage({ userId }: Props) {
             />
 
             <BlockFeed
-              blocks={aiSearchMode && aiSearchResults ? aiSearchResults as Block[] : sortedBlocks}
-              loading={aiSearchMode ? aiSearchLoading : (loading && !initialised)}
-              hasMore={aiSearchMode ? false : hasMore}
+              blocks={searchMode === 'smart' && smartSearchResults ? smartSearchResults as Block[] : sortedBlocks}
+              loading={searchMode === 'smart' ? smartSearchLoading : (loading && !initialised)}
+              hasMore={searchMode === 'smart' && smartSearchResults ? false : hasMore}
               onLoadMore={loadMore}
               onBlockUpdate={handleBlockUpdate}
               onBlockRemove={handleBlockRemove}
               onBlockArchived={handleBlockArchived}
               onSplitBlock={handleSplitBlock}
-              sortMode={aiSearchMode ? 'created_desc' : sortMode}
+              sortMode={searchMode === 'smart' && smartSearchResults ? 'created_desc' : sortMode}
               onReorder={handleReorder}
               autosaveInterval={autosaveInterval}
               formattingVisible={formattingVisible}
               onToggleFormatting={toggleFormatting}
               blockProperties={blockProperties}
               onBlockPropertiesChanged={handleBlockPropertiesChanged}
-              searchHighlight={debouncedSearch || undefined}
-              similarityScores={aiSearchMode ? aiSearchScores : undefined}
-              matchedChunks={aiSearchMode ? aiMatchedChunks : undefined}
+              searchHighlight={(aiParsedInfo?.searchTerms || debouncedSearch) || undefined}
+              similarityScores={searchMode === 'smart' ? smartSearchScores : undefined}
+              matchedChunks={searchMode === 'smart' ? smartSearchChunks : undefined}
             />
 
             {!debouncedSearch && (

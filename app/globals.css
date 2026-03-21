@@ -173,10 +173,30 @@ body {
   color: #1D4ED8;
 }
 
-/* Search result highlighting */
-.search-highlight {
-  background-color: #d9f99d;
+/* Search result highlighting — query term matches */
+.tiptap-content mark.search-highlight {
+  background-color: #84cc16;
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
+}
+
+/* Semantic search — matched chunk passage highlight */
+.tiptap-content mark.chunk-highlight {
+  background-color: #ecfccb;
+  color: inherit;
+  border-radius: 1px;
+  padding: 0;
+}
+
+/* AI-parsed filter pills */
+.ai-filter-pill {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  background-color: #F3F4F6;
+  color: #6B7280;
+  border-radius: 9999px;
+  white-space: nowrap;
 }

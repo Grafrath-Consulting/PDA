@@ -53,10 +53,11 @@ interface Props {
   toolbarVisible?: boolean
   onReady?: (handle: TipTapEditorHandle) => void
   searchHighlight?: string | string[]
+  matchedChunk?: string
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
-  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, onReady, searchHighlight },
+  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, onReady, searchHighlight, matchedChunk },
   ref
 ) {
   // Keep refs so the closures inside useEditor always call the latest callbacks
@@ -402,11 +403,11 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   }, [editor, content, editable])
 
   const highlightedHTML = useMemo(
-    () => searchHighlight && !editable ? highlightHTML(content, searchHighlight) : '',
-    [searchHighlight, editable, content]
+    () => (searchHighlight || matchedChunk) && !editable ? highlightHTML(content, searchHighlight || '', matchedChunk) : '',
+    [searchHighlight, matchedChunk, editable, content]
   )
   // Only show the highlight layer if it actually contains highlights
-  const showHighlightLayer = highlightedHTML.includes('search-highlight')
+  const showHighlightLayer = highlightedHTML.includes('search-highlight') || highlightedHTML.includes('chunk-highlight')
 
   if (!editor) return null
 

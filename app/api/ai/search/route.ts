@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     if (!query || typeof query !== 'string' || !query.trim()) {
       return Response.json({ error: 'Missing query' }, { status: 400 })
     }
-    threshold = body?.threshold ?? 0.35
+    threshold = body?.threshold ?? 0.28
     limit = body?.limit ?? 20
     workspaceId = body?.workspaceId ?? null
   } catch {

@@ -95,7 +95,7 @@ export function BlockFeed({
   onBlockPropertiesChanged,
   searchHighlight,
   similarityScores,
-  matchedChunks: _matchedChunks,
+  matchedChunks,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [activeBlock, setActiveBlock] = useState<Block | null>(null)
@@ -150,14 +150,7 @@ export function BlockFeed({
   }
 
   function renderBlock(block: Block) {
-    // For semantic matches, combine query words + matched chunk words
-    const chunk = _matchedChunks?.[block.id]
-    const blockHighlight: string | string[] | undefined = chunk
-      ? Array.from(new Set(
-          (typeof searchHighlight === 'string' ? searchHighlight.split(/\s+/) : searchHighlight ?? [])
-            .concat(chunk.split(/\s+/))
-        ))
-      : searchHighlight
+    const blockHighlight = searchHighlight
 
     return (
       <JournalBlock
@@ -174,6 +167,7 @@ export function BlockFeed({
         onPropertyChanged={onBlockPropertiesChanged ? (ids) => onBlockPropertiesChanged(block.id, ids) : undefined}
         similarityScore={similarityScores?.[block.id]}
         searchHighlight={blockHighlight}
+        matchedChunk={matchedChunks?.[block.id]}
       />
     )
   }
