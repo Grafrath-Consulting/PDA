@@ -23,7 +23,8 @@ export function highlightHTML(html: string, needle: string | string[], passageTe
 
   if (terms.length > 0) {
     const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    const regex = new RegExp(`(${escaped.join('|')})`, 'gi')
+    // Use word boundaries to avoid matching "mom" inside "moment" etc.
+    const regex = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
     walkAndHighlightTerms(div, regex)
   }
 

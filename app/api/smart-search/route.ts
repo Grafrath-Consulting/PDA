@@ -81,9 +81,9 @@ export async function POST(request: Request) {
     const semanticData = semanticResult.status === 'fulfilled' ? semanticResult.value : null
     const aiParsed: ParsedSearchQuery | null = aiParseResult.status === 'fulfilled' ? aiParseResult.value : null
 
-    // If AI parsing extracted filters, run a filtered exact search
+    // If AI parsing extracted filters or refined search terms, run a filtered exact search
     let aiFilteredBlocks: Block[] = []
-    if (aiParsed && hasExtractedFilters(aiParsed)) {
+    if (aiParsed && (hasExtractedFilters(aiParsed) || (aiParsed.searchTerms && aiParsed.searchTerms !== trimmedQuery))) {
       const searchTerms = aiParsed.searchTerms || trimmedQuery
       aiFilteredBlocks = await runFilteredExactSearch(svc, user.id, searchTerms, workspaceId, aiParsed, properties, limit)
     }
@@ -91,9 +91,19 @@ export async function POST(request: Request) {
     // Merge all results
     const merged = new Map<string, { block: Block; score: number; matchedChunk?: string }>()
 
-    // AI-filtered exact matches get highest score
+    // AI-filtered exact matches — score by word-match density, not a flat 1.0
+    const aiWords = aiParsed?.searchTerms ? extractSearchWords(aiParsed.searchTerms) : []
     for (const block of aiFilteredBlocks) {
-      merged.set(block.id, { block, score: 1.0 })
+      let matchScore = 0.5
+      if (aiWords.length > 1) {
+        const content = (block.content ?? '').toLowerCase()
+        const matchCount = aiWords.filter(w => {
+          const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
+          return re.test(content)
+        }).length
+        matchScore = 0.3 + (0.5 * matchCount / aiWords.length)
+      }
+      merged.set(block.id, { block, score: matchScore })
     }
 
     // Semantic matches get their similarity score
@@ -119,17 +129,30 @@ export async function POST(request: Request) {
       }
     }
 
-    // Plain exact matches get lowest score
+    // Plain exact matches — score based on how many search words they match
+    const queryWords = extractSearchWords(trimmedQuery)
     for (const block of exactBlocks) {
       if (!merged.has(block.id)) {
-        merged.set(block.id, { block, score: 0.15 })
+        let matchScore = 0.15
+        if (queryWords.length > 1) {
+          const content = (block.content ?? '').toLowerCase()
+          const matchCount = queryWords.filter(w => content.includes(w)).length
+          matchScore = 0.1 + (0.15 * matchCount / queryWords.length)
+        }
+        merged.set(block.id, { block, score: matchScore })
       }
     }
 
-    // Sort by score descending, limit
-    const sorted = Array.from(merged.entries())
+    // Sort by score descending, take top candidates
+    let sorted = Array.from(merged.entries())
       .sort((a, b) => b[1].score - a[1].score)
       .slice(0, limit)
+
+    // LLM re-ranking: ask Claude to score relevance of top candidates
+    if (claudeKey && sorted.length > 1) {
+      const reranked = await rerankWithLLM(trimmedQuery, sorted, claudeKey)
+      if (reranked) sorted = reranked
+    }
 
     const results = sorted.map(([, v]) => v.block)
     const scores: Record<string, number> = {}
@@ -149,6 +172,7 @@ export async function POST(request: Request) {
           dateFrom: aiParsed.dateFrom,
           dateTo: aiParsed.dateTo,
           entryTypes: aiParsed.entryTypes,
+          statuses: aiParsed.statuses,
           propertyValues: aiParsed.propertyValues,
         },
         reasoning: aiParsed.reasoning,
@@ -160,8 +184,117 @@ export async function POST(request: Request) {
   }
 }
 
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+const RERANK_MAX_CANDIDATES = 15
+const RERANK_SNIPPET_LENGTH = 300
+
+async function rerankWithLLM(
+  query: string,
+  candidates: [string, { block: Block; score: number; matchedChunk?: string }][],
+  apiKey: string,
+): Promise<typeof candidates | null> {
+  try {
+    // Only re-rank the top candidates to keep latency reasonable
+    const toRerank = candidates.slice(0, RERANK_MAX_CANDIDATES)
+    const entries = toRerank.map(([, v], i) => {
+      const text = stripHtml(v.block.content ?? '')
+      const snippet = text.length > RERANK_SNIPPET_LENGTH
+        ? text.slice(0, RERANK_SNIPPET_LENGTH) + '...'
+        : text
+      return `[${i}] ${snippet}`
+    })
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 256,
+        system: `You are a search relevance judge. Given a search query and numbered journal entries, rate each entry's relevance to the query from 0.0 (completely irrelevant) to 1.0 (directly answers the query). Consider semantic meaning, not just keyword overlap. Return ONLY a JSON object: {"scores": [0.9, 0.1, ...]} with one score per entry, in order.`,
+        messages: [{ role: 'user', content: `Query: "${query}"\n\nEntries:\n${entries.join('\n\n')}` }],
+      }),
+    })
+
+    if (!res.ok) return null
+
+    const data = await res.json()
+    const text = data.content?.[0]?.type === 'text' ? data.content[0].text : null
+    if (!text) return null
+
+    const jsonStr = text.replace(/^```json?\s*/, '').replace(/\s*```$/, '').trim()
+    const parsed = JSON.parse(jsonStr)
+    const llmScores: number[] = parsed.scores
+
+    if (!Array.isArray(llmScores) || llmScores.length !== toRerank.length) return null
+
+    // Apply LLM confidence scores — blend with existing score
+    for (let i = 0; i < toRerank.length; i++) {
+      const [, v] = toRerank[i]
+      const llmScore = Math.max(0, Math.min(1, llmScores[i]))
+      // LLM score dominates (70%), retrieval score provides tiebreaking (30%)
+      v.score = llmScore * 0.7 + v.score * 0.3
+    }
+
+    // Re-sort all candidates (re-ranked ones + any beyond the re-rank window)
+    const rerankedSet = new Set(toRerank.map(([id]) => id))
+    const rest = candidates.filter(([id]) => !rerankedSet.has(id))
+    const all = [...toRerank, ...rest]
+    all.sort((a, b) => b[1].score - a[1].score)
+
+    return all
+  } catch (err) {
+    console.error('[smart-search] LLM re-ranking error:', err)
+    return null
+  }
+}
+
 function hasExtractedFilters(parsed: ParsedSearchQuery): boolean {
   return !!(parsed.dateFrom || parsed.dateTo || parsed.entryTypes || parsed.statuses || parsed.propertyValues)
+}
+
+const STOP_WORDS = new Set([
+  'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'she', 'it', 'they', 'them', 'their',
+  'a', 'an', 'the', 'this', 'that', 'these', 'those',
+  'is', 'am', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+  'can', 'may', 'might', 'shall', 'must',
+  'and', 'but', 'or', 'nor', 'not', 'so', 'yet',
+  'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'up', 'about',
+  'into', 'through', 'during', 'before', 'after', 'above', 'below', 'between',
+  'if', 'then', 'than', 'when', 'where', 'how', 'what', 'which', 'who', 'whom',
+  'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such',
+  'no', 'only', 'own', 'same', 'too', 'very', 'just',
+  'find', 'show', 'list', 'get', 'search', 'look', 'give',
+])
+
+function extractSearchWords(query: string): string[] {
+  return query
+    .toLowerCase()
+    .replace(/['']/g, "'")
+    .split(/\s+/)
+    .map(w => w.replace(/^[^a-z0-9]+|[^a-z0-9']+$/gi, ''))
+    .filter(w => w.length >= 2 && !STOP_WORDS.has(w.replace(/'s$/, '')))
+}
+
+function wordFilter(w: string): string {
+  if (w.length <= 4) {
+    // Use PostgreSQL word-boundary regex for short words to avoid
+    // "mom" matching "moment", "to" matching "tomorrow", etc.
+    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return `content.imatch.\\y${escaped}\\y`
+  }
+  return `content.ilike.%${w}%`
+}
+
+function buildOrFilter(words: string[]): string {
+  return words.map(wordFilter).join(',')
 }
 
 async function runExactSearch(
@@ -171,15 +304,25 @@ async function runExactSearch(
   workspaceId: string | null,
   limit: number,
 ): Promise<Block[]> {
+  const words = extractSearchWords(query)
+
   let q = svc
     .from('journal_blocks')
     .select('*')
     .eq('user_id', userId)
     .eq('status', 'active')
     .is('deleted_at', null)
-    .ilike('content', `%${query}%`)
     .order('created_at', { ascending: false })
     .limit(limit)
+
+  // Use OR-matching on individual words for multi-word queries
+  if (words.length > 1) {
+    q = q.or(buildOrFilter(words))
+  } else if (words.length === 1) {
+    q = q.or(wordFilter(words[0]))
+  } else {
+    q = q.ilike('content', `%${query}%`)
+  }
 
   if (workspaceId) q = q.eq('workspace_id', workspaceId)
 
@@ -276,9 +419,16 @@ async function runFilteredExactSearch(
 
   if (workspaceId) q = q.eq('workspace_id', workspaceId)
 
-  // Apply search terms if present
+  // Apply search terms if present — use OR matching on individual words
   if (searchTerms) {
-    q = q.ilike('content', `%${searchTerms}%`)
+    const words = extractSearchWords(searchTerms)
+    if (words.length > 1) {
+      q = q.or(buildOrFilter(words))
+    } else if (words.length === 1) {
+      q = q.ilike('content', `%${words[0]}%`)
+    } else {
+      q = q.ilike('content', `%${searchTerms}%`)
+    }
   }
 
   // Apply date filters

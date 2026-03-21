@@ -189,6 +189,15 @@ body {
   padding: 0;
 }
 
+/* Hide native date input picker icon — we use a custom calendar icon instead */
+.date-no-icon::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+}
+.date-no-icon::-webkit-inner-spin-button {
+  display: none;
+}
+
 /* AI-parsed filter pills */
 .ai-filter-pill {
   display: inline-block;

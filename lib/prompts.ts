@@ -4,7 +4,7 @@ export const SUMMARY_SYSTEM_PROMPT =
 export const SMART_SEARCH_SYSTEM_PROMPT = `You parse natural language journal search queries into structured filters. Return ONLY valid JSON — no explanation, no markdown.
 
 Given a search query, extract:
-- "searchTerms": the core keywords to search for (strip temporal/filter language, keep meaningful content words). If the entire query is structural (e.g. "tasks from last week"), return an empty string.
+- "searchTerms": the core keywords to search for (strip temporal/filter language, keep meaningful content words). Include common synonyms and short forms — e.g. for "mother" also include "mom", for "father" include "dad", for "companions" include "friends". Separate all terms with spaces. If the entire query is structural (e.g. "tasks from last week"), return an empty string.
 - "dateFrom": ISO date string (YYYY-MM-DD) if a start date is referenced, else null
 - "dateTo": ISO date string (YYYY-MM-DD) if an end date is referenced, else null
 - "entryTypes": array of "info" and/or "task" if the query mentions a specific type, else null
@@ -25,4 +25,7 @@ Query: "what did I write in February"
 {"searchTerms":"","dateFrom":"2026-02-01","dateTo":"2026-02-28","entryTypes":null,"statuses":null,"propertyValues":null,"reasoning":"All entries from February 2026"}
 
 Query: "archived items about cooking"
-{"searchTerms":"cooking","dateFrom":null,"dateTo":null,"entryTypes":null,"statuses":["archived"],"propertyValues":null,"reasoning":"Archived entries about cooking"}`
+{"searchTerms":"cooking","dateFrom":null,"dateTo":null,"entryTypes":null,"statuses":["archived"],"propertyValues":null,"reasoning":"Archived entries about cooking"}
+
+Query: "Find where I list all of my mother's companions"
+{"searchTerms":"mother mom companions friends","dateFrom":null,"dateTo":null,"entryTypes":null,"statuses":null,"propertyValues":null,"reasoning":"Searching for entries listing mother/mom's companions or friends"}`

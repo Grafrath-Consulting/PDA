@@ -257,6 +257,24 @@ async function main() {
         : null;
       const sortOrder = (ENTRIES_PER_WORKSPACE - i) + Math.random();
 
+      // Generate a varied updated_at: 30% same as created, rest spread across hours/days/weeks/months
+      const maxGap = NOW.getTime() - createdAt.getTime();
+      const roll = Math.random();
+      let modGap;
+      if (roll < 0.30) {
+        modGap = 0; // never modified
+      } else if (roll < 0.55) {
+        modGap = (60 * 1000) + Math.random() * (12 * 60 * 60 * 1000); // minutes to hours
+      } else if (roll < 0.75) {
+        modGap = (24 * 60 * 60 * 1000) + Math.random() * (6 * 24 * 60 * 60 * 1000); // 1-7 days
+      } else if (roll < 0.90) {
+        modGap = (7 * 24 * 60 * 60 * 1000) + Math.random() * (21 * 24 * 60 * 60 * 1000); // 1-4 weeks
+      } else {
+        modGap = (30 * 24 * 60 * 60 * 1000) + Math.random() * (150 * 24 * 60 * 60 * 1000); // 1-6 months
+      }
+      modGap = Math.min(modGap, maxGap);
+      const updatedAt = new Date(createdAt.getTime() + modGap);
+
       const entry = {
         user_id: userId,
         workspace_id: ws.id,
@@ -266,7 +284,7 @@ async function main() {
         status: isArchived ? 'archived' : 'active',
         archived_at: archivedAt ? archivedAt.toISOString() : null,
         created_at: createdAt.toISOString(),
-        updated_at: createdAt.toISOString(),
+        updated_at: updatedAt.toISOString(),
         sort_order: sortOrder,
         pinned: false,
         is_archived: isArchived,
@@ -371,8 +389,27 @@ async function main() {
       const jitter = (Math.random() - 0.5) * 3 * 24 * 60 * 60 * 1000; // +/- 1.5 days
       const newDate = new Date(Math.max(ONE_YEAR_AGO.getTime(), Math.min(NOW.getTime(), baseTime + jitter)));
 
+      // Generate varied updated_at (always >= created_at)
+      const maxGap = NOW.getTime() - newDate.getTime();
+      const roll = Math.random();
+      let modGap;
+      if (roll < 0.30) {
+        modGap = 0;
+      } else if (roll < 0.55) {
+        modGap = (60 * 1000) + Math.random() * (12 * 60 * 60 * 1000);
+      } else if (roll < 0.75) {
+        modGap = (24 * 60 * 60 * 1000) + Math.random() * (6 * 24 * 60 * 60 * 1000);
+      } else if (roll < 0.90) {
+        modGap = (7 * 24 * 60 * 60 * 1000) + Math.random() * (21 * 24 * 60 * 60 * 1000);
+      } else {
+        modGap = (30 * 24 * 60 * 60 * 1000) + Math.random() * (150 * 24 * 60 * 60 * 1000);
+      }
+      modGap = Math.min(modGap, maxGap);
+      const updatedDate = new Date(newDate.getTime() + modGap);
+
       const updateData = {
         created_at: newDate.toISOString(),
+        updated_at: updatedDate.toISOString(),
       };
 
       // If archived, set archived_at to sometime after created_at
@@ -382,8 +419,8 @@ async function main() {
         updateData.archived_at = archiveDate.toISOString();
       }
 
-      // Use RPC or direct update — but the trigger will set updated_at to now()
-      // We'll accept that updated_at gets set to current time by the trigger
+      // Note: the on_block_updated trigger will override updated_at to now().
+      // To set custom updated_at, disable the trigger first or use a migration.
       const { error: upErr } = await supabase
         .from('journal_blocks')
         .update(updateData)

@@ -18,6 +18,7 @@ export interface Property {
   workspace_id: string | null
   name: string
   pinned_in_filter_bar: boolean
+  allow_multiple: boolean
   values: PropertyValue[]
 }
 
@@ -38,7 +39,7 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
     const supabase = createClient()
     const { data: props } = await supabase
       .from('properties')
-      .select('id, user_id, workspace_id, name, pinned_in_filter_bar')
+      .select('id, user_id, workspace_id, name, pinned_in_filter_bar, allow_multiple')
       .eq('user_id', userId)
       .order('name')
 

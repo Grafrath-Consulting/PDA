@@ -10,10 +10,13 @@ function truncate(text: string, max = 200): string {
   return text.slice(0, max).trimEnd() + '…'
 }
 
-function formatDue(date: string | null, type: string | null): string {
+import { formatDueDate } from '@/lib/date-format'
+import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
+
+function formatDue(date: string | null, type: string | null, dateFmt: DateFormatOption = 'MM/DD/YYYY', timeFmt: TimeFormatOption = '12h'): string {
   if (!date) return ''
-  const label = new Date(date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-  return type === 'hard' ? `${label} (hard)` : label
+  const label = formatDueDate(date, dateFmt, timeFmt)
+  return type === 'deadline' ? `${label} (deadline)` : label
 }
 
 function formatDateHeader(date: string): string {
@@ -54,6 +57,15 @@ export async function POST(request: Request) {
   const dateFrom = body.dateFrom || today
   const dateTo = body.dateTo || today
   const wsId = body.workspaceId ?? null
+
+  // Fetch user's date/time format preferences
+  const { data: profileData } = await supabase
+    .from('profiles')
+    .select('date_format, time_format')
+    .eq('id', user.id)
+    .single()
+  const userDateFmt = (profileData?.date_format ?? 'MM/DD/YYYY') as DateFormatOption
+  const userTimeFmt = (profileData?.time_format ?? '12h') as TimeFormatOption
 
   // Fetch people for owner name resolution
   const { data: peopleData } = await supabase
@@ -157,7 +169,7 @@ export async function POST(request: Request) {
     .eq('entry_type', 'task')
     .eq('status', 'active')
     .is('deleted_at', null)
-    .lt('due_date', today)
+    .lt('due_date', `${today}T00:00:00`)
     .order('due_date', { ascending: true })
     .limit(20)
   if (wsId) pastDueQuery = pastDueQuery.eq('workspace_id', wsId)
@@ -178,7 +190,7 @@ export async function POST(request: Request) {
   if (priorityTasks.length > 0) {
     sections.push('TOP PRIORITIES')
     for (const t of priorityTasks) {
-      const line = `• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type)}` : ''}`
+      const line = `• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type, userDateFmt, userTimeFmt)}` : ''}`
       sections.push(line)
     }
     sections.push('')
@@ -203,7 +215,7 @@ export async function POST(request: Request) {
   if (pastDue.length > 0) {
     sections.push('PAST DUE')
     for (const p of pastDue) {
-      sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type)} — Owner: ${personName(p.owner_id)}`)
+      sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type, userDateFmt, userTimeFmt)} — Owner: ${personName(p.owner_id)}`)
     }
     sections.push('')
   }

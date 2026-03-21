@@ -17,6 +17,8 @@ import { PropertiesManager } from './components/PropertiesManager'
 import { ReportModal } from './components/ReportModal'
 import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
 import { useProperties } from '@/context/PropertiesContext'
+import { useDateFormat } from '@/context/DateFormatContext'
+import { formatDatePart } from '@/lib/date-format'
 import workspaceColorSchemes from '@/constants/workspaceColorSchemes'
 
 const PAGE_SIZE = 20
@@ -27,7 +29,7 @@ const DEFAULT_AUTOSAVE_INTERVAL = 30
 const SORT_MODE_KEY = 'journal-sort-mode'
 const ADVANCED_OPEN_KEY = 'search-advanced-open'
 
-type SortMode = 'created_desc' | 'manual'
+type SortMode = 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc' | 'manual'
 
 interface Props {
   userId: string
@@ -36,6 +38,7 @@ interface Props {
 export function JournalPage({ userId }: Props) {
   const { activeWorkspace, activeWorkspaceId, activeScheme, isGlobalView, workspaces, setActiveWorkspace, refreshWorkspaces } = useWorkspace()
   const { propertiesForWorkspace } = useProperties()
+  const { dateFormat } = useDateFormat()
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null)
@@ -50,13 +53,18 @@ export function JournalPage({ userId }: Props) {
   const [filterStatuses, setFilterStatuses] = useState<Set<string>>(new Set(['active']))
   const [filterDateFrom, setFilterDateFrom] = useState('')
   const [filterDateTo, setFilterDateTo] = useState('')
+  const [filterModifiedFrom, setFilterModifiedFrom] = useState('')
+  const [filterModifiedTo, setFilterModifiedTo] = useState('')
+  const [filterDueFrom, setFilterDueFrom] = useState('')
+  const [filterDueTo, setFilterDueTo] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchMode, setSearchMode] = useState<'smart' | 'exact'>('smart')
+  const [searchNonce, setSearchNonce] = useState(0)
   const [smartSearchResults, setSmartSearchResults] = useState<Block[] | null>(null)
   const [smartSearchScores, setSmartSearchScores] = useState<Record<string, number>>({})
   const [smartSearchChunks, setSmartSearchChunks] = useState<Record<string, string>>({})
   const [smartSearchLoading, setSmartSearchLoading] = useState(false)
-  const [aiParsedInfo, setAiParsedInfo] = useState<{ searchTerms: string; filters: Record<string, unknown>; reasoning: string } | null>(null)
+  const [aiParsedInfo, setAiParsedInfo] = useState<{ searchTerms: string; filters: { dateFrom?: string; dateTo?: string; entryTypes?: string[]; statuses?: string[]; propertyValues?: string[] }; reasoning: string } | null>(null)
 
   // Property filter state (in-memory only)
   const [activePropertyFilters, setActivePropertyFilters] = useState<Set<string>>(new Set())
@@ -74,6 +82,7 @@ export function JournalPage({ userId }: Props) {
   const [autosaveInterval, setAutosaveInterval] = useState(DEFAULT_AUTOSAVE_INTERVAL)
   const [formattingVisible, setFormattingVisible] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>('created_desc')
+  const [sortDropdownOpen, setSortDropdownOpen] = useState(false)
 
   const contextFilterRef = useRef(contextFilter)
   contextFilterRef.current = contextFilter
@@ -87,6 +96,14 @@ export function JournalPage({ userId }: Props) {
   filterDateFromRef.current = filterDateFrom
   const filterDateToRef = useRef(filterDateTo)
   filterDateToRef.current = filterDateTo
+  const filterModifiedFromRef = useRef(filterModifiedFrom)
+  filterModifiedFromRef.current = filterModifiedFrom
+  const filterModifiedToRef = useRef(filterModifiedTo)
+  filterModifiedToRef.current = filterModifiedTo
+  const filterDueFromRef = useRef(filterDueFrom)
+  filterDueFromRef.current = filterDueFrom
+  const filterDueToRef = useRef(filterDueTo)
+  filterDueToRef.current = filterDueTo
   const archiveRef = useRef<ArchivedSectionHandle>(null)
 
   useEffect(() => {
@@ -128,7 +145,8 @@ export function JournalPage({ userId }: Props) {
     })
   }
 
-  const hasActiveFilters = searchText.length > 0 || filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || filterDateFrom || filterDateTo || activePropertyFilters.size > 0
+  const hasActiveSearch = searchText.length > 0
+  const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo
 
   // Smart search (combined exact + semantic + AI parsing)
   useEffect(() => {
@@ -160,7 +178,46 @@ export function JournalPage({ userId }: Props) {
       .catch(() => { if (!cancelled) { setSmartSearchResults([]); setSmartSearchChunks({}); setAiParsedInfo(null) } })
       .finally(() => { if (!cancelled) setSmartSearchLoading(false) })
     return () => { cancelled = true }
-  }, [searchMode, debouncedSearch, isGlobalView, activeWorkspaceId])
+  }, [searchMode, debouncedSearch, isGlobalView, activeWorkspaceId, searchNonce])
+
+  // Sync AI-parsed filters to UI filter controls so the user can adjust them
+  const aiSyncedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!aiParsedInfo || !aiParsedInfo.filters) return
+    // Only sync once per unique search (avoid re-syncing on re-renders)
+    const key = JSON.stringify(aiParsedInfo.filters)
+    if (aiSyncedRef.current === key) return
+    aiSyncedRef.current = key
+
+    const f = aiParsedInfo.filters
+    if (f.entryTypes && f.entryTypes.length > 0) {
+      setFilterEntryTypes(new Set(f.entryTypes))
+    }
+    if (f.statuses && f.statuses.length > 0) {
+      setFilterStatuses(new Set(f.statuses))
+    }
+    if (f.dateFrom) setFilterDateFrom(f.dateFrom)
+    if (f.dateTo) setFilterDateTo(f.dateTo)
+    if (f.propertyValues && f.propertyValues.length > 0) {
+      // Resolve property value labels to IDs
+      const props = propertiesForWorkspace(activeWorkspaceId)
+      const ids = new Set<string>()
+      const targetLabels = new Set(f.propertyValues.map(v => v.toLowerCase()))
+      for (const prop of props) {
+        for (const val of prop.values) {
+          if (targetLabels.has(val.label.toLowerCase())) {
+            ids.add(val.id)
+          }
+        }
+      }
+      if (ids.size > 0) setActivePropertyFilters(ids)
+    }
+    // Auto-open the advanced panel so filters are visible
+    if (!advancedOpen) {
+      setAdvancedOpen(true)
+      localStorage.setItem(ADVANCED_OPEN_KEY, 'true')
+    }
+  }, [aiParsedInfo, propertiesForWorkspace, activeWorkspaceId, advancedOpen])
 
   function toggleFormatting() {
     setFormattingVisible(prev => {
@@ -263,12 +320,26 @@ export function JournalPage({ userId }: Props) {
       query = query.eq('entry_type', '__none__')
     }
 
-    // Date range
+    // Created date range
     if (filterDateFromRef.current) {
       query = query.gte('created_at', filterDateFromRef.current + 'T00:00:00')
     }
     if (filterDateToRef.current) {
       query = query.lte('created_at', filterDateToRef.current + 'T23:59:59')
+    }
+    // Modified date range
+    if (filterModifiedFromRef.current) {
+      query = query.gte('updated_at', filterModifiedFromRef.current + 'T00:00:00')
+    }
+    if (filterModifiedToRef.current) {
+      query = query.lte('updated_at', filterModifiedToRef.current + 'T23:59:59')
+    }
+    // Due date range
+    if (filterDueFromRef.current) {
+      query = query.gte('due_date', filterDueFromRef.current + 'T00:00:00')
+    }
+    if (filterDueToRef.current) {
+      query = query.lte('due_date', filterDueToRef.current + 'T23:59:59')
     }
 
     // Pagination (disabled during search)
@@ -302,16 +373,26 @@ export function JournalPage({ userId }: Props) {
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, searchMode])
+  }, [contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, searchMode, searchNonce])
 
-  // Batch-load entry_properties for all visible blocks
+  // Batch-load entry_properties for all visible blocks (including smart search results)
+  const visibleBlockIds = (() => {
+    const ids = blocks.map(b => b.id)
+    if (smartSearchResults) {
+      for (const b of smartSearchResults as Block[]) {
+        if (!ids.includes(b.id)) ids.push(b.id)
+      }
+    }
+    return ids
+  })()
+  const visibleBlockIdsKey = visibleBlockIds.join(',')
   useEffect(() => {
-    if (blocks.length === 0) { setBlockProperties(new Map()); return }
+    if (visibleBlockIds.length === 0) { setBlockProperties(new Map()); return }
     const supabase = createClient()
     supabase
       .from('entry_properties')
       .select('entry_id, property_value_id')
-      .in('entry_id', blocks.map(b => b.id))
+      .in('entry_id', visibleBlockIds)
       .then(({ data }) => {
         const map = new Map<string, Set<string>>()
         for (const row of (data ?? []) as { entry_id: string; property_value_id: string }[]) {
@@ -321,7 +402,8 @@ export function JournalPage({ userId }: Props) {
         }
         setBlockProperties(map)
       })
-  }, [blocks])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleBlockIdsKey])
 
   function handleBlockPropertiesChanged(blockId: string, newIds: Set<string>) {
     setBlockProperties(prev => {
@@ -351,14 +433,23 @@ export function JournalPage({ userId }: Props) {
 
   function handleBlockUpdate(updated: Block) {
     setBlocks((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
+    setSmartSearchResults((prev) =>
+      prev ? prev.map((b) => (b.id === updated.id ? updated : b)) : prev
+    )
   }
 
   function handleBlockRemove(blockId: string) {
     setBlocks((prev) => prev.filter((b) => b.id !== blockId))
+    setSmartSearchResults((prev) =>
+      prev ? prev.filter((b) => b.id !== blockId) : prev
+    )
   }
 
   function handleBlockArchived(block: Block) {
     archiveRef.current?.addBlock(block)
+    setSmartSearchResults((prev) =>
+      prev ? prev.filter((b) => b.id !== block.id) : prev
+    )
   }
 
   function handleSplitBlock(newBlock: Block, updatedSourceBlock: Block) {
@@ -423,26 +514,112 @@ export function JournalPage({ userId }: Props) {
     setActivePropertyFilters(new Set())
   }
 
-  // Filter blocks by active property filters (AND logic: block must have ALL selected values).
-  // NOTE: This only filters the currently loaded blocks. Journal entries further back in the
-  // pagination that match the filter won't appear until they're loaded via "load more" or
-  // scrolling. This is a known limitation we may need to address later with server-side
-  // filtering on entry_properties.
+  // Filter blocks by active property filters.
+  // Within a property: OR (block matches if it has ANY selected value for that property).
+  // Across properties: AND (block must satisfy every property that has selections).
   const filteredBlocks = activePropertyFilters.size > 0
-    ? blocks.filter(b => {
-        const applied = blockProperties.get(b.id)
-        if (!applied) return false
-        const filters = Array.from(activePropertyFilters)
-        return filters.every(filterId => applied.has(filterId))
-      })
+    ? (() => {
+        const props = propertiesForWorkspace(activeWorkspaceId)
+        // Group selected filter value IDs by their parent property
+        const byProperty = new Map<string, string[]>()
+        Array.from(activePropertyFilters).forEach(valueId => {
+          for (const prop of props) {
+            if (prop.values.some(v => v.id === valueId)) {
+              const arr = byProperty.get(prop.id) || []
+              arr.push(valueId)
+              byProperty.set(prop.id, arr)
+              break
+            }
+          }
+        })
+        return blocks.filter(b => {
+          const applied = blockProperties.get(b.id)
+          if (!applied) return false
+          // AND across properties: every property group must have at least one match
+          const groups = Array.from(byProperty.values())
+          return groups.every(selectedValues => selectedValues.some((vid: string) => applied.has(vid)))
+        })
+      })()
     : blocks
 
   // Derive sorted blocks for rendering
   const sortedBlocks = sortMode === 'manual'
     ? [...filteredBlocks].sort((a, b) => (a.sort_order ?? Infinity) - (b.sort_order ?? Infinity))
-    : [...filteredBlocks].sort((a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )
+    : [...filteredBlocks].sort((a, b) => {
+        switch (sortMode) {
+          case 'created_asc':
+            return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          case 'modified_desc':
+            return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+          case 'modified_asc':
+            return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
+          default: // created_desc
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        }
+      })
+
+  // Apply client-side filters to smart search results so UI filter toggles take effect
+  const filteredSmartResults = (() => {
+    if (!smartSearchResults) return null
+    let results = smartSearchResults as Block[]
+    // Entry type filter
+    if (filterEntryTypes.size > 0 && filterEntryTypes.size < 2) {
+      results = results.filter(b => filterEntryTypes.has(b.entry_type ?? 'info'))
+    }
+    // Status filter
+    if (filterStatuses.size > 0) {
+      results = results.filter(b => filterStatuses.has(b.status))
+    }
+    // Created date range filters
+    if (filterDateFrom) {
+      const from = filterDateFrom + 'T00:00:00'
+      results = results.filter(b => b.created_at >= from)
+    }
+    if (filterDateTo) {
+      const to = filterDateTo + 'T23:59:59'
+      results = results.filter(b => b.created_at <= to)
+    }
+    // Modified date range filters
+    if (filterModifiedFrom) {
+      const from = filterModifiedFrom + 'T00:00:00'
+      results = results.filter(b => b.updated_at >= from)
+    }
+    if (filterModifiedTo) {
+      const to = filterModifiedTo + 'T23:59:59'
+      results = results.filter(b => b.updated_at <= to)
+    }
+    // Due date range filters
+    if (filterDueFrom) {
+      const from = filterDueFrom + 'T00:00:00'
+      results = results.filter(b => (b.due_date ?? '') >= from)
+    }
+    if (filterDueTo) {
+      const to = filterDueTo + 'T23:59:59'
+      results = results.filter(b => (b.due_date ?? '') <= to && b.due_date != null)
+    }
+    // Property filters: OR within property, AND across properties
+    if (activePropertyFilters.size > 0) {
+      const props = propertiesForWorkspace(activeWorkspaceId)
+      const byProperty = new Map<string, string[]>()
+      Array.from(activePropertyFilters).forEach(valueId => {
+        for (const prop of props) {
+          if (prop.values.some(v => v.id === valueId)) {
+            const arr = byProperty.get(prop.id) || []
+            arr.push(valueId)
+            byProperty.set(prop.id, arr)
+            break
+          }
+        }
+      })
+      results = results.filter(b => {
+        const applied = blockProperties.get(b.id)
+        if (!applied) return false
+        const groups = Array.from(byProperty.values())
+        return groups.every(selectedValues => selectedValues.some((vid: string) => applied.has(vid)))
+      })
+    }
+    return results
+  })()
 
   // ── Top bar colors ──────────────────────────────────────
   const barBg = activeScheme?.primary ?? '#FFFFFF'
@@ -502,51 +679,7 @@ export function JournalPage({ userId }: Props) {
           )}
         </div>
 
-        {/* Inline search */}
-        <div className="flex-1 max-w-sm mx-4 relative">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 opacity-40 pointer-events-none">
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            placeholder={searchMode === 'smart' ? "Search entries\u2026 (Ctrl+K)" : "Filter entries\u2026 (Ctrl+K)"}
-            className={`w-full pl-8 pr-16 py-1.5 text-xs rounded-lg border outline-none transition-colors text-gray-900 placeholder-gray-400 ${smartSearchLoading ? 'animate-pulse' : ''}`}
-            style={{
-              backgroundColor: activeScheme ? 'rgba(255,255,255,0.15)' : '#F9FAFB',
-              borderColor: smartSearchLoading ? '#F59E0B' : (hasActiveFilters ? '#F59E0B' : (activeScheme ? 'rgba(255,255,255,0.2)' : '#E5E0D0')),
-              color: activeScheme ? (activeScheme.textOnColor ?? '#FFFFFF') : '#111827',
-            }}
-            onKeyDown={(e) => { if (e.key === 'Escape') { setSearchText(''); searchInputRef.current?.blur() } }}
-          />
-          {searchText && (
-            <button
-              onClick={() => setSearchText('')}
-              className="absolute right-14 top-1/2 -translate-y-1/2 opacity-50 hover:opacity-80"
-              style={{ color: activeScheme ? (activeScheme.textOnColor ?? '#FFF') : '#6B7280' }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-            </button>
-          )}
-          <button
-            onClick={toggleAdvanced}
-            className="absolute right-1 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors"
-            style={{
-              color: activeScheme ? (activeScheme.textOnColor ?? '#FFF') : '#6B7280',
-              opacity: advancedOpen || hasActiveFilters ? 1 : 0.6,
-            }}
-          >
-            {hasActiveFilters && !advancedOpen && <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 mr-0.5 align-middle" />}
-            Advanced
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-              className={`inline-block ml-0.5 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}>
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-        </div>
+        <div className="flex-1" />
 
         <div className="flex items-center gap-1">
           <button
@@ -571,27 +704,107 @@ export function JournalPage({ userId }: Props) {
               <line x1="7" y1="7" x2="7.01" y2="7" />
             </svg>
           </button>
-          <button
-            onClick={() => saveSortMode('created_desc')}
-            title="Sort by newest first"
-            className={`p-1.5 rounded-lg transition-colors ${sortMode === 'created_desc' ? btnActiveClass : btnInactiveClass}`}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-          </button>
-          <button
-            onClick={() => saveSortMode('manual')}
-            title="Manual sort (drag to reorder)"
-            className={`p-1.5 rounded-lg transition-colors ${sortMode === 'manual' ? btnActiveClass : btnInactiveClass}`}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-              <circle cx="9" cy="6" r="2" /><circle cx="15" cy="6" r="2" />
-              <circle cx="9" cy="12" r="2" /><circle cx="15" cy="12" r="2" />
-              <circle cx="9" cy="18" r="2" /><circle cx="15" cy="18" r="2" />
-            </svg>
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setSortDropdownOpen(prev => !prev)}
+              onKeyDown={(e) => { if (e.key === 'Escape' && sortDropdownOpen) { e.stopPropagation(); setSortDropdownOpen(false) } }}
+              title="Sort options"
+              className={`p-1.5 rounded-lg transition-colors flex items-center gap-1 ${sortMode === 'manual' ? btnInactiveClass : btnActiveClass}`}
+            >
+              {/* Generic sort icon */}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18M3 12h12M3 18h6" />
+              </svg>
+              {/* Sort type indicator */}
+              {sortMode === 'manual' ? (
+                /* Drag grip dots */
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                  <circle cx="9" cy="6" r="2" /><circle cx="15" cy="6" r="2" />
+                  <circle cx="9" cy="12" r="2" /><circle cx="15" cy="12" r="2" />
+                  <circle cx="9" cy="18" r="2" /><circle cx="15" cy="18" r="2" />
+                </svg>
+              ) : sortMode.startsWith('created') ? (
+                /* Clock icon for date created */
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+              ) : (
+                /* Pencil icon for date modified */
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                </svg>
+              )}
+              {/* Direction arrow (not shown for manual) */}
+              {sortMode !== 'manual' && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  {sortMode.endsWith('_desc') ? (
+                    <path d="M12 4v16M5 13l7 7 7-7" />
+                  ) : (
+                    <path d="M12 20V4M5 11l7-7 7 7" />
+                  )}
+                </svg>
+              )}
+            </button>
+            {sortDropdownOpen && createPortal(
+              <div className="fixed inset-0 z-[29]" onClick={() => setSortDropdownOpen(false)} />,
+              document.body
+            )}
+            {sortDropdownOpen && (
+              <div
+                className="absolute right-0 top-full mt-1 z-30 bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 w-max"
+              >
+                {[
+                  { mode: 'created_desc' as SortMode, label: 'Date Created — Newest First' },
+                  { mode: 'created_asc' as SortMode, label: 'Date Created — Oldest First' },
+                  { mode: 'modified_desc' as SortMode, label: 'Date Modified — Newest First' },
+                  { mode: 'modified_asc' as SortMode, label: 'Date Modified — Oldest First' },
+                  { mode: 'manual' as SortMode, label: 'Manual (drag to reorder)' },
+                ].map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    onClick={() => { saveSortMode(mode); setSortDropdownOpen(false) }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm whitespace-nowrap transition-colors ${
+                      sortMode === mode
+                        ? 'bg-amber-50 text-amber-800 font-medium'
+                        : 'text-gray-700 hover:bg-[#FFFEF7]'
+                    }`}
+                  >
+                    <span className="flex items-center gap-0.5 flex-shrink-0 w-[22px]">
+                      {mode === 'manual' ? (
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                          <circle cx="9" cy="6" r="2" /><circle cx="15" cy="6" r="2" />
+                          <circle cx="9" cy="12" r="2" /><circle cx="15" cy="12" r="2" />
+                          <circle cx="9" cy="18" r="2" /><circle cx="15" cy="18" r="2" />
+                        </svg>
+                      ) : (
+                        <>
+                          {mode.startsWith('created') ? (
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="12" cy="12" r="10" />
+                              <polyline points="12 6 12 12 16 14" />
+                            </svg>
+                          ) : (
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                            </svg>
+                          )}
+                          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            {mode.endsWith('_desc') ? (
+                              <path d="M12 4v16M5 13l7 7 7-7" />
+                            ) : (
+                              <path d="M12 20V4M5 11l7-7 7 7" />
+                            )}
+                          </svg>
+                        </>
+                      )}
+                    </span>
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={togglePanel}
             title={panelOpen ? 'Close focus panel' : 'Open focus panel'}
@@ -605,25 +818,79 @@ export function JournalPage({ userId }: Props) {
         </div>
       </header>
 
-      {/* Advanced filter panel */}
-      {advancedOpen && (
-        <div className="border-b border-[#E5E0D0] bg-[#FDFCF7] px-6 py-3 space-y-3 flex-shrink-0 overflow-x-auto">
-          {/* Property filters */}
-          <PropertyFilterBar
-            properties={propertiesForWorkspace(activeWorkspaceId)}
-            activeFilters={activePropertyFilters}
-            onToggleFilter={togglePropertyFilter}
-            onClearFilters={clearPropertyFilters}
-            showPinToggle
-            onTogglePin={async (propertyId, pinned) => {
-              const supabase = createClient()
-              await supabase.from('properties').update({ pinned_in_filter_bar: pinned }).eq('id', propertyId)
-            }}
-          />
+      {/* ── Unified search & filter panel ── */}
+      <div className="border-b border-[#E5E0D0] bg-[#FDFCF7] px-6 py-2.5 flex-shrink-0 overflow-x-auto">
+        {/* Row 1: Pinned properties (or context filter) + search box */}
+        <div className="flex items-center gap-3">
+          <div className="flex-1 min-w-0 flex items-center gap-3">
+            {(() => {
+              const props = advancedOpen
+                ? propertiesForWorkspace(activeWorkspaceId)
+                : propertiesForWorkspace(activeWorkspaceId).filter(p => p.pinned_in_filter_bar)
+              return props.length > 0 ? (
+                <PropertyFilterBar
+                  properties={props}
+                  activeFilters={activePropertyFilters}
+                  onToggleFilter={togglePropertyFilter}
+                  onClearFilters={clearPropertyFilters}
+                  showPinToggle={advancedOpen}
+                  onTogglePin={advancedOpen ? async (propertyId, pinned) => {
+                    const supabase = createClient()
+                    await supabase.from('properties').update({ pinned_in_filter_bar: pinned }).eq('id', propertyId)
+                  } : undefined}
+                />
+              ) : null
+            })()}
+          </div>
+          {/* Search input */}
+          <div className="relative flex-shrink-0 w-64">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder={searchMode === 'smart' ? "Search\u2026 (Ctrl+K)" : "Filter\u2026 (Ctrl+K)"}
+              className={`w-full pl-7 pr-7 py-1 text-xs rounded-md border outline-none transition-colors text-gray-900 placeholder-gray-400 bg-white ${smartSearchLoading ? 'animate-pulse' : ''}`}
+              style={{
+                borderColor: smartSearchLoading ? '#F59E0B' : (hasActiveSearch ? '#F59E0B' : '#E5E0D0'),
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') { setSearchText(''); searchInputRef.current?.blur() }
+                if (e.key === 'Enter') { setDebouncedSearch(searchText); setSearchNonce(n => n + 1) }
+              }}
+            />
+            {searchText && (
+              <button
+                onClick={() => setSearchText('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+              </button>
+            )}
+          </div>
+          {/* Expand/collapse toggle */}
+          <button
+            onClick={toggleAdvanced}
+            className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-gray-600 transition-colors"
+            title={advancedOpen ? 'Collapse filters' : 'Expand filters'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
+              <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
+              <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
+            </svg>
+          </button>
+        </div>
 
-          {/* Filter toggles row */}
-          <div className="flex items-center gap-4 flex-wrap text-[11px]">
-            <div className={`flex items-center gap-1.5 ${''}`}>
+        {/* Row 2 (expanded): Type, Status, Date, Search mode, Clear filters */}
+        {advancedOpen && (
+          <div className="flex items-center gap-4 flex-wrap text-[11px] mt-2.5 pt-2.5 border-t border-[#EDE9DB]">
+            <div className="flex items-center gap-1.5">
               <span className="text-gray-400 font-medium">Type:</span>
               {([['info', 'Info'], ['task', 'Task']] as const).map(([t, label]) => (
                 <button key={t} onClick={() => setFilterEntryTypes(prev => {
@@ -636,7 +903,7 @@ export function JournalPage({ userId }: Props) {
                 </button>
               ))}
             </div>
-            <div className={`flex items-center gap-1.5 ${''}`}>
+            <div className="flex items-center gap-1.5">
               <span className="text-gray-400 font-medium">Status:</span>
               {([['active', 'Open'], ['archived', 'Archived'], ['deleted', 'Deleted']] as const).map(([s, label]) => (
                 <button key={s} onClick={() => setFilterStatuses(prev => {
@@ -649,23 +916,88 @@ export function JournalPage({ userId }: Props) {
                 </button>
               ))}
             </div>
-            <div className={`flex items-center gap-1.5 ${''}`}>
-              <label className="flex items-center gap-1 text-gray-500">
-                From
-                <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)}
-                  className="border border-gray-200 rounded px-1.5 py-0.5 text-[11px] text-gray-700 outline-none" />
-              </label>
-              <label className="flex items-center gap-1 text-gray-500">
-                To
-                <input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)}
-                  className="border border-gray-200 rounded px-1.5 py-0.5 text-[11px] text-gray-700 outline-none" />
-              </label>
-            </div>
+            {/* Date range filters */}
+            {([
+              { label: 'Created', fromId: 'filter-date-from', toId: 'filter-date-to', fromVal: filterDateFrom, toVal: filterDateTo, setFrom: setFilterDateFrom, setTo: setFilterDateTo },
+              { label: 'Modified', fromId: 'filter-mod-from', toId: 'filter-mod-to', fromVal: filterModifiedFrom, toVal: filterModifiedTo, setFrom: setFilterModifiedFrom, setTo: setFilterModifiedTo },
+              { label: 'Due', fromId: 'filter-due-from', toId: 'filter-due-to', fromVal: filterDueFrom, toVal: filterDueTo, setFrom: setFilterDueFrom, setTo: setFilterDueTo },
+            ] as const).map(({ label, fromId, toId, fromVal, toVal, setFrom, setTo }) => {
+              const invalid = !!(fromVal && toVal && fromVal > toVal)
+              return (
+              <div key={label} className="flex items-center gap-1.5">
+                <span className="text-gray-400 font-medium">{label}:</span>
+                <div className="relative flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => { (document.getElementById(fromId) as HTMLInputElement)?.showPicker?.() }}
+                    className={`cursor-pointer ${invalid ? 'text-red-400' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                  </button>
+                  <input
+                    id={fromId}
+                    type="date"
+                    value={fromVal}
+                    onChange={(e) => setFrom(e.target.value)}
+                    className="absolute inset-0 opacity-0 w-full h-full pointer-events-none"
+                    tabIndex={-1}
+                  />
+                  <span
+                    className={`text-[11px] cursor-pointer select-none ${invalid ? 'text-red-500 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+                    onClick={() => { (document.getElementById(fromId) as HTMLInputElement)?.showPicker?.() }}
+                  >
+                    {fromVal
+                      ? formatDatePart(new Date(fromVal + 'T00:00:00'), dateFormat)
+                      : <span className="text-gray-300">from</span>
+                    }
+                  </span>
+                  {fromVal && (
+                    <button onClick={() => setFrom('')} className="p-0.5 text-gray-300 hover:text-red-400 transition-colors">
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    </button>
+                  )}
+                </div>
+                <span className={invalid ? 'text-red-300' : 'text-gray-300'}>–</span>
+                <div className="relative flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => { (document.getElementById(toId) as HTMLInputElement)?.showPicker?.() }}
+                    className={`cursor-pointer ${invalid ? 'text-red-400' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                  </button>
+                  <input
+                    id={toId}
+                    type="date"
+                    value={toVal}
+                    onChange={(e) => setTo(e.target.value)}
+                    className="absolute inset-0 opacity-0 w-full h-full pointer-events-none"
+                    tabIndex={-1}
+                  />
+                  <span
+                    className={`text-[11px] cursor-pointer select-none ${invalid ? 'text-red-500 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+                    onClick={() => { (document.getElementById(toId) as HTMLInputElement)?.showPicker?.() }}
+                  >
+                    {toVal
+                      ? formatDatePart(new Date(toVal + 'T00:00:00'), dateFormat)
+                      : <span className="text-gray-300">to</span>
+                    }
+                  </span>
+                  {toVal && (
+                    <button onClick={() => setTo('')} className="p-0.5 text-gray-300 hover:text-red-400 transition-colors">
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+              )
+            })}
             {/* Search mode toggle */}
             <div className="flex items-center bg-gray-100 rounded-md p-0.5">
               <button
                 type="button"
                 onClick={() => setSearchMode('smart')}
+                title="AI-powered search: understands intent, synonyms, and natural language queries"
                 className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
                   searchMode === 'smart'
                     ? 'bg-white text-gray-900 shadow-sm'
@@ -677,6 +1009,7 @@ export function JournalPage({ userId }: Props) {
               <button
                 type="button"
                 onClick={() => setSearchMode('exact')}
+                title="Exact text match: finds entries containing the precise words you type"
                 className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
                   searchMode === 'exact'
                     ? 'bg-white text-gray-900 shadow-sm'
@@ -686,15 +1019,67 @@ export function JournalPage({ userId }: Props) {
                 Exact
               </button>
             </div>
-            {hasActiveFilters && (
-              <button onClick={() => { setSearchText(''); setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); clearPropertyFilters() }}
+            {hasNonDefaultFilters && (
+              <button onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo('') }}
                 className="text-[11px] text-gray-400 hover:text-gray-600 underline">
-                Clear all
+                Clear
               </button>
             )}
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Hidden filters indicator (when collapsed + filters active) */}
+        {!advancedOpen && hasNonDefaultFilters && (() => {
+          let count = 0
+          if (filterEntryTypes.size < 2) count++
+          if (filterStatuses.size !== 1 || !filterStatuses.has('active')) count++
+          if (filterDateFrom) count++
+          if (filterDateTo) count++
+          if (filterModifiedFrom) count++
+          if (filterModifiedTo) count++
+          if (filterDueFrom) count++
+          if (filterDueTo) count++
+          return (
+            <div className="flex items-center gap-2 text-[11px] text-amber-700 mt-2 pt-2 border-t border-[#EDE9DB]">
+              <span>{count} hidden filter{count !== 1 ? 's' : ''} applied</span>
+              <button
+                onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo('') }}
+                className="text-amber-600 hover:text-amber-800 underline"
+              >
+                Clear all filters
+              </button>
+            </div>
+          )
+        })()}
+
+        {/* Row 3: Search results status (when active search) */}
+        {debouncedSearch && (
+          <div className="flex items-center gap-2 text-xs text-gray-500 mt-2 pt-2 border-t border-[#EDE9DB]">
+            {searchMode === 'smart' ? (
+              smartSearchLoading ? (
+                <span>Searching&hellip;</span>
+              ) : filteredSmartResults ? (
+                <>
+                  <span>{filteredSmartResults.length} result{filteredSmartResults.length !== 1 ? 's' : ''} for &ldquo;{debouncedSearch}&rdquo;</span>
+                  {aiParsedInfo?.reasoning && (
+                    <span className="text-[10px] text-gray-400 italic ml-1">&mdash; {aiParsedInfo.reasoning}</span>
+                  )}
+                  <button onClick={() => setSearchText('')} className="text-amber-600 hover:text-amber-800 underline ml-auto">Clear search</button>
+                </>
+              ) : null
+            ) : (
+              loading ? (
+                <span>Searching&hellip;</span>
+              ) : (
+                <>
+                  <span>{blocks.length} result{blocks.length !== 1 ? 's' : ''} for &ldquo;{debouncedSearch}&rdquo;</span>
+                  <button onClick={() => setSearchText('')} className="text-amber-600 hover:text-amber-800 underline ml-auto">Clear search</button>
+                </>
+              )
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="flex-1 flex overflow-hidden">
         <div
@@ -708,62 +1093,6 @@ export function JournalPage({ userId }: Props) {
               onChange={setContextFilter}
             />
 
-            {/* Quick filter bar — pinned properties only */}
-            {!advancedOpen && (() => {
-              const pinned = propertiesForWorkspace(activeWorkspaceId).filter(p => p.pinned_in_filter_bar)
-              return pinned.length > 0 ? (
-                <PropertyFilterBar
-                  properties={pinned}
-                  activeFilters={activePropertyFilters}
-                  onToggleFilter={togglePropertyFilter}
-                  onClearFilters={clearPropertyFilters}
-                />
-              ) : null
-            })()}
-
-            {/* Search status */}
-            {debouncedSearch && searchMode === 'exact' && (
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                {loading ? 'Searching\u2026' : (
-                  <>
-                    <span>{blocks.length} result{blocks.length !== 1 ? 's' : ''} for &ldquo;{debouncedSearch}&rdquo;</span>
-                    <button onClick={() => setSearchText('')} className="text-amber-600 hover:text-amber-800 underline">Clear</button>
-                  </>
-                )}
-              </div>
-            )}
-            {searchMode === 'smart' && debouncedSearch && (
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                  {smartSearchLoading ? (
-                    <span>Searching\u2026</span>
-                  ) : smartSearchResults ? (
-                    <>
-                      <span>{smartSearchResults.length} result{smartSearchResults.length !== 1 ? 's' : ''} for &ldquo;{debouncedSearch}&rdquo;</span>
-                      <button onClick={() => setSearchText('')} className="text-amber-600 hover:text-amber-800 underline">Clear search</button>
-                    </>
-                  ) : null}
-                </div>
-                {aiParsedInfo && (
-                  <div className="flex items-center gap-1 flex-wrap">
-                    <span className="text-[10px] text-gray-400">AI:</span>
-                    {aiParsedInfo.filters.dateFrom && (
-                      <span className="ai-filter-pill">{aiParsedInfo.filters.dateFrom as string} &ndash; {(aiParsedInfo.filters.dateTo as string) || 'now'}</span>
-                    )}
-                    {aiParsedInfo.filters.entryTypes && (
-                      <span className="ai-filter-pill">{(aiParsedInfo.filters.entryTypes as string[]).join(', ')}</span>
-                    )}
-                    {aiParsedInfo.filters.propertyValues && (
-                      <span className="ai-filter-pill">{(aiParsedInfo.filters.propertyValues as string[]).join(', ')}</span>
-                    )}
-                    {aiParsedInfo.reasoning && (
-                      <span className="text-[10px] text-gray-400 italic">{aiParsedInfo.reasoning}</span>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
             <JournalBlock
               userId={userId}
               contextId={contextFilter}
@@ -774,15 +1103,15 @@ export function JournalPage({ userId }: Props) {
             />
 
             <BlockFeed
-              blocks={searchMode === 'smart' && smartSearchResults ? smartSearchResults as Block[] : sortedBlocks}
+              blocks={searchMode === 'smart' && filteredSmartResults ? filteredSmartResults : sortedBlocks}
               loading={searchMode === 'smart' ? smartSearchLoading : (loading && !initialised)}
-              hasMore={searchMode === 'smart' && smartSearchResults ? false : hasMore}
+              hasMore={searchMode === 'smart' && filteredSmartResults ? false : hasMore}
               onLoadMore={loadMore}
               onBlockUpdate={handleBlockUpdate}
               onBlockRemove={handleBlockRemove}
               onBlockArchived={handleBlockArchived}
               onSplitBlock={handleSplitBlock}
-              sortMode={searchMode === 'smart' && smartSearchResults ? 'created_desc' : sortMode}
+              sortMode={searchMode === 'smart' && filteredSmartResults ? 'created_desc' : sortMode}
               onReorder={handleReorder}
               autosaveInterval={autosaveInterval}
               formattingVisible={formattingVisible}
@@ -974,20 +1303,37 @@ function CreateWorkspaceModal({
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
-  // Close emoji picker on click outside
+  // Close emoji picker on click outside (composedPath crosses shadow DOM boundaries)
+  // Also handles modal backdrop dismiss — we use native listeners because React portal
+  // events bubble through the React tree, making React onMouseDown unreliable.
+  const modalRef = useRef<HTMLDivElement>(null)
+  const showEmojiPickerRef = useRef(showEmojiPicker)
+  showEmojiPickerRef.current = showEmojiPicker
   useEffect(() => {
-    if (!showEmojiPicker) return
     function handleClick(e: MouseEvent) {
-      if (
-        emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node) &&
-        emojiButtonRef.current && !emojiButtonRef.current.contains(e.target as Node)
-      ) {
+      const path = e.composedPath()
+      const insideEmojiPicker = path.some(el =>
+        (el as HTMLElement).tagName === 'EM-EMOJI-PICKER' ||
+        (emojiPickerRef.current && el === emojiPickerRef.current)
+      )
+      if (insideEmojiPicker) return // always ignore clicks inside emoji picker
+
+      const insideEmojiButton = emojiButtonRef.current && path.includes(emojiButtonRef.current)
+      if (showEmojiPickerRef.current && !insideEmojiButton) {
         setShowEmojiPicker(false)
+        return
+      }
+
+      // If click is outside the modal white box, close the modal
+      const insideModal = modalRef.current && path.includes(modalRef.current)
+      if (!insideModal) {
+        onClose()
       }
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
-  }, [showEmojiPicker])
+  }, [onClose])
+
 
   async function handleSave() {
     if (!name.trim() || saving) return
@@ -1033,10 +1379,10 @@ function CreateWorkspaceModal({
   const selectedScheme = workspaceColorSchemes.find(s => s.key === colorScheme)!
 
   return (
-    <div className="fixed inset-0 bg-black/20 z-50 flex items-center justify-center p-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 bg-black/20 z-50 flex items-center justify-center p-4">
       <div
+        ref={modalRef}
         className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col overflow-visible"
-        onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Preview header */}
         <div
@@ -1139,11 +1485,9 @@ function CreateWorkspaceModal({
 
       {showEmojiPicker && createPortal(
         <div
-          ref={emojiPickerRef}
           style={{ position: 'fixed', inset: 0, zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onMouseDown={() => setShowEmojiPicker(false)}
         >
-          <div onMouseDown={(e) => e.stopPropagation()} style={{ borderRadius: 12, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+          <div ref={emojiPickerRef} style={{ borderRadius: 12, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
             <Suspense fallback={<div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, fontSize: 12, color: '#9ca3af' }}>Loading...</div>}>
               <EmojiPicker
                 data={data}
@@ -1154,6 +1498,7 @@ function CreateWorkspaceModal({
                 set="native"
                 perLine={8}
                 maxFrequentRows={1}
+                autoFocus={true}
               />
             </Suspense>
           </div>

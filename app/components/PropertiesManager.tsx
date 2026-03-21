@@ -174,6 +174,17 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
               <path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z" />
             </svg>
           </button>
+          <button
+            onClick={async () => {
+              const supabase = createClient()
+              await supabase.from('properties').update({ allow_multiple: !property.allow_multiple }).eq('id', property.id)
+              onChanged()
+            }}
+            title={property.allow_multiple ? 'Switch to single-select' : 'Allow multiple selections'}
+            className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${property.allow_multiple ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-gray-50 text-gray-400 border border-gray-200 hover:text-gray-500'}`}
+          >
+            {property.allow_multiple ? 'Multi' : 'Single'}
+          </button>
           <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{scopeLabel}</span>
           <button onClick={deleteProperty} className="text-gray-300 hover:text-red-500 transition-colors" title="Delete property">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>

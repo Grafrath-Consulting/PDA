@@ -73,11 +73,17 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   const emojiRef = useRef<HTMLDivElement>(null)
   const emojiButtonRef = useRef<HTMLButtonElement>(null)
 
-  // Close emoji picker on click outside
+  // Close emoji picker on click outside (composedPath for shadow DOM compatibility)
   useEffect(() => {
     if (!emojiOpen) return
     function handleClick(e: MouseEvent) {
-      if (emojiRef.current && !emojiRef.current.contains(e.target as Node)) setEmojiOpen(false)
+      const path = e.composedPath()
+      const insidePicker = path.some(el =>
+        (el as HTMLElement).tagName === 'EM-EMOJI-PICKER' ||
+        (emojiRef.current && el === emojiRef.current)
+      )
+      const insideButton = emojiButtonRef.current && path.includes(emojiButtonRef.current)
+      if (!insidePicker && !insideButton) setEmojiOpen(false)
     }
     const id = setTimeout(() => document.addEventListener('mousedown', handleClick), 0)
     return () => { clearTimeout(id); document.removeEventListener('mousedown', handleClick) }

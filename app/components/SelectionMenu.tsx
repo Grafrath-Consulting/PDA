@@ -49,15 +49,6 @@ export function SelectionMenu({ position, selectedText, onClose, onAction, disab
       </MenuSection>
       <Sep />
       <MenuSection>
-        <Item onClick={() => act({ type: 'create_task', taskType: 'my_task' })}>
-          <TaskIcon /> Create Task
-        </Item>
-        <Item onClick={() => act({ type: 'create_task', taskType: 'waiting_on' })}>
-          <WaitingIcon /> Waiting On
-        </Item>
-      </MenuSection>
-      <Sep />
-      <MenuSection>
         {!disableSplit && (
           <Item onClick={() => act({ type: 'split_block' })}>
             <SplitIcon /> Split to Block

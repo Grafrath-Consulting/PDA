@@ -19,7 +19,7 @@ interface Props {
   onBlockRemove: (blockId: string) => void
   onBlockArchived?: (block: Block) => void
   onSplitBlock: (newBlock: Block, updatedSourceBlock: Block) => void
-  sortMode: 'created_desc' | 'manual'
+  sortMode: 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc' | 'manual'
   onReorder: (activeId: string, overId: string) => void
   autosaveInterval?: number
   formattingVisible: boolean

@@ -10,7 +10,7 @@ interface TodayTask {
   content: string | null
   owner_id: string | null
   due_date: string | null
-  due_date_type: 'hard' | 'soft' | null
+  due_date_type: 'deadline' | 'target' | null
   workspace_id: string | null
 }
 
@@ -57,7 +57,8 @@ export function RightPanel({ userId, refreshKey, onTaskClick }: Props) {
       .select('id, content, owner_id, due_date, due_date_type, workspace_id')
       .eq('user_id', userId)
       .eq('entry_type', 'task')
-      .eq('due_date', today)
+      .gte('due_date', `${today}T00:00:00`)
+      .lte('due_date', `${today}T23:59:59`)
       .eq('status', 'active')
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
@@ -134,7 +135,7 @@ export function RightPanel({ userId, refreshKey, onTaskClick }: Props) {
               const wsColor = workspaceColor(task.workspace_id)
               const owner = personName(task.owner_id)
               const text = truncate(htmlToPlainText(task.content), 120)
-              const isHard = task.due_date_type === 'hard'
+              const isDeadline = task.due_date_type === 'deadline'
 
               return (
                 <div
@@ -160,8 +161,8 @@ export function RightPanel({ userId, refreshKey, onTaskClick }: Props) {
                       {owner && (
                         <span className="text-[10px] text-gray-400">{owner}</span>
                       )}
-                      <span className={`text-[10px] ${isHard ? 'font-semibold text-red-500' : 'text-gray-400'}`}>
-                        {isHard ? 'Hard deadline' : 'Soft'}
+                      <span className={`text-[10px] ${isDeadline ? 'font-semibold text-red-500' : 'text-gray-400'}`}>
+                        {isDeadline ? 'Deadline' : 'Target'}
                       </span>
                     </div>
                   </div>

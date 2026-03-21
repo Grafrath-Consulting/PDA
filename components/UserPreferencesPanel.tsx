@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { AiSettingsPanel } from '@/app/components/AiSettingsPanel'
+import { useDateFormat } from '@/context/DateFormatContext'
+import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
 
 interface Props {
   email: string
@@ -20,9 +22,24 @@ const INTERVAL_OPTIONS = [
   { value: 300, label: '5 minutes' },
 ]
 
+const DATE_FORMAT_OPTIONS: { value: DateFormatOption; label: string; example: string }[] = [
+  { value: 'MM/DD/YYYY', label: 'MM/DD/YYYY', example: '03/21/2026' },
+  { value: 'DD/MM/YYYY', label: 'DD/MM/YYYY', example: '21/03/2026' },
+  { value: 'YYYY-MM-DD', label: 'YYYY-MM-DD', example: '2026-03-21' },
+  { value: 'Mon DD, YYYY', label: 'Mon DD, YYYY', example: 'Mar 21, 2026' },
+]
+
+const TIME_FORMAT_OPTIONS: { value: TimeFormatOption; label: string; example: string }[] = [
+  { value: '12h', label: '12-hour', example: '2:30 PM' },
+  { value: '24h', label: '24-hour', example: '14:30' },
+]
+
+const selectClass = "w-full text-sm text-gray-800 border border-[#E5E0D0] rounded-lg px-3 py-2 bg-white outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-300 transition-colors"
+
 export function UserPreferencesPanel({ email, displayName, userId, open, onClose, onAutosaveChange }: Props) {
   const [autosaveInterval, setAutosaveInterval] = useState(30)
   const [saving, setSaving] = useState(false)
+  const { dateFormat, timeFormat, setDateFormat, setTimeFormat } = useDateFormat()
 
   useEffect(() => {
     if (!open) return
@@ -95,23 +112,53 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
           {/* Preferences section */}
           <section>
             <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Preferences</h3>
-            <div>
-              <label className="text-xs text-gray-500 block mb-1">Autosave interval</label>
-              <select
-                value={autosaveInterval}
-                onChange={(e) => handleIntervalChange(Number(e.target.value))}
-                disabled={saving}
-                className="w-full text-sm text-gray-800 border border-[#E5E0D0] rounded-lg px-3 py-2 bg-white outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-300 transition-colors"
-              >
-                {INTERVAL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-400 mt-1">
-                Auto-saves content silently after this period of inactivity.
-              </p>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Date format</label>
+                <select
+                  value={dateFormat}
+                  onChange={(e) => setDateFormat(e.target.value as DateFormatOption)}
+                  className={selectClass}
+                >
+                  {DATE_FORMAT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} ({opt.example})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Time format</label>
+                <select
+                  value={timeFormat}
+                  onChange={(e) => setTimeFormat(e.target.value as TimeFormatOption)}
+                  className={selectClass}
+                >
+                  {TIME_FORMAT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} ({opt.example})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Autosave interval</label>
+                <select
+                  value={autosaveInterval}
+                  onChange={(e) => handleIntervalChange(Number(e.target.value))}
+                  disabled={saving}
+                  className={selectClass}
+                >
+                  {INTERVAL_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-400 mt-1">
+                  Auto-saves content silently after this period of inactivity.
+                </p>
+              </div>
             </div>
           </section>
         </div>

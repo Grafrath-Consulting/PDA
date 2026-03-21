@@ -8,6 +8,8 @@ import { SelectionMenu } from './SelectionMenu'
 import { HistoryModal } from './HistoryModal'
 import type { TipTapEditorHandle } from './TipTapEditor'
 import { useWorkspace } from '@/context/WorkspaceContext'
+import { useDateFormat } from '@/context/DateFormatContext'
+import { formatTimestamp, formatDatePart, formatTimePart } from '@/lib/date-format'
 import { getScheme } from '@/constants/workspaceColorSchemes'
 import { useProperties } from '@/context/PropertiesContext'
 import { PropertyBubbles } from './PropertyBubbles'
@@ -15,6 +17,96 @@ import { PropertyEditor } from './PropertyEditor'
 import { AttachmentRow, Attachment } from './AttachmentRow'
 
 const TipTapEditor = dynamic(() => import('./TipTapEditor').then(m => m.TipTapEditor), { ssr: false })
+
+// ── 30-minute increment time picker dropdown ─────────────────────────
+// Internal values stored as "HH:MM" (24h), display formatted per user pref
+const TIME_SLOTS: string[] = (() => {
+  const opts: string[] = []
+  for (let h = 0; h < 24; h++) {
+    for (const m of [0, 30]) {
+      opts.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+    }
+  }
+  return opts
+})()
+
+function formatTimeSlot(slot: string, fmt: '12h' | '24h'): string {
+  const [hStr, mStr] = slot.split(':')
+  const h = parseInt(hStr)
+  if (fmt === '24h') return `${hStr}:${mStr}`
+  const period = h >= 12 ? 'PM' : 'AM'
+  const h12 = h % 12 || 12
+  return `${String(h12).padStart(2, '0')}:${mStr} ${period}`
+}
+
+function TimePickerDropdown({ value, onChange, timeFormat }: { value: string; onChange: (v: string) => void; timeFormat: '12h' | '24h' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e: MouseEvent) {
+      if (ref.current?.contains(e.target as Node)) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  // Scroll to current value when opening
+  useEffect(() => {
+    if (!open || !listRef.current) return
+    const active = listRef.current.querySelector('[data-active="true"]')
+    if (active) active.scrollIntoView({ block: 'center' })
+  }, [open])
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(prev => !prev)}
+        className="inline-flex items-center gap-1 cursor-pointer text-xs hover:text-gray-900 py-0.5 ml-0.5"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+        {value ? (
+          <span className="text-gray-600">{formatTimeSlot(value, timeFormat)}</span>
+        ) : (
+          <span className="text-gray-300">Time</span>
+        )}
+      </button>
+      {open && (
+        <div
+          ref={listRef}
+          className="absolute bottom-full mb-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-[110px] max-h-[200px] overflow-y-auto z-50"
+        >
+          <button
+            type="button"
+            onClick={() => { onChange(''); setOpen(false) }}
+            className={`w-full px-3 py-1 text-xs text-left hover:bg-gray-50 transition-colors ${
+              !value ? 'text-amber-700 font-medium' : 'text-gray-500'
+            }`}
+          >
+            No time
+          </button>
+          {TIME_SLOTS.map(t => (
+            <button
+              key={t}
+              type="button"
+              data-active={t === value ? 'true' : undefined}
+              onClick={() => { onChange(t); setOpen(false) }}
+              className={`w-full px-3 py-1 text-xs text-left hover:bg-gray-50 transition-colors ${
+                t === value ? 'text-amber-700 font-medium bg-amber-50' : 'text-gray-700'
+              }`}
+            >
+              {formatTimeSlot(t, timeFormat)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 interface MenuState {
   selText: string
@@ -57,15 +149,6 @@ interface ExistingBlockProps extends BaseProps {
 
 type Props = NewEntryProps | ExistingBlockProps
 
-function formatTimestamp(iso: string) {
-  return new Date(iso).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
 
 function isMeaningfullyModified(created: string, updated: string) {
   return created.slice(0, 16) !== updated.slice(0, 16)
@@ -246,8 +329,11 @@ export function JournalBlock(props: Props) {
   const isNewEntry = !props.block
   const { activeWorkspace, activeScheme, activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
   const { propertiesForWorkspace } = useProperties()
+  const { dateFormat, timeFormat } = useDateFormat()
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false)
   const [moveMenuOpen, setMoveMenuOpen] = useState(false)
+  const [pillMenuOpen, setPillMenuOpen] = useState(false)
+  const pillRef = useRef<HTMLDivElement>(null)
 
   const [showHistory, setShowHistory] = useState(false)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
@@ -315,6 +401,17 @@ export function JournalBlock(props: Props) {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [popoverOpen])
+
+  // Close pill menu on outside click
+  useEffect(() => {
+    if (!pillMenuOpen) return
+    function handler(e: MouseEvent) {
+      if (pillRef.current?.contains(e.target as Node)) return
+      setPillMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [pillMenuOpen])
 
   function clearAutosaveTimer() {
     if (autosaveTimerRef.current) {
@@ -693,10 +790,14 @@ export function JournalBlock(props: Props) {
     clearAutosaveTimer()
 
     const p = propsRef.current as NewEntryProps
-    // In global view, route to the user's default workspace (if any)
+    // In global view, route to the user's default workspace
     const wsId = workspaceRef.current?.id
       ?? workspacesRef.current.find(w => w.is_default)?.id
-      ?? null
+    if (!wsId) {
+      console.error('Cannot save: no workspace available')
+      savingRef.current = false
+      return null
+    }
     const supabase = createClient()
     const { data, error } = await supabase
       .from('journal_blocks')
@@ -1072,6 +1173,10 @@ export function JournalBlock(props: Props) {
     if (suppressBlurRef.current) return
     // If focus moved to another element inside the card, stay active
     if (cardRef.current?.contains(e.relatedTarget as Node)) return
+    // If focus moved to an emoji picker (portaled to body, possibly in shadow DOM), stay active
+    const related = e.relatedTarget as HTMLElement | null
+    if (related?.closest?.('em-emoji-picker') || related?.tagName === 'EM-EMOJI-PICKER') return
+    if (document.activeElement?.closest?.('em-emoji-picker') || document.activeElement?.tagName === 'EM-EMOJI-PICKER') return
     // When clicking non-focusable areas (padding) inside the card,
     // relatedTarget is null. Defer to let the browser settle focus,
     // then check whether the click was actually outside the card.
@@ -1079,6 +1184,8 @@ export function JournalBlock(props: Props) {
       requestAnimationFrame(() => {
         // If focus has already landed inside this card, do nothing.
         if (cardRef.current?.contains(document.activeElement)) return
+        // If focus moved to an emoji picker (shadow DOM — activeElement is the host element)
+        if (document.activeElement?.closest?.('em-emoji-picker') || document.activeElement?.tagName === 'EM-EMOJI-PICKER') return
         if (isNewEntry) {
           const text = liveTextRef.current.trim()
           const hasPending = pendingPropertyIdsRef.current.size > 0 || pendingFilesRef.current.length > 0
@@ -1388,8 +1495,6 @@ export function JournalBlock(props: Props) {
       key: 'convert', label: isTask ? 'Convert to Info' : 'Convert to Task', icon: convertIcon(),
       onClick: () => { setPopoverOpen(false); toggleEntryType() },
     }] : []),
-    { key: 'task', label: 'Create Task', shortcut: '⌥⇧T', icon: taskIcon(), onClick: () => popoverAction({ type: 'create_task', taskType: 'my_task' }) },
-    { key: 'waiting', label: 'Waiting On', shortcut: '⌥⇧W', icon: waitingIcon(), onClick: () => popoverAction({ type: 'create_task', taskType: 'waiting_on' }) },
     { key: 'info', label: 'Label as Info', icon: infoIcon(), onClick: () => popoverAction({ type: 'label_info' }) },
     { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', icon: sparkleIcon(), onClick: () => popoverAction({ type: 'summarize' }) },
     { key: 'format', label: 'Formatting', shortcut: '⌥⇧F', icon: formatBarIcon(), onClick: () => { setPopoverOpen(false); onToggleFormatting() }, className: formattingVisible ? 'text-amber-700 bg-amber-50' : undefined },
@@ -1613,16 +1718,6 @@ export function JournalBlock(props: Props) {
                       {block?.workspace_id === ws.id && <span className="text-[10px] text-gray-400 ml-auto">current</span>}
                     </button>
                   ))}
-                  <button
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => moveToWorkspace(null)}
-                    className={`w-full flex items-center gap-2 px-5 py-1.5 text-xs text-left hover:bg-[#FFFEF7] transition-colors ${
-                      block?.workspace_id === null ? 'text-amber-700 font-medium' : 'text-gray-500'
-                    }`}
-                  >
-                    <span>Unassigned</span>
-                    {block?.workspace_id === null && <span className="text-[10px] text-gray-400 ml-auto">current</span>}
-                  </button>
                 </div>
               )}
             </div>
@@ -1766,39 +1861,131 @@ export function JournalBlock(props: Props) {
             </select>
           </div>
           <span className="w-px h-4 bg-gray-200" />
-          <div className="flex items-center gap-1">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
-            <input
-              type="date"
-              value={block.due_date ?? ''}
-              onChange={(e) => updateTaskField('due_date', e.target.value || null)}
-              className="text-xs bg-transparent border-none outline-none cursor-pointer text-gray-600 hover:text-gray-900 py-0.5 w-[110px]"
-            />
-            {block.due_date && (
-              <div className="flex items-center rounded overflow-hidden border border-gray-200">
-                <button
-                  onClick={() => updateTaskField('due_date_type', 'hard')}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                    block.due_date_type === 'hard' ? 'bg-red-100 text-red-700' : 'text-gray-400 hover:text-gray-600'
-                  }`}
-                >Hard</button>
-                <button
-                  onClick={() => updateTaskField('due_date_type', 'soft')}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                    block.due_date_type === 'soft' || !block.due_date_type ? 'bg-amber-100 text-amber-700' : 'text-gray-400 hover:text-gray-600'
-                  }`}
-                >Soft</button>
+          {(() => {
+            // Parse timestamptz into date and time parts (using local time)
+            const dueDateStr = block.due_date
+            let dateVal = ''
+            let timeVal = '' // empty means no time set (sentinel 23:59:59), otherwise "HH:MM" 24h
+            if (dueDateStr) {
+              // Parse as local time — strip any trailing Z to avoid UTC conversion
+              const localStr = dueDateStr.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '')
+              const d = new Date(localStr)
+              const yyyy = d.getFullYear()
+              const mm = String(d.getMonth() + 1).padStart(2, '0')
+              const dd = String(d.getDate()).padStart(2, '0')
+              dateVal = `${yyyy}-${mm}-${dd}`
+              const hh = d.getHours()
+              const mi = d.getMinutes()
+              const ss = d.getSeconds()
+              // 23:59:59 is the sentinel for "no time"
+              if (!(hh === 23 && mi === 59 && ss === 59)) {
+                timeVal = `${String(hh).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
+              }
+            }
+
+            function buildTimestamp(date: string, time: string | null): string {
+              if (!time) return `${date}T23:59:59`
+              return `${date}T${time}:00`
+            }
+
+            function onDateChange(newDate: string) {
+              if (!newDate) {
+                updateTaskField('due_date', null)
+                updateTaskField('due_date_type', null)
+                return
+              }
+              const ts = buildTimestamp(newDate, timeVal || null)
+              updateTaskField('due_date', ts)
+            }
+
+            function onTimeChange(newTime: string) {
+              if (!dateVal) return
+              const ts = buildTimestamp(dateVal, newTime || null)
+              updateTaskField('due_date', ts)
+            }
+
+            function clearDueDate() {
+              updateTaskField('due_date', null)
+              updateTaskField('due_date_type', null)
+            }
+
+            const datePickerId = `datepicker-${block?.id ?? 'new'}`
+
+            return (
+              <div className="flex items-center gap-1">
+                <div className="relative flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById(datePickerId) as HTMLInputElement | null
+                      if (el) { el.showPicker?.() }
+                    }}
+                    className="cursor-pointer text-gray-400 hover:text-gray-600"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                  </button>
+                  <input
+                    id={datePickerId}
+                    type="date"
+                    value={dateVal}
+                    onChange={(e) => onDateChange(e.target.value)}
+                    className="absolute inset-0 opacity-0 w-full h-full pointer-events-none"
+                    tabIndex={-1}
+                  />
+                </div>
+                <span
+                  className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none"
+                  onClick={() => {
+                    const el = document.getElementById(datePickerId) as HTMLInputElement | null
+                    if (el) { el.showPicker?.() }
+                  }}
+                >
+                  {dateVal
+                    ? formatDatePart(new Date(dateVal + 'T00:00:00'), dateFormat)
+                    : <span className="text-gray-300">mm/dd/yyyy</span>
+                  }
+                </span>
+                {dateVal && (
+                  <>
+                    <TimePickerDropdown
+                      value={timeVal}
+                      onChange={onTimeChange}
+                      timeFormat={timeFormat}
+                    />
+                    <div className="flex items-center rounded overflow-hidden border border-gray-200 ml-2">
+                      <button
+                        onClick={() => updateTaskField('due_date_type', 'deadline')}
+                        className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                          block.due_date_type === 'deadline' ? 'bg-red-100 text-red-700' : 'text-gray-400 hover:text-gray-600'
+                        }`}
+                      >Deadline</button>
+                      <button
+                        onClick={() => updateTaskField('due_date_type', 'target')}
+                        className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                          block.due_date_type === 'target' || !block.due_date_type ? 'bg-amber-100 text-amber-700' : 'text-gray-400 hover:text-gray-600'
+                        }`}
+                      >Target</button>
+                    </div>
+                    <button
+                      onClick={clearDueDate}
+                      title="Clear date"
+                      className="p-0.5 text-gray-300 hover:text-red-400 transition-colors"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    </button>
+                  </>
+                )}
               </div>
-            )}
-          </div>
+            )
+          })()}
         </div>
       )}
 
       {/* ── FOOTER ── */}
       <div className="flex items-center px-4 pb-1.5 pt-0 select-none">
-        <span className="text-[11px] text-gray-400" suppressHydrationWarning>
+        <span className="text-[11px] text-gray-400 flex-1" suppressHydrationWarning>
           {block
-            ? <>Created {formatTimestamp(block.created_at)}{showModified && <span> · Modified {formatTimestamp(block.updated_at)}</span>}{(props as ExistingBlockProps).similarityScore != null && <span className="ml-1.5 px-1.5 py-0 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium">{Math.round((props as ExistingBlockProps).similarityScore! * 100)}% match</span>}</>
+            ? <>Created {formatTimestamp(block.created_at, dateFormat, timeFormat)}{showModified && <span> · Modified {formatTimestamp(block.updated_at, dateFormat, timeFormat)}</span>}{(props as ExistingBlockProps).similarityScore != null && <span className="ml-1.5 px-1.5 py-0 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium">{Math.round((props as ExistingBlockProps).similarityScore! * 100)}% match</span>}</>
             : (() => {
                 if (activeWorkspace) return `New ${activeWorkspace.name} Entry`
                 const defaultWs = workspaces.find(w => w.is_default)
@@ -1810,6 +1997,49 @@ export function JournalBlock(props: Props) {
             <span className="text-[10px] text-amber-500 ml-1">Tip: set a default workspace in settings</span>
           )}
         </span>
+        {/* Workspace pill — shown in All Workspaces mode, click to move */}
+        {isGlobalView && !isNewEntry && block?.workspace_id && (() => {
+          const ws = workspaces.find(w => w.id === block.workspace_id)
+          if (!ws) return null
+          const scheme = getScheme(ws.color_scheme)
+          return (
+            <div className="relative flex-shrink-0 ml-2" ref={pillRef}>
+              <button
+                onClick={(e) => { e.stopPropagation(); setPillMenuOpen(prev => !prev) }}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity"
+                style={{
+                  backgroundColor: scheme?.primary ?? '#6B7280',
+                  color: scheme?.textOnColor ?? '#FFFFFF',
+                }}
+              >
+                {ws.emoji && <span className="w-4 h-4 rounded-full inline-flex items-center justify-center text-[10px] leading-none flex-shrink-0" style={{ backgroundColor: scheme?.muted ?? '#F3F4F6' }}>{ws.emoji}</span>}
+                {ws.name}
+              </button>
+              {pillMenuOpen && (
+                <div className="absolute bottom-full right-0 mb-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[160px] z-50">
+                  <div className="px-3 py-1 text-[10px] text-gray-400 font-medium uppercase tracking-wide">Move to…</div>
+                  {workspaces.map(w => {
+                    const wScheme = getScheme(w.color_scheme)
+                    return (
+                      <button
+                        key={w.id}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => { setPillMenuOpen(false); moveToWorkspace(w.id) }}
+                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-gray-50 transition-colors ${
+                          block.workspace_id === w.id ? 'text-amber-700 font-medium' : 'text-gray-600'
+                        }`}
+                      >
+                        {w.emoji && <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0" style={{ backgroundColor: wScheme?.muted ?? '#F3F4F6' }}>{w.emoji}</span>}
+                        <span className="truncate">{w.name}</span>
+                        {block.workspace_id === w.id && <span className="text-[10px] text-gray-400 ml-auto">current</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {menuState && block && (

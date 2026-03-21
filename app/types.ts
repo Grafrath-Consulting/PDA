@@ -10,7 +10,7 @@ export interface Block {
   entry_type: 'info' | 'task'
   owner_id: string | null
   due_date: string | null
-  due_date_type: 'hard' | 'soft' | null
+  due_date_type: 'deadline' | 'target' | null
   archived_at: string | null
   created_at: string
   updated_at: string
