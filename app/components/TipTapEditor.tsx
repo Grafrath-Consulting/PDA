@@ -347,6 +347,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       if (!editor) return
       openLinkEditor(editor, prefilledText)
     },
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- openLinkEditor is stable, only editor instance matters
   }), [editor])
 
   // Notify parent via callback when handle is ready (bypasses next/dynamic ref issues)
@@ -376,6 +377,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       openLinkEditor: (prefilledText?: string) => openLinkEditor(editor, prefilledText),
     }
     onReadyRef.current?.(handle)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- openLinkEditor is stable, only editor instance matters
   }, [editor])
 
   const prevEditableRef = useRef(editable)

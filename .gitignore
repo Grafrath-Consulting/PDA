@@ -35,3 +35,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright / browser testing
+.playwright-mcp/
+
+# supabase CLI temp files
+supabase/.temp/
+
+# debug artifacts
+console-log.txt
+console-trace.txt
+
+# test screenshots
+*.png
+
+# test data scripts (keep locally, don't track)
+scripts/seed-test-data.js
+scripts/extend-entries.js
+scripts/vary-modified-dates.js

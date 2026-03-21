@@ -9,7 +9,7 @@ import { HistoryModal } from './HistoryModal'
 import type { TipTapEditorHandle } from './TipTapEditor'
 import { useWorkspace } from '@/context/WorkspaceContext'
 import { useDateFormat } from '@/context/DateFormatContext'
-import { formatTimestamp, formatDatePart, formatTimePart } from '@/lib/date-format'
+import { formatTimestamp, formatDatePart } from '@/lib/date-format'
 import { getScheme } from '@/constants/workspaceColorSchemes'
 import { useProperties } from '@/context/PropertiesContext'
 import { PropertyBubbles } from './PropertyBubbles'
@@ -283,9 +283,6 @@ interface Person {
 
 const ICON_SIZE = 14
 
-function taskIcon() {
-  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
-}
 function archiveIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></svg>
 }
@@ -300,9 +297,6 @@ function cutIcon() {
 }
 function copyIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-}
-function waitingIcon() {
-  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
 }
 function infoIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
@@ -1341,6 +1335,7 @@ export function JournalBlock(props: Props) {
         setAttachments((data ?? []) as Attachment[])
         setAttachmentsLoaded(true)
       })
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-fetch when block id changes, not on every content update
   }, [isNewEntry, props.block?.id, attachmentsLoaded])
 
   const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB

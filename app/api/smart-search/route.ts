@@ -298,7 +298,8 @@ function buildOrFilter(words: string[]): string {
 }
 
 async function runExactSearch(
-  svc: ReturnType<typeof createServiceClient>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  svc: any,
   userId: string,
   query: string,
   workspaceId: string | null,
@@ -331,7 +332,8 @@ async function runExactSearch(
 }
 
 async function runSemanticSearch(
-  svc: ReturnType<typeof createServiceClient>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  svc: any,
   userId: string,
   query: string,
   workspaceId: string | null,
@@ -368,7 +370,7 @@ async function runSemanticSearch(
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit)
 
-    if (ranked.length === 0) return { scores: {}, matchedChunks: {}, blockMap: new Map() }
+    if (ranked.length === 0) return { scores: {}, matchedChunks: {}, blockMap: new Map<string, Block>() }
 
     const blockIds = ranked.map(([id]) => id)
     let blockQuery = svc
@@ -381,7 +383,7 @@ async function runSemanticSearch(
     if (workspaceId) blockQuery = blockQuery.eq('workspace_id', workspaceId)
 
     const { data: blocks } = await blockQuery
-    const blockMap = new Map((blocks ?? []).map((b: Block) => [b.id, b]))
+    const blockMap = new Map<string, Block>((blocks ?? []).map((b: Block) => [b.id, b]))
 
     const scores: Record<string, number> = {}
     const matchedChunks: Record<string, string> = {}
@@ -401,7 +403,8 @@ async function runSemanticSearch(
 }
 
 async function runFilteredExactSearch(
-  svc: ReturnType<typeof createServiceClient>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  svc: any,
   userId: string,
   searchTerms: string,
   workspaceId: string | null,
