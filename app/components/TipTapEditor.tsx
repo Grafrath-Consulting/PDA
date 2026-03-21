@@ -52,7 +52,7 @@ interface Props {
   editable?: boolean
   toolbarVisible?: boolean
   onReady?: (handle: TipTapEditorHandle) => void
-  searchHighlight?: string
+  searchHighlight?: string | string[]
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
@@ -401,11 +401,12 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
     lastHTMLRef.current = editor.getHTML()
   }, [editor, content, editable])
 
-  const showHighlightLayer = !!searchHighlight && !editable
   const highlightedHTML = useMemo(
-    () => showHighlightLayer ? highlightHTML(content, searchHighlight!) : '',
-    [showHighlightLayer, content, searchHighlight]
+    () => searchHighlight && !editable ? highlightHTML(content, searchHighlight) : '',
+    [searchHighlight, editable, content]
   )
+  // Only show the highlight layer if it actually contains highlights
+  const showHighlightLayer = highlightedHTML.includes('search-highlight')
 
   if (!editor) return null
 
