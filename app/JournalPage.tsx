@@ -10,11 +10,13 @@ import { Block, Context } from './types'
 import { JournalBlock } from './components/JournalBlock'
 import { BlockFeed } from './components/BlockFeed'
 import { ContextFilter } from './components/ContextFilter'
-import { ArchivedSection, ArchivedSectionHandle } from './components/ArchivedSection'
+import { UserPreferencesPanel } from '@/components/UserPreferencesPanel'
+import { versionString, buildDateString } from '@/lib/version'
 import { RightPanel } from './components/RightPanel'
 import { PropertyFilterBar } from './components/PropertyFilterBar'
 import { PropertiesManager } from './components/PropertiesManager'
 import { ReportModal } from './components/ReportModal'
+import { PeopleModal } from './components/PeopleModal'
 import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
 import { useProperties } from '@/context/PropertiesContext'
 import { useDateFormat } from '@/context/DateFormatContext'
@@ -33,9 +35,11 @@ type SortMode = 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc
 
 interface Props {
   userId: string
+  email: string
+  displayName: string
 }
 
-export function JournalPage({ userId }: Props) {
+export function JournalPage({ userId, email, displayName }: Props) {
   const { activeWorkspace, activeWorkspaceId, activeScheme, isGlobalView, workspaces, setActiveWorkspace, refreshWorkspaces } = useWorkspace()
   const { propertiesForWorkspace } = useProperties()
   const { dateFormat } = useDateFormat()
@@ -57,6 +61,11 @@ export function JournalPage({ userId }: Props) {
   const [filterModifiedTo, setFilterModifiedTo] = useState('')
   const [filterDueFrom, setFilterDueFrom] = useState('')
   const [filterDueTo, setFilterDueTo] = useState('')
+  const [filterArchivedFrom, setFilterArchivedFrom] = useState('')
+  const [filterArchivedTo, setFilterArchivedTo] = useState('')
+  const [filterDeletedFrom, setFilterDeletedFrom] = useState('')
+  const [filterDeletedTo, setFilterDeletedTo] = useState('')
+  const [filterAssignee, setFilterAssignee] = useState<string | null>(null) // null=any, 'unassigned', or person id
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchMode, setSearchMode] = useState<'smart' | 'exact'>('smart')
   const [searchNonce, setSearchNonce] = useState(0)
@@ -84,6 +93,10 @@ export function JournalPage({ userId }: Props) {
   const [sortMode, setSortMode] = useState<SortMode>('created_desc')
   const [sortDropdownOpen, setSortDropdownOpen] = useState(false)
 
+  const activeWorkspaceIdRef = useRef(activeWorkspaceId)
+  activeWorkspaceIdRef.current = activeWorkspaceId
+  const isGlobalViewRef = useRef(isGlobalView)
+  isGlobalViewRef.current = isGlobalView
   const contextFilterRef = useRef(contextFilter)
   contextFilterRef.current = contextFilter
   const debouncedSearchRef = useRef(debouncedSearch)
@@ -104,7 +117,20 @@ export function JournalPage({ userId }: Props) {
   filterDueFromRef.current = filterDueFrom
   const filterDueToRef = useRef(filterDueTo)
   filterDueToRef.current = filterDueTo
-  const archiveRef = useRef<ArchivedSectionHandle>(null)
+  const filterArchivedFromRef = useRef(filterArchivedFrom)
+  filterArchivedFromRef.current = filterArchivedFrom
+  const filterArchivedToRef = useRef(filterArchivedTo)
+  filterArchivedToRef.current = filterArchivedTo
+  const filterDeletedFromRef = useRef(filterDeletedFrom)
+  filterDeletedFromRef.current = filterDeletedFrom
+  const filterDeletedToRef = useRef(filterDeletedTo)
+  filterDeletedToRef.current = filterDeletedTo
+  const filterAssigneeRef = useRef(filterAssignee)
+  filterAssigneeRef.current = filterAssignee
+  const [prefsOpen, setPrefsOpen] = useState(false)
+  const [peopleModalOpen, setPeopleModalOpen] = useState(false)
+  const [aboutModalOpen, setAboutModalOpen] = useState(false)
+  const [peopleList, setPeopleList] = useState<{ id: string; name: string }[]>([])
 
   useEffect(() => {
     const saved = localStorage.getItem(PANEL_STORAGE_KEY)
@@ -116,6 +142,14 @@ export function JournalPage({ userId }: Props) {
     const adv = localStorage.getItem(ADVANCED_OPEN_KEY)
     if (adv !== null) setAdvancedOpen(adv === 'true')
   }, [])
+
+  // Fetch people list for @mention support
+  const fetchPeople = useCallback(async () => {
+    const supabase = createClient()
+    const { data } = await supabase.from('people').select('id, name').eq('user_id', userId).order('name')
+    setPeopleList((data ?? []) as { id: string; name: string }[])
+  }, [userId])
+  useEffect(() => { fetchPeople() }, [fetchPeople])
 
   // Cmd+K / Ctrl+K to focus inline search
   useEffect(() => {
@@ -146,7 +180,7 @@ export function JournalPage({ userId }: Props) {
   }
 
   const hasActiveSearch = searchText.length > 0
-  const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo
+  const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo || !!filterArchivedFrom || !!filterArchivedTo || !!filterDeletedFrom || !!filterDeletedTo || !!filterAssignee
 
   // Smart search (combined exact + semantic + AI parsing)
   useEffect(() => {
@@ -281,25 +315,27 @@ export function JournalPage({ userId }: Props) {
       .from('journal_blocks')
       .select('*')
       .eq('user_id', userId)
-      .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .limit(isSearching ? SEARCH_PAGE_SIZE : PAGE_SIZE)
 
-    // Status filter — map UI selections to DB status values
-    const statuses = filterStatusesRef.current
-    const allStatuses = statuses.has('active') && statuses.has('archived') && statuses.has('deleted')
-    if (!allStatuses && statuses.size > 0) {
-      const dbStatuses: string[] = []
-      if (statuses.has('active')) dbStatuses.push('active')
-      if (statuses.has('archived')) dbStatuses.push('archived', 'complete')
-      if (dbStatuses.length > 0) query = query.in('status', dbStatuses)
-    } else if (statuses.size === 0) {
-      // Nothing selected — show nothing
-      query = query.eq('status', '__none__')
+    // Workspace filter
+    if (!isGlobalViewRef.current && activeWorkspaceIdRef.current) {
+      query = query.eq('workspace_id', activeWorkspaceIdRef.current)
     }
-    // Include deleted entries only if 'deleted' is selected
-    if (!statuses.has('deleted')) {
-      query = query.is('deleted_at', null)
+
+    // Status filter — build OR conditions for each selected bucket
+    // "active" = status IN (active) AND deleted_at IS NULL
+    // "archived" = status IN (archived, complete) AND deleted_at IS NULL
+    // "deleted" = deleted_at IS NOT NULL
+    const statuses = filterStatusesRef.current
+    if (statuses.size === 0) {
+      query = query.eq('status', '__none__')
+    } else {
+      const orClauses: string[] = []
+      if (statuses.has('active')) orClauses.push('and(status.eq.active,deleted_at.is.null)')
+      if (statuses.has('archived')) orClauses.push('and(status.in.(archived,complete),deleted_at.is.null)')
+      if (statuses.has('deleted')) orClauses.push('deleted_at.not.is.null')
+      if (orClauses.length > 0) query = query.or(orClauses.join(','))
     }
 
     // Context filter
@@ -341,6 +377,27 @@ export function JournalPage({ userId }: Props) {
     if (filterDueToRef.current) {
       query = query.lte('due_date', filterDueToRef.current + 'T23:59:59')
     }
+    // Archived/Done date range — filter on archived_at OR completed_at
+    if (filterArchivedFromRef.current) {
+      query = query.or(`archived_at.gte.${filterArchivedFromRef.current}T00:00:00,completed_at.gte.${filterArchivedFromRef.current}T00:00:00`)
+    }
+    if (filterArchivedToRef.current) {
+      query = query.or(`archived_at.lte.${filterArchivedToRef.current}T23:59:59,completed_at.lte.${filterArchivedToRef.current}T23:59:59`)
+    }
+    // Deleted date range
+    if (filterDeletedFromRef.current) {
+      query = query.gte('deleted_at', filterDeletedFromRef.current + 'T00:00:00')
+    }
+    if (filterDeletedToRef.current) {
+      query = query.lte('deleted_at', filterDeletedToRef.current + 'T23:59:59')
+    }
+
+    // Assignee filter
+    if (filterAssigneeRef.current === 'me') {
+      query = query.is('owner_id', null)
+    } else if (filterAssigneeRef.current) {
+      query = query.eq('owner_id', filterAssigneeRef.current)
+    }
 
     // Pagination (disabled during search)
     if (cursor && !isSearching) {
@@ -373,7 +430,7 @@ export function JournalPage({ userId }: Props) {
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, searchMode, searchNonce])
+  }, [activeWorkspaceId, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, searchMode, searchNonce])
 
   // Batch-load entry_properties for all visible blocks (including smart search results)
   const visibleBlockIds = (() => {
@@ -446,7 +503,6 @@ export function JournalPage({ userId }: Props) {
   }
 
   function handleBlockArchived(block: Block) {
-    archiveRef.current?.addBlock(block)
     setSmartSearchResults((prev) =>
       prev ? prev.filter((b) => b.id !== block.id) : prev
     )
@@ -642,10 +698,12 @@ export function JournalPage({ userId }: Props) {
           borderColor: activeScheme ? 'transparent' : '#E5E0D0',
         }}
       >
-        <div className="relative">
+        <div className="flex items-center gap-4">
+          {/* Workspace switcher */}
+          <div className="relative">
           <button
             onClick={() => setSwitcherOpen(prev => !prev)}
-            className={`flex items-center gap-2 px-2 py-1.5 -ml-2 rounded-lg transition-colors ${activeScheme ? 'hover:bg-white/10' : 'hover:bg-gray-100'}`}
+            className={`flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors ${activeScheme ? 'hover:bg-white/10' : 'hover:bg-gray-100'}`}
           >
             {isGlobalView ? (
               <>
@@ -677,9 +735,14 @@ export function JournalPage({ userId }: Props) {
               onClose={() => setSwitcherOpen(false)}
             />
           )}
+          </div>
         </div>
 
-        <div className="flex-1" />
+        {/* PDA wordmark — centered */}
+        <div className="flex-1 flex flex-col items-center justify-center">
+          <span className="text-sm font-bold leading-tight" style={{ color: barText }}>PDA</span>
+          <span className="text-[11px] leading-tight opacity-60" style={{ color: barText }}>capture everything, organize later</span>
+        </div>
 
         <div className="flex items-center gap-1">
           <button
@@ -815,6 +878,43 @@ export function JournalPage({ userId }: Props) {
               <line x1="15" y1="3" x2="15" y2="21" />
             </svg>
           </button>
+          {/* People button */}
+          <button
+            onClick={() => setPeopleModalOpen(true)}
+            title="People"
+            className={`p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </button>
+          {/* User / Account button */}
+          <button
+            onClick={() => setPrefsOpen(true)}
+            title="Account settings"
+            className={`p-1 rounded-lg transition-colors ${btnInactiveClass}`}
+          >
+            <div className="w-7 h-7 rounded-full bg-[#FEF3C7] flex items-center justify-center flex-shrink-0">
+              <span className="text-xs font-medium text-[#92400E]">
+                {(displayName || email || '?')[0].toUpperCase()}
+              </span>
+            </div>
+          </button>
+          {/* About / Version button */}
+          <button
+            onClick={() => setAboutModalOpen(true)}
+            title="About PDA"
+            className={`p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -905,23 +1005,43 @@ export function JournalPage({ userId }: Props) {
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-gray-400 font-medium">Status:</span>
-              {([['active', 'Open'], ['archived', 'Archived'], ['deleted', 'Deleted']] as const).map(([s, label]) => (
+              {([['active', 'Open', ''], ['archived', 'Archived', 'Includes completed tasks'], ['deleted', 'Deleted', '']] as const).map(([s, label, tip]) => (
                 <button key={s} onClick={() => setFilterStatuses(prev => {
                   const next = new Set(prev)
-                  if (next.has(s)) next.delete(s); else next.add(s)
+                  if (next.has(s)) { if (next.size > 1) next.delete(s) } else next.add(s)
                   return next
                 })}
+                  title={tip || undefined}
                   className={`px-2 py-0.5 rounded-full border text-[11px] font-medium transition-all ${filterStatuses.has(s) ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
                   {label}
                 </button>
               ))}
             </div>
+            {/* Assignee filter */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-400 font-medium">Assignee:</span>
+              <select
+                value={filterAssignee ?? ''}
+                onChange={(e) => setFilterAssignee(e.target.value || null)}
+                className={`px-2 py-0.5 rounded-full border text-[11px] font-medium transition-all cursor-pointer outline-none ${
+                  filterAssignee ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}
+              >
+                <option value="">Any</option>
+                <option value="me">Me</option>
+                {peopleList.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
             {/* Date range filters */}
             {([
-              { label: 'Created', fromId: 'filter-date-from', toId: 'filter-date-to', fromVal: filterDateFrom, toVal: filterDateTo, setFrom: setFilterDateFrom, setTo: setFilterDateTo },
-              { label: 'Modified', fromId: 'filter-mod-from', toId: 'filter-mod-to', fromVal: filterModifiedFrom, toVal: filterModifiedTo, setFrom: setFilterModifiedFrom, setTo: setFilterModifiedTo },
-              { label: 'Due', fromId: 'filter-due-from', toId: 'filter-due-to', fromVal: filterDueFrom, toVal: filterDueTo, setFrom: setFilterDueFrom, setTo: setFilterDueTo },
-            ] as const).map(({ label, fromId, toId, fromVal, toVal, setFrom, setTo }) => {
+              { label: 'Created', fromId: 'filter-date-from', toId: 'filter-date-to', fromVal: filterDateFrom, toVal: filterDateTo, setFrom: setFilterDateFrom, setTo: setFilterDateTo, showWhen: null },
+              { label: 'Modified', fromId: 'filter-mod-from', toId: 'filter-mod-to', fromVal: filterModifiedFrom, toVal: filterModifiedTo, setFrom: setFilterModifiedFrom, setTo: setFilterModifiedTo, showWhen: null },
+              { label: 'Due', fromId: 'filter-due-from', toId: 'filter-due-to', fromVal: filterDueFrom, toVal: filterDueTo, setFrom: setFilterDueFrom, setTo: setFilterDueTo, showWhen: null },
+              { label: 'Archived / Done', fromId: 'filter-arch-from', toId: 'filter-arch-to', fromVal: filterArchivedFrom, toVal: filterArchivedTo, setFrom: setFilterArchivedFrom, setTo: setFilterArchivedTo, showWhen: 'archived' as const },
+              { label: 'Deleted', fromId: 'filter-del-from', toId: 'filter-del-to', fromVal: filterDeletedFrom, toVal: filterDeletedTo, setFrom: setFilterDeletedFrom, setTo: setFilterDeletedTo, showWhen: 'deleted' as const },
+            ] as const).filter(({ showWhen }) => !showWhen || filterStatuses.has(showWhen)).map(({ label, fromId, toId, fromVal, toVal, setFrom, setTo }) => {
               const invalid = !!(fromVal && toVal && fromVal > toVal)
               return (
               <div key={label} className="flex items-center gap-1.5">
@@ -1020,7 +1140,7 @@ export function JournalPage({ userId }: Props) {
               </button>
             </div>
             {hasNonDefaultFilters && (
-              <button onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo('') }}
+              <button onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null) }}
                 className="text-[11px] text-gray-400 hover:text-gray-600 underline">
                 Clear
               </button>
@@ -1039,11 +1159,16 @@ export function JournalPage({ userId }: Props) {
           if (filterModifiedTo) count++
           if (filterDueFrom) count++
           if (filterDueTo) count++
+          if (filterArchivedFrom) count++
+          if (filterArchivedTo) count++
+          if (filterDeletedFrom) count++
+          if (filterDeletedTo) count++
+          if (filterAssignee) count++
           return (
             <div className="flex items-center gap-2 text-[11px] text-amber-700 mt-2 pt-2 border-t border-[#EDE9DB]">
               <span>{count} hidden filter{count !== 1 ? 's' : ''} applied</span>
               <button
-                onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo('') }}
+                onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null) }}
                 className="text-amber-600 hover:text-amber-800 underline"
               >
                 Clear all filters
@@ -1100,6 +1225,7 @@ export function JournalPage({ userId }: Props) {
               autosaveInterval={autosaveInterval}
               formattingVisible={formattingVisible}
               onToggleFormatting={toggleFormatting}
+              people={peopleList}
             />
 
             <BlockFeed
@@ -1121,11 +1247,9 @@ export function JournalPage({ userId }: Props) {
               searchHighlight={(aiParsedInfo?.searchTerms || debouncedSearch) || undefined}
               similarityScores={searchMode === 'smart' ? smartSearchScores : undefined}
               matchedChunks={searchMode === 'smart' ? smartSearchChunks : undefined}
+              people={peopleList}
             />
 
-            {!debouncedSearch && (
-              <ArchivedSection ref={archiveRef} userId={userId} activeWorkspaceId={activeWorkspaceId} onRestored={handleNewBlock} />
-            )}
           </div>
         </div>
 
@@ -1145,12 +1269,7 @@ export function JournalPage({ userId }: Props) {
         )}
       </div>
 
-      {/* TODO: Semantic/AI-powered search from SearchOverlay is not yet replicated here.
-         The old SearchOverlay supported a 'semantic' search mode toggle and per-result
-         navigation across workspaces. Those features should be added when embeddings
-         infrastructure is in place. */}
-
-      {reportOpen && <ReportModal userId={userId} onClose={() => setReportOpen(false)} />}
+{reportOpen && <ReportModal userId={userId} onClose={() => setReportOpen(false)} />}
 
       <PropertiesManager open={propsManagerOpen} onClose={() => setPropsManagerOpen(false)} userId={userId} />
 
@@ -1167,6 +1286,30 @@ export function JournalPage({ userId }: Props) {
             setEditingWorkspace(null)
           }}
         />
+      )}
+
+      <UserPreferencesPanel
+        email={email}
+        displayName={displayName}
+        userId={userId}
+        open={prefsOpen}
+        onClose={() => setPrefsOpen(false)}
+      />
+
+      <PeopleModal open={peopleModalOpen} onClose={() => { setPeopleModalOpen(false); fetchPeople() }} userId={userId} />
+
+      {/* About modal */}
+      {aboutModalOpen && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setAboutModalOpen(false)} />
+          <div className="relative bg-white rounded-xl shadow-xl px-8 py-6 max-w-sm w-full text-center">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">PDA</h2>
+            <p className="text-sm text-gray-500 mb-1">{versionString()}</p>
+            <p className="text-xs text-gray-400 mb-4">Built {buildDateString()}</p>
+            <button onClick={() => setAboutModalOpen(false)} className="px-4 py-1.5 text-sm rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">Close</button>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   )

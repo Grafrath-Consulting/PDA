@@ -10,7 +10,11 @@ import { TableHeader } from '@tiptap/extension-table-header'
 import Placeholder from '@tiptap/extension-placeholder'
 import Link from '@tiptap/extension-link'
 import Highlight from '@tiptap/extension-highlight'
+import Mention from '@tiptap/extension-mention'
 import { Extension } from '@tiptap/core'
+import { ReactRenderer } from '@tiptap/react'
+import type { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion'
+import { MentionSuggestionList, MentionSuggestionHandle, MentionSuggestionItem } from './MentionSuggestion'
 import { useState, useEffect, useLayoutEffect, useImperativeHandle, useRef, forwardRef, useCallback, useMemo, lazy, Suspense } from 'react'
 import { highlightHTML } from '@/lib/highlight-html'
 import { createPortal } from 'react-dom'
@@ -54,10 +58,11 @@ interface Props {
   onReady?: (handle: TipTapEditorHandle) => void
   searchHighlight?: string | string[]
   matchedChunk?: string
+  people?: MentionSuggestionItem[]
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
-  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, onReady, searchHighlight, matchedChunk },
+  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, onReady, searchHighlight, matchedChunk, people },
   ref
 ) {
   // Keep refs so the closures inside useEditor always call the latest callbacks
@@ -66,6 +71,8 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
   const lastHTMLRef = useRef(content)
+  const peopleRef = useRef(people)
+  peopleRef.current = people
 
   // Emoji picker state
   const [emojiOpen, setEmojiOpen] = useState(false)
@@ -256,6 +263,45 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       }),
       Placeholder.configure({ placeholder: placeholder ?? '' }),
       TabHandler,
+      Mention.configure({
+        HTMLAttributes: {
+          class: 'mention-pill',
+        },
+        suggestion: {
+          items: ({ query }: { query: string }) => {
+            const list = peopleRef.current ?? []
+            return list
+              .filter(p => p.name.toLowerCase().includes(query.toLowerCase()))
+              .slice(0, 5)
+          },
+          render: () => {
+            let component: ReactRenderer<MentionSuggestionHandle> | null = null
+            return {
+              onStart: (props: SuggestionProps) => {
+                component = new ReactRenderer(MentionSuggestionList, {
+                  props,
+                  editor: props.editor,
+                })
+              },
+              onUpdate: (props: SuggestionProps) => {
+                component?.updateProps(props)
+              },
+              onKeyDown: (props: SuggestionKeyDownProps) => {
+                if (props.event.key === 'Escape') {
+                  component?.destroy()
+                  component = null
+                  return true
+                }
+                return component?.ref?.onKeyDown(props) ?? false
+              },
+              onExit: () => {
+                component?.destroy()
+                component = null
+              },
+            }
+          },
+        },
+      }),
     ],
     content,
     editable,

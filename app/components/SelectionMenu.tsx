@@ -20,12 +20,12 @@ export function SelectionMenu({ position, selectedText, onClose, onAction, disab
     onClose()
   }
 
-  // Position to the left of the journal block, vertically centred on the selection
+  // Position below the selection, centered horizontally on it
   const style: React.CSSProperties = {
     position: 'fixed',
     left: position.x,
-    top: position.y,
-    transform: 'translate(calc(-100% - 8px), -50%)',
+    top: position.y + 6,
+    transform: 'translateX(-50%)',
     zIndex: 50,
   }
 

@@ -14,6 +14,7 @@ export interface Block {
   due_date: string | null
   due_date_type: 'deadline' | 'target' | null
   archived_at: string | null
+  completed_at: string | null
   created_at: string
   updated_at: string
   deleted_at: string | null

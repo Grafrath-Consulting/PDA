@@ -189,6 +189,20 @@ body {
   padding: 0;
 }
 
+/* Mention pill styling */
+.mention-pill,
+.tiptap-content .mention-pill {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  background-color: #FEF3C7;
+  color: #92400E;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+  user-select: all;
+}
+
 /* Hide native date input picker icon — we use a custom calendar icon instead */
 .date-no-icon::-webkit-calendar-picker-indicator {
   display: none;

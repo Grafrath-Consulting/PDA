@@ -16,7 +16,14 @@ const COLOR_SWATCHES: Record<string, string> = {
   sky: '#0EA5E9', fuchsia: '#D946EF', lime: '#84CC16', slate: '#64748B',
 }
 
-function randomColor(): string {
+function randomColor(usedColors?: (string | null)[]): string {
+  if (usedColors && usedColors.length > 0) {
+    const used = new Set(usedColors.filter(Boolean))
+    const available = VALUE_COLORS.filter(c => !used.has(c))
+    if (available.length > 0) {
+      return available[Math.floor(Math.random() * available.length)]
+    }
+  }
   return VALUE_COLORS[Math.floor(Math.random() * VALUE_COLORS.length)]
 }
 
@@ -93,7 +100,17 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
   const [newValueLabel, setNewValueLabel] = useState('')
   const [newValueColor, setNewValueColor] = useState<string | null>(null)
   const [showNewColorPicker, setShowNewColorPicker] = useState(false)
+  const [optimisticPinned, setOptimisticPinned] = useState(property.pinned_in_filter_bar)
+  const [optimisticMulti, setOptimisticMulti] = useState(property.allow_multiple)
   const newColorRef = useRef<HTMLDivElement>(null)
+
+  // Sync optimistic state when property updates from server
+  useEffect(() => {
+    setOptimisticPinned(property.pinned_in_filter_bar)
+  }, [property.pinned_in_filter_bar])
+  useEffect(() => {
+    setOptimisticMulti(property.allow_multiple)
+  }, [property.allow_multiple])
 
   useEffect(() => {
     if (!showNewColorPicker) return
@@ -163,31 +180,56 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
         <div className="flex items-center gap-2">
           <button
             onClick={async () => {
+              const newVal = !optimisticPinned
+              setOptimisticPinned(newVal)
               const supabase = createClient()
-              await supabase.from('properties').update({ pinned_in_filter_bar: !property.pinned_in_filter_bar }).eq('id', property.id)
+              await supabase.from('properties').update({ pinned_in_filter_bar: newVal }).eq('id', property.id)
               onChanged()
             }}
-            title={property.pinned_in_filter_bar ? 'Remove from quick bar' : 'Show in quick bar'}
-            className={`transition-colors ${property.pinned_in_filter_bar ? 'text-amber-500' : 'text-gray-300 hover:text-gray-400'}`}
+            title={optimisticPinned ? 'Remove from quick bar' : 'Show in quick bar'}
+            className={`transition-colors ${optimisticPinned ? 'text-amber-500' : 'text-gray-300 hover:text-gray-400'}`}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill={property.pinned_in_filter_bar ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill={optimisticPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z" />
             </svg>
           </button>
-          <button
-            onClick={async () => {
-              const supabase = createClient()
-              await supabase.from('properties').update({ allow_multiple: !property.allow_multiple }).eq('id', property.id)
-              onChanged()
-            }}
-            title={property.allow_multiple ? 'Switch to single-select' : 'Allow multiple selections'}
-            className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${property.allow_multiple ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-gray-50 text-gray-400 border border-gray-200 hover:text-gray-500'}`}
-          >
-            {property.allow_multiple ? 'Multi' : 'Single'}
-          </button>
-          <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{scopeLabel}</span>
+          <div className="flex items-center bg-gray-100 rounded-md p-0.5">
+            <button
+              onClick={async () => {
+                if (!optimisticMulti) return
+                setOptimisticMulti(false)
+                const supabase = createClient()
+                await supabase.from('properties').update({ allow_multiple: false }).eq('id', property.id)
+                onChanged()
+              }}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                !optimisticMulti
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Single
+            </button>
+            <button
+              onClick={async () => {
+                if (optimisticMulti) return
+                setOptimisticMulti(true)
+                const supabase = createClient()
+                await supabase.from('properties').update({ allow_multiple: true }).eq('id', property.id)
+                onChanged()
+              }}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                optimisticMulti
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Multi
+            </button>
+          </div>
+          <span className="text-[11px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{scopeLabel}</span>
           <button onClick={deleteProperty} className="text-gray-300 hover:text-red-500 transition-colors" title="Delete property">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
           </button>
         </div>
       </div>
@@ -239,7 +281,7 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
         </div>
       ) : (
         <button
-          onClick={() => { setNewValueColor(randomColor()); setAddingValue(true) }}
+          onClick={() => { setNewValueColor(randomColor(property.values.map(v => v.color))); setAddingValue(true) }}
           className="text-[11px] text-gray-400 hover:text-gray-600 transition-colors"
         >
           + Add value

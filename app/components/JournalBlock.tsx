@@ -119,6 +119,7 @@ interface BaseProps {
   autosaveInterval?: number
   formattingVisible: boolean
   onToggleFormatting: () => void
+  people?: { id: string; name: string }[]
 }
 
 interface NewEntryProps extends BaseProps {
@@ -354,6 +355,7 @@ export function JournalBlock(props: Props) {
   const cardRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+  const addPropertyBtnRef = useRef<HTMLButtonElement>(null)
 
   const savingRef = useRef(false)
   const suppressBlurRef = useRef(false)
@@ -454,9 +456,8 @@ export function JournalBlock(props: Props) {
         tempDiv.appendChild(fragment)
         const selHTML = tempDiv.innerHTML
 
-        const cardRect = cardRef.current?.getBoundingClientRect()
-        const menuX = cardRect ? cardRect.left : rect.left
-        const menuY = rect.top + rect.height / 2
+        const menuX = rect.left + rect.width / 2
+        const menuY = rect.bottom
         setMenuState({ selText, selHTML, x: menuX, y: menuY })
       })
     }
@@ -1257,6 +1258,25 @@ export function JournalBlock(props: Props) {
     p.onBlockArchived?.({ ...p.block, status: 'archived', is_archived: true, archived_at: archivedAt })
   }
 
+  async function restoreBlock() {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    const supabase = createClient()
+    const updates: Record<string, unknown> = { status: 'active', is_archived: false, archived_at: null, completed_at: null, deleted_at: null }
+    await supabase.from('journal_blocks').update(updates).eq('id', p.block.id)
+    // Update in-place: notify parent with restored block, but don't remove from feed
+    p.onUpdate({ ...p.block, status: 'active', is_archived: false, archived_at: null, completed_at: null, deleted_at: null })
+    setRestoredLocally(true)
+  }
+
+  async function permanentlyDeleteBlock() {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    const supabase = createClient()
+    await supabase.from('journal_blocks').delete().eq('id', p.block.id)
+    p.onRemove(p.block.id)
+  }
+
   async function toggleEntryType() {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
@@ -1475,6 +1495,14 @@ export function JournalBlock(props: Props) {
   const isTask = block?.entry_type === 'task'
   const isComplete = block?.task_status === 'done'
 
+  // Lifecycle state — determines rendering mode for non-active entries
+  const isArchived = block?.status === 'archived'
+  const isCompleted = block?.status === 'complete'
+  const isDeleted = !!block?.deleted_at
+  const isInactive = isArchived || isCompleted || isDeleted
+  const [confirmPermanentDelete, setConfirmPermanentDelete] = useState(false)
+  const [restoredLocally, setRestoredLocally] = useState(false)
+
   // Route an action through the correct handler depending on new entry vs existing block
   function popoverAction(action: SelectionAction) {
     setPopoverOpen(false)
@@ -1530,10 +1558,15 @@ export function JournalBlock(props: Props) {
     }
   }
 
-  // Derive border left color for focused/workspace states
+  // Derive border left color for focused/workspace/lifecycle states
   let borderLeftColor: string | undefined
   if (!isDragOver) {
-    if (showWsBorder) {
+    if (isInactive && !restoredLocally) {
+      // Lifecycle accent border for inactive entries
+      if (isDeleted) borderLeftColor = '#F87171' // red-400
+      else if (isCompleted) borderLeftColor = '#4ADE80' // green-400
+      else borderLeftColor = '#FBBF24' // amber-400
+    } else if (showWsBorder) {
       borderLeftColor = wsLeftColor
     } else if (focused) {
       borderLeftColor = activeScheme?.primary ?? '#F59E0B'
@@ -1554,12 +1587,12 @@ export function JournalBlock(props: Props) {
       } ${
         isDragOver
           ? 'border-2 border-amber-400 bg-amber-50/50 shadow-md'
-          : showWsBorder
+          : (isInactive && !restoredLocally) || showWsBorder
             ? `border-l-[3px] border border-[#E5E0D0] ${focused ? 'shadow-md' : 'hover:border-[#D5D0C0]'}`
             : focused
               ? 'border-l-[3px] border border-[#E5E0D0] shadow-md'
               : 'border border-[#E5E0D0] pl-[2px] hover:border-[#D5D0C0]'
-      } ${isDragOver ? '' : focused && !isNewEntry ? '' : 'bg-white'}`}
+      } ${isDragOver ? '' : focused && !isNewEntry ? '' : 'bg-white'} ${isDeleted && !restoredLocally ? 'opacity-60' : ''}`}
       style={{
         ...(focused && !isNewEntry && !isDragOver
             ? { backgroundColor: activeScheme?.muted ?? '#FFFBEB' }
@@ -1610,6 +1643,23 @@ export function JournalBlock(props: Props) {
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" fill="white" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
           )}
         </div>
+        {/* Status badge for inactive entries */}
+        {isInactive && !restoredLocally && (
+          <span className={`pointer-events-auto px-2 py-0.5 rounded-full text-[10px] font-medium leading-tight ${
+            isDeleted
+              ? 'bg-red-50 text-red-600 border border-red-200'
+              : isCompleted
+                ? 'bg-green-50 text-green-700 border border-green-200'
+                : 'bg-amber-50 text-amber-700 border border-amber-200'
+          }`}>
+            {isDeleted ? 'Deleted' : isCompleted ? 'Completed' : 'Archived'}
+          </span>
+        )}
+        {restoredLocally && (
+          <span className="pointer-events-auto px-2 py-0.5 rounded-full text-[10px] font-medium leading-tight bg-blue-50 text-blue-600 border border-blue-200">
+            Restored
+          </span>
+        )}
         <div className="flex items-center gap-1 overflow-hidden pointer-events-auto">
           <PropertyBubbles
             appliedValueIds={appliedProps}
@@ -1617,9 +1667,10 @@ export function JournalBlock(props: Props) {
             onClickValue={() => setPropertyEditorOpen(true)}
           />
         </div>
-        {/* Add-tag button — sits after last pill */}
-        <div className="relative pointer-events-auto">
+        {/* Add-tag button — sits after last pill (hidden for inactive entries) */}
+        {!(isInactive && !restoredLocally) && <div className="relative pointer-events-auto">
           <button
+            ref={addPropertyBtnRef}
             type="button"
             title="Add property"
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
@@ -1639,6 +1690,7 @@ export function JournalBlock(props: Props) {
                 properties={propertiesForWorkspace(activeWorkspaceId)}
                 onChanged={(newIds) => (props as ExistingBlockProps).onPropertyChanged?.(newIds)}
                 onClose={() => setPropertyEditorOpen(false)}
+                anchorRef={addPropertyBtnRef}
               />
             ) : (
               <PropertyEditor
@@ -1647,52 +1699,104 @@ export function JournalBlock(props: Props) {
                 properties={propertiesForWorkspace(activeWorkspaceId)}
                 onChanged={(newIds) => setPendingPropertyIds(newIds)}
                 onClose={() => setPropertyEditorOpen(false)}
+                anchorRef={addPropertyBtnRef}
               />
             )
           )}
-        </div>
+        </div>}
       </div>
 
       {/* ── ACTION ICONS — pinned top-right corner ── */}
-      <div className={`absolute top-0 right-2 -translate-y-1/2 z-10 flex items-center gap-0.5 transition-opacity ${
-        popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-      }`}>
-        {/* Toggle formatting bar — only when focused */}
-        {focused && (
+      {isInactive && !restoredLocally ? (
+        <div className={`absolute top-0 right-2 -translate-y-1/2 z-10 flex items-center gap-0.5 transition-opacity opacity-0 group-hover:opacity-100`}>
+          {confirmPermanentDelete ? (
+            <>
+              <span className="text-[10px] text-red-600 font-medium mr-0.5">Are you sure?</span>
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+                onClick={(e) => { e.stopPropagation(); permanentlyDeleteBlock() }}
+                className="h-6 px-2 flex items-center justify-center rounded-full bg-red-500 border border-red-500 text-white text-[10px] font-medium hover:bg-red-600"
+              >
+                Confirm
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+                onClick={(e) => { e.stopPropagation(); setConfirmPermanentDelete(false) }}
+                className="h-6 px-2 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-500 text-[10px] font-medium hover:border-gray-400"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                title="Restore"
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+                onClick={(e) => { e.stopPropagation(); restoreBlock() }}
+                className="h-6 px-2 flex items-center gap-1 rounded-full bg-white border border-gray-200 text-gray-500 text-[10px] font-medium hover:text-green-600 hover:border-green-400"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+                Restore
+              </button>
+              {isDeleted && (
+                <button
+                  type="button"
+                  title="Delete permanently"
+                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+                  onClick={(e) => { e.stopPropagation(); setConfirmPermanentDelete(true) }}
+                  className="h-6 px-2 flex items-center gap-1 rounded-full bg-white border border-gray-200 text-red-500 text-[10px] font-medium hover:bg-red-50 hover:border-red-300"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+                  Delete forever
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+        <div className={`absolute top-0 right-2 -translate-y-1/2 z-10 flex items-center gap-0.5 transition-opacity ${
+          popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        }`}>
+          {/* Toggle formatting bar — only when focused */}
+          {focused && (
+            <button
+              type="button"
+              title="Formatting (Alt+Shift+F)"
+              onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+              onClick={(e) => { e.stopPropagation(); onToggleFormatting() }}
+              className={`w-6 h-6 flex items-center justify-center rounded-full bg-white border text-[10px] font-semibold leading-none transition-colors ${
+                formattingVisible ? 'border-amber-400 text-amber-700 bg-amber-50' : 'border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400'
+              }`}
+            >
+              Aa
+            </button>
+          )}
+          {/* Attach file */}
           <button
             type="button"
-            title="Formatting (Alt+Shift+F)"
+            title="Attach file"
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
-            onClick={(e) => { e.stopPropagation(); onToggleFormatting() }}
-            className={`w-6 h-6 flex items-center justify-center rounded-full bg-white border text-[10px] font-semibold leading-none transition-colors ${
-              formattingVisible ? 'border-amber-400 text-amber-700 bg-amber-50' : 'border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400'
-            }`}
+            onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click() }}
+            className="w-6 h-6 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400"
           >
-            Aa
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
           </button>
-        )}
-        {/* Attach file */}
-        <button
-          type="button"
-          title="Attach file"
-          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
-          onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click() }}
-          className="w-6 h-6 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
-        </button>
-        {/* Actions menu (⋮) — always shown */}
-        <button
-          ref={triggerRef}
-          type="button"
-          title="Actions"
-          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
-          onClick={(e) => { e.stopPropagation(); setPopoverOpen(prev => !prev) }}
-          className="w-6 h-6 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg>
-        </button>
-      </div>
+          {/* Actions menu (⋮) — always shown */}
+          <button
+            ref={triggerRef}
+            type="button"
+            title="Actions"
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onClick={(e) => { e.stopPropagation(); setPopoverOpen(prev => !prev) }}
+            className="w-6 h-6 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg>
+          </button>
+        </div>
+      )}
 
       {/* Popover menu */}
       {popoverOpen && (
@@ -1765,11 +1869,12 @@ export function JournalBlock(props: Props) {
             autoFocus={isNewEntry}
             onSubmit={handleSave}
             onChange={handleEditorChange}
-            editable={isNewEntry || focused}
+            editable={(isNewEntry || focused) && !(isInactive && !restoredLocally)}
             toolbarVisible={showToolbar}
             onReady={(handle) => { editorHandleRef.current = handle }}
             searchHighlight={!isNewEntry && !focused ? (props as ExistingBlockProps).searchHighlight : undefined}
             matchedChunk={!isNewEntry && !focused ? (props as ExistingBlockProps).matchedChunk : undefined}
+            people={props.people}
           />
         </div>
         {summarizing && (
@@ -2010,7 +2115,7 @@ export function JournalBlock(props: Props) {
       <div className="flex items-center px-4 pb-1.5 pt-0 select-none">
         <span className="text-[11px] text-gray-400 flex-1" suppressHydrationWarning>
           {block
-            ? <>Created {formatTimestamp(block.created_at, dateFormat, timeFormat)}{showModified && <span> · Modified {formatTimestamp(block.updated_at, dateFormat, timeFormat)}</span>}{(props as ExistingBlockProps).similarityScore != null && <span className="ml-1.5 px-1.5 py-0 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium">{Math.round((props as ExistingBlockProps).similarityScore! * 100)}% match</span>}</>
+            ? <>Created {formatTimestamp(block.created_at, dateFormat, timeFormat)}{showModified && <span> · Modified {formatTimestamp(block.updated_at, dateFormat, timeFormat)}</span>}{isArchived && block.archived_at && !restoredLocally && <span> · Archived {formatTimestamp(block.archived_at, dateFormat, timeFormat)}</span>}{isCompleted && block.completed_at && !restoredLocally && <span> · Completed {formatTimestamp(block.completed_at, dateFormat, timeFormat)}</span>}{isDeleted && block.deleted_at && !restoredLocally && <span> · Deleted {formatTimestamp(block.deleted_at, dateFormat, timeFormat)}</span>}{(props as ExistingBlockProps).similarityScore != null && <span className="ml-1.5 px-1.5 py-0 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium">{Math.round((props as ExistingBlockProps).similarityScore! * 100)}% match</span>}</>
             : (() => {
                 if (activeWorkspace) return `New ${activeWorkspace.name} Entry`
                 const defaultWs = workspaces.find(w => w.is_default)

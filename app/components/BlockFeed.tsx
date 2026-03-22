@@ -29,6 +29,7 @@ interface Props {
   searchHighlight?: string | string[]
   similarityScores?: Record<string, number>
   matchedChunks?: Record<string, string>
+  people?: { id: string; name: string }[]
 }
 
 function SortableBlock({
@@ -96,6 +97,7 @@ export function BlockFeed({
   searchHighlight,
   similarityScores,
   matchedChunks,
+  people,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [activeBlock, setActiveBlock] = useState<Block | null>(null)
@@ -168,6 +170,7 @@ export function BlockFeed({
         similarityScore={similarityScores?.[block.id]}
         searchHighlight={blockHighlight}
         matchedChunk={matchedChunks?.[block.id]}
+        people={people}
       />
     )
   }

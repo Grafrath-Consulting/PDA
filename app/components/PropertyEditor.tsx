@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { createClient } from '@/lib/supabase/client'
 import { Property } from '@/context/PropertiesContext'
 
@@ -34,14 +35,38 @@ interface Props {
   properties: Property[]
   onChanged: (newAppliedIds: Set<string>) => void
   onClose: () => void
+  anchorRef?: React.RefObject<HTMLElement | null>
 }
 
-export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged, onClose }: Props) {
+export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged, onClose, anchorRef }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [pickerTop, setPickerTop] = useState(0)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+
+  // Position the portal relative to the anchor button
+  useLayoutEffect(() => {
+    if (!anchorRef?.current) return
+    const rect = anchorRef.current.getBoundingClientRect()
+    setPos({ top: rect.top, left: rect.right + 8 })
+  }, [anchorRef])
+
+  // Reposition on scroll/resize
+  useEffect(() => {
+    if (!anchorRef?.current) return
+    function update() {
+      const rect = anchorRef!.current!.getBoundingClientRect()
+      setPos({ top: rect.top, left: rect.right + 8 })
+    }
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [anchorRef])
 
   useLayoutEffect(() => {
     if (!openDropdown || !rowRefs.current[openDropdown] || !listRef.current) return
@@ -142,10 +167,13 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
   const pickerItemCount = openProp ? openProp.values.length + 1 : 0
   const needsScroll = pickerItemCount > 12
 
-  return (
+  const usePortal = !!anchorRef && typeof document !== 'undefined'
+
+  const content = (
     <div
       ref={ref}
-      className="absolute left-full top-0 ml-2 z-40"
+      className={usePortal ? '' : 'absolute left-full top-0 ml-2 z-40'}
+      style={usePortal && pos ? { position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999 } : undefined}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
@@ -251,4 +279,9 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
       )}
     </div>
   )
+
+  if (usePortal) {
+    return createPortal(content, document.body)
+  }
+  return content
 }
