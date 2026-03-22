@@ -1592,10 +1592,10 @@ export function JournalBlock(props: Props) {
             : focused
               ? 'border-l-[3px] border border-[#E5E0D0] shadow-md'
               : 'border border-[#E5E0D0] pl-[2px] hover:border-[#D5D0C0]'
-      } ${isDragOver ? '' : focused && !isNewEntry ? '' : 'bg-white'} ${isDeleted && !restoredLocally ? 'opacity-60' : ''}`}
+      } ${isDragOver ? '' : focused ? '' : 'bg-white'} ${isDeleted && !restoredLocally ? 'opacity-60' : ''}`}
       style={{
-        ...(focused && !isNewEntry && !isDragOver
-            ? { backgroundColor: activeScheme?.muted ?? '#FFFBEB' }
+        ...(focused && !isDragOver
+            ? { backgroundColor: activeScheme?.activeMuted ?? '#FEF3C7' }
             : {}),
         ...(borderLeftColor ? { borderLeftColor } : {}),
       }}

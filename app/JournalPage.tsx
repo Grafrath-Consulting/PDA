@@ -22,6 +22,7 @@ import { useProperties } from '@/context/PropertiesContext'
 import { useDateFormat } from '@/context/DateFormatContext'
 import { formatDatePart } from '@/lib/date-format'
 import workspaceColorSchemes from '@/constants/workspaceColorSchemes'
+import { PdaIcon } from '@/components/PdaIcon'
 
 const PAGE_SIZE = 20
 const SEARCH_PAGE_SIZE = 100
@@ -691,7 +692,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <header
-        className="h-14 border-b flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-200"
+        className="h-14 border-b flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-200 relative"
         style={{
           backgroundColor: barBg,
           color: barText,
@@ -738,10 +739,23 @@ export function JournalPage({ userId, email, displayName }: Props) {
           </div>
         </div>
 
-        {/* PDA wordmark — centered */}
-        <div className="flex-1 flex flex-col items-center justify-center">
-          <span className="text-sm font-bold leading-tight" style={{ color: barText }}>PDA</span>
-          <span className="text-[11px] leading-tight opacity-60" style={{ color: barText }}>capture everything, organize later</span>
+        {/* PDA wordmark — true-centered */}
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none">
+          <PdaIcon width={30} height={30} />
+          <div className="flex flex-col gap-0">
+            <span
+              className="text-sm font-semibold leading-[1.2]"
+              style={{ color: barText }}
+            >
+              PDA
+            </span>
+            <span
+              className="text-[11px] leading-[1.2] opacity-60"
+              style={{ color: barText }}
+            >
+              capture everything, organize later
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center gap-1">
