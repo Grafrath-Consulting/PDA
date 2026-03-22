@@ -1,4 +1,5 @@
 export type BlockStatus = 'active' | 'complete' | 'archived'
+export type TaskStatus = 'not_started' | 'in_progress' | 'done'
 
 export interface Block {
   id: string
@@ -8,6 +9,7 @@ export interface Block {
   content: string | null
   status: BlockStatus
   entry_type: 'info' | 'task'
+  task_status: TaskStatus
   owner_id: string | null
   due_date: string | null
   due_date_type: 'deadline' | 'target' | null
@@ -39,7 +41,6 @@ export interface BlockVersion {
 export type SelectionAction =
   | { type: 'create_task'; taskType: 'my_task' | 'delegated' | 'waiting_on'; assigneeId?: string }
   | { type: 'split_block' }
-  | { type: 'label_info' }
   | { type: 'summarize' }
   | { type: 'delete_selection' }
   | { type: 'insert_link' }

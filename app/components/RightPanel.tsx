@@ -54,7 +54,7 @@ export function RightPanel({ userId, refreshKey, onTaskClick }: Props) {
     const today = todayISO()
     let query = supabase
       .from('journal_blocks')
-      .select('id, content, owner_id, due_date, due_date_type, workspace_id')
+      .select('id, content, owner_id, due_date, due_date_type, task_status, workspace_id')
       .eq('user_id', userId)
       .eq('entry_type', 'task')
       .gte('due_date', `${today}T00:00:00`)

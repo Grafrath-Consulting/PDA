@@ -298,20 +298,14 @@ function cutIcon() {
 function copyIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
 }
-function infoIcon() {
-  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-}
 function sparkleIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
 }
 function historyIcon() {
-  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5" /><path d="M3 8a9 9 0 1 1 1.36 4.69" /></svg>
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
 }
 function trashIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
-}
-function formatBarIcon() {
-  return <span className="text-[10px] font-semibold leading-none">Aa</span>
 }
 
 // Module-level: only one block can be active at a time.
@@ -676,17 +670,6 @@ export function JournalBlock(props: Props) {
       return
     }
 
-    if (action.type === 'label_info') {
-      const newContent = removeTextFromHTML(currentContent, selText)
-      const isEmpty = !htmlToText(newContent).trim()
-      const newStatus: BlockStatus = isEmpty ? 'archived' : 'active'
-      await supabase.from('journal_blocks')
-        .update({ content: newContent, status: newStatus, is_archived: isEmpty })
-        .eq('id', block.id)
-      if (isEmpty) { p.onRemove(block.id); p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true }) }
-      else { syncEditorContent(newContent); p.onUpdate({ ...block, content: newContent, status: newStatus }); deactivate() }
-      return
-    }
 
     if (action.type === 'summarize') {
       const fullText = htmlToText(currentContent).trim()
@@ -1097,6 +1080,12 @@ export function JournalBlock(props: Props) {
       return
     }
 
+    if (!isNewEntry && focused && e.altKey && !e.shiftKey && !e.ctrlKey && (e.key === '`' || e.key === '~')) {
+      e.preventDefault()
+      toggleEntryType()
+      return
+    }
+
     if (isNewEntry && isAltShift) {
       if (e.key === 'T') {
         e.preventDefault()
@@ -1151,6 +1140,22 @@ export function JournalBlock(props: Props) {
       if (e.key === 'S') {
         e.preventDefault()
         handleToolbarAction({ type: 'summarize' })
+        return
+      }
+      if (e.key === 'C') {
+        e.preventDefault()
+        copyBlockToClipboard()
+        return
+      }
+      if (e.key === 'H') {
+        e.preventDefault()
+        setShowHistory(true)
+        return
+      }
+      if (e.key === 'X') {
+        e.preventDefault()
+        copyBlockToClipboard()
+        deleteBlock()
         return
       }
     }
@@ -1258,19 +1263,15 @@ export function JournalBlock(props: Props) {
     const current = p.block.entry_type
     const next = current === 'info' ? 'task' : 'info'
 
-    if (next === 'info' && (p.block.due_date || p.block.owner_id)) {
-      if (!window.confirm('Converting to Info will clear the due date and owner. Continue?')) return
-    }
-
     const supabase = createClient()
     const updates: Record<string, unknown> = { entry_type: next }
-    if (next === 'info') {
-      updates.owner_id = null
-      updates.due_date = null
-      updates.due_date_type = null
+    // When converting to info, revert block status to active if task was done
+    // but retain task_status, owner_id, due_date, due_date_type so they restore on revert
+    if (next === 'info' && p.block.status === 'complete') {
+      updates.status = 'active'
     }
     await supabase.from('journal_blocks').update(updates).eq('id', p.block.id)
-    p.onUpdate({ ...p.block, entry_type: next, ...(next === 'info' ? { owner_id: null, due_date: null, due_date_type: null } : {}) })
+    p.onUpdate({ ...p.block, entry_type: next, ...(next === 'info' && p.block.status === 'complete' ? { status: 'active' as const } : {}) })
   }
 
   async function updateTaskField(field: string, value: unknown) {
@@ -1281,13 +1282,13 @@ export function JournalBlock(props: Props) {
     p.onUpdate({ ...p.block, [field]: value })
   }
 
-  async function toggleComplete() {
+  async function setTaskStatus(taskStatus: 'not_started' | 'in_progress' | 'done') {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    const next = p.block.status === 'complete' ? 'active' : 'complete'
+    const blockStatus = taskStatus === 'done' ? 'complete' as const : 'active' as const
     const supabase = createClient()
-    await supabase.from('journal_blocks').update({ status: next }).eq('id', p.block.id)
-    p.onUpdate({ ...p.block, status: next })
+    await supabase.from('journal_blocks').update({ task_status: taskStatus, status: blockStatus }).eq('id', p.block.id)
+    p.onUpdate({ ...p.block, task_status: taskStatus, status: blockStatus })
   }
 
   async function moveToWorkspace(targetWsId: string | null) {
@@ -1472,7 +1473,7 @@ export function JournalBlock(props: Props) {
   const showToolbar = focused && formattingVisible
 
   const isTask = block?.entry_type === 'task'
-  const isComplete = block?.status === 'complete'
+  const isComplete = block?.task_status === 'done'
 
   // Route an action through the correct handler depending on new entry vs existing block
   function popoverAction(action: SelectionAction) {
@@ -1485,25 +1486,23 @@ export function JournalBlock(props: Props) {
   }
 
   // Build popover menu items — shown for both new entry and existing blocks.
-  const popoverItems: { key: string; label: string; shortcut?: string; icon: React.ReactNode; onClick: () => void; className?: string; separator?: boolean }[] = [
+  const popoverItems: { key: string; label: string; shortcut?: string; shortcutTip?: string; icon: React.ReactNode; onClick: () => void; className?: string; separator?: boolean }[] = [
     ...(block ? [{
-      key: 'convert', label: isTask ? 'Convert to Info' : 'Convert to Task', icon: convertIcon(),
+      key: 'convert', label: isTask ? 'Convert to Info' : 'Convert to Task', shortcut: '⌥`', shortcutTip: 'Alt + Backtick', icon: convertIcon(),
       onClick: () => { setPopoverOpen(false); toggleEntryType() },
     }] : []),
-    { key: 'info', label: 'Label as Info', icon: infoIcon(), onClick: () => popoverAction({ type: 'label_info' }) },
-    { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', icon: sparkleIcon(), onClick: () => popoverAction({ type: 'summarize' }) },
-    { key: 'format', label: 'Formatting', shortcut: '⌥⇧F', icon: formatBarIcon(), onClick: () => { setPopoverOpen(false); onToggleFormatting() }, className: formattingVisible ? 'text-amber-700 bg-amber-50' : undefined },
+    { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', shortcutTip: 'Alt + Shift + S', icon: sparkleIcon(), onClick: () => popoverAction({ type: 'summarize' }) },
     ...(block ? [
-      { key: 'history', label: 'View History', icon: historyIcon(), onClick: () => { setPopoverOpen(false); setShowHistory(true) } },
-      { key: 'copyblock', label: 'Copy Block', icon: copyIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard() } },
-      { key: 'cutblock', label: 'Cut Block', icon: cutIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard(); deleteBlock() } },
+      { key: 'history', label: 'View History', shortcut: '⌥⇧H', shortcutTip: 'Alt + Shift + H', icon: historyIcon(), onClick: () => { setPopoverOpen(false); setShowHistory(true) } },
+      { key: 'copyblock', label: 'Copy Block', shortcut: '⌥⇧C', shortcutTip: 'Alt + Shift + C', icon: copyIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard() } },
+      { key: 'cutblock', label: 'Cut Block', shortcut: '⌥⇧X', shortcutTip: 'Alt + Shift + X', icon: cutIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard(); deleteBlock() } },
     ] : []),
     ...(block && workspaces.length > 0 ? [{
       key: 'move', label: 'Move to…', icon: moveIcon(),
       onClick: () => setMoveMenuOpen(prev => !prev),
     }] : []),
-    ...(block ? [{ key: 'archive', label: 'Archive', icon: archiveIcon(), onClick: () => { setPopoverOpen(false); archiveBlock() }, separator: true }] : []),
-    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
+    ...(block ? [{ key: 'archive', label: 'Archive', shortcut: '⌥⇧D', shortcutTip: 'Alt + Shift + D', icon: archiveIcon(), onClick: () => { setPopoverOpen(false); archiveBlock() }, separator: true }] : []),
+    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
   ]
 
   // Disable split when selection covers entire block content
@@ -1603,6 +1602,14 @@ export function JournalBlock(props: Props) {
       <div
         className="absolute top-0 left-4 right-14 -translate-y-1/2 z-10 flex items-center gap-1 pointer-events-none"
       >
+        {/* Entry type indicator */}
+        <div className="pointer-events-auto text-gray-400" title={isTask ? 'Task' : 'Info'}>
+          {isTask ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" fill="white" /><polyline points="17 8 10 15 7 12" /></svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" fill="white" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+          )}
+        </div>
         <div className="flex items-center gap-1 overflow-hidden pointer-events-auto">
           <PropertyBubbles
             appliedValueIds={appliedProps}
@@ -1623,34 +1630,47 @@ export function JournalBlock(props: Props) {
           >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
           </button>
+          {/* Property editor popover — pops out to the right of the floating bar */}
+          {propertyEditorOpen && (
+            block ? (
+              <PropertyEditor
+                blockId={block.id}
+                appliedValueIds={appliedProps}
+                properties={propertiesForWorkspace(activeWorkspaceId)}
+                onChanged={(newIds) => (props as ExistingBlockProps).onPropertyChanged?.(newIds)}
+                onClose={() => setPropertyEditorOpen(false)}
+              />
+            ) : (
+              <PropertyEditor
+                blockId="__pending__"
+                appliedValueIds={pendingPropertyIds}
+                properties={propertiesForWorkspace(activeWorkspaceId)}
+                onChanged={(newIds) => setPendingPropertyIds(newIds)}
+                onClose={() => setPropertyEditorOpen(false)}
+              />
+            )
+          )}
         </div>
       </div>
-
-      {/* Property editor popover — rendered at card level to avoid z-index issues with the tag row */}
-      {propertyEditorOpen && (
-        block ? (
-          <PropertyEditor
-            blockId={block.id}
-            appliedValueIds={appliedProps}
-            properties={propertiesForWorkspace(activeWorkspaceId)}
-            onChanged={(newIds) => (props as ExistingBlockProps).onPropertyChanged?.(newIds)}
-            onClose={() => setPropertyEditorOpen(false)}
-          />
-        ) : (
-          <PropertyEditor
-            blockId="__pending__"
-            appliedValueIds={pendingPropertyIds}
-            properties={propertiesForWorkspace(activeWorkspaceId)}
-            onChanged={(newIds) => setPendingPropertyIds(newIds)}
-            onClose={() => setPropertyEditorOpen(false)}
-          />
-        )
-      )}
 
       {/* ── ACTION ICONS — pinned top-right corner ── */}
       <div className={`absolute top-0 right-2 -translate-y-1/2 z-10 flex items-center gap-0.5 transition-opacity ${
         popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
       }`}>
+        {/* Toggle formatting bar — only when focused */}
+        {focused && (
+          <button
+            type="button"
+            title="Formatting (Alt+Shift+F)"
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onClick={(e) => { e.stopPropagation(); onToggleFormatting() }}
+            className={`w-6 h-6 flex items-center justify-center rounded-full bg-white border text-[10px] font-semibold leading-none transition-colors ${
+              formattingVisible ? 'border-amber-400 text-amber-700 bg-amber-50' : 'border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400'
+            }`}
+          >
+            Aa
+          </button>
+        )}
         {/* Attach file */}
         <button
           type="button"
@@ -1694,7 +1714,7 @@ export function JournalBlock(props: Props) {
               >
                 <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">{item.icon}</span>
                 <span className="flex-1">{item.label}</span>
-                {item.shortcut && <span className="text-[10px] text-gray-400 ml-3">{item.shortcut}</span>}
+                {item.shortcut && <span className="text-[10px] text-gray-400 ml-3" title={item.shortcutTip}>{item.shortcut}</span>}
               </button>
               {/* Move-to-workspace submenu */}
               {item.key === 'move' && moveMenuOpen && (
@@ -1830,19 +1850,29 @@ export function JournalBlock(props: Props) {
           className="flex items-center gap-3 px-4 py-1.5 border-t border-gray-100 flex-wrap"
           onMouseDown={(e) => { e.stopPropagation() }}
         >
-          <button
-            onClick={toggleComplete}
-            className={`flex items-center gap-1.5 text-xs transition-colors ${
-              isComplete ? 'text-green-600' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <span className={`w-4 h-4 rounded border flex items-center justify-center ${
-              isComplete ? 'bg-green-100 border-green-400' : 'border-gray-300 hover:border-gray-400'
-            }`}>
-              {isComplete && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
-            </span>
-            {isComplete ? 'Done' : 'To Do'}
-          </button>
+          <div className="flex items-center gap-0.5">
+            {([
+              { value: 'not_started' as const, label: 'Not Started', color: 'gray' },
+              { value: 'in_progress' as const, label: 'In Progress', color: 'blue' },
+              { value: 'done' as const, label: 'Done', color: 'green' },
+            ]).map(({ value, label, color }) => {
+              const isActive = block.task_status === value
+              const colors = {
+                gray: isActive ? 'bg-gray-100 border-gray-400 text-gray-700' : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-500',
+                blue: isActive ? 'bg-blue-50 border-blue-400 text-blue-700' : 'border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-500',
+                green: isActive ? 'bg-green-50 border-green-400 text-green-700' : 'border-gray-200 text-gray-400 hover:border-green-300 hover:text-green-500',
+              }[color]
+              return (
+                <button
+                  key={value}
+                  onClick={() => setTaskStatus(value)}
+                  className={`px-2 py-0.5 text-[11px] font-medium border rounded-full transition-colors ${colors}`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
           <span className="w-px h-4 bg-gray-200" />
           <div className="flex items-center gap-1">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>

@@ -52,7 +52,7 @@ export async function POST(request: Request) {
   const includeDeleted = body.statuses?.includes('deleted')
   let q = supabase
     .from('journal_blocks')
-    .select('id, content, entry_type, status, workspace_id, created_at, due_date, due_date_type, owner_id')
+    .select('id, content, entry_type, status, task_status, workspace_id, created_at, due_date, due_date_type, owner_id')
     .eq('user_id', user.id)
     .ilike('content', `%${query}%`)
     .order('created_at', { ascending: false })

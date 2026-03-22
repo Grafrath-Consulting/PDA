@@ -115,7 +115,7 @@ export async function POST(request: Request) {
       if (blockIds.length > 0) {
         let q = supabase
           .from('journal_blocks')
-          .select('id, content, entry_type, status, owner_id, due_date, due_date_type, workspace_id')
+          .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
           .eq('user_id', user.id)
           .eq('entry_type', 'task')
           .eq('status', 'active')
@@ -133,7 +133,7 @@ export async function POST(request: Request) {
   // Query B — Worked on today (created or updated in the date range)
   let workedOnQuery = supabase
     .from('journal_blocks')
-    .select('id, content, entry_type, status, owner_id, due_date, due_date_type, workspace_id')
+    .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
     .eq('user_id', user.id)
     .neq('status', 'archived')
     .is('deleted_at', null)
@@ -148,7 +148,7 @@ export async function POST(request: Request) {
   // Query C — Completed today
   let completedQuery = supabase
     .from('journal_blocks')
-    .select('id, content, entry_type, status, owner_id, due_date, due_date_type, workspace_id')
+    .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
     .eq('user_id', user.id)
     .eq('entry_type', 'task')
     .eq('status', 'complete')
@@ -164,7 +164,7 @@ export async function POST(request: Request) {
   // Query D — Past due
   let pastDueQuery = supabase
     .from('journal_blocks')
-    .select('id, content, entry_type, status, owner_id, due_date, due_date_type, workspace_id')
+    .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
     .eq('user_id', user.id)
     .eq('entry_type', 'task')
     .eq('status', 'active')

@@ -895,7 +895,7 @@ export function JournalPage({ userId }: Props) {
               {([['info', 'Info'], ['task', 'Task']] as const).map(([t, label]) => (
                 <button key={t} onClick={() => setFilterEntryTypes(prev => {
                   const next = new Set(prev)
-                  if (next.has(t)) next.delete(t); else next.add(t)
+                  if (next.has(t)) { if (next.size > 1) next.delete(t) } else next.add(t)
                   return next
                 })}
                   className={`px-2 py-0.5 rounded-full border text-[11px] font-medium transition-all ${filterEntryTypes.has(t) ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
