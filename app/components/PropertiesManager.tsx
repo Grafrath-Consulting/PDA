@@ -346,7 +346,7 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
           onChange={(e) => setLabel(e.target.value)}
           onBlur={saveLabel}
           onKeyDown={(e) => { if (e.key === 'Enter') saveLabel(); if (e.key === 'Escape') { setLabel(value.label); setEditing(false) } }}
-          className="text-[11px] bg-transparent border-none outline-none w-16"
+          className="text-[11px] text-gray-900 bg-transparent border-none outline-none w-16"
         />
       ) : (
         <button onClick={() => setEditing(true)} className="text-[11px] text-gray-700 hover:text-gray-900">{value.label}</button>

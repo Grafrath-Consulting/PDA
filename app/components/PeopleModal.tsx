@@ -26,8 +26,9 @@ export function PeopleModal({ open, onClose, userId }: Props) {
 
   const fetchPeople = useCallback(async () => {
     const supabase = createClient()
-    const { data } = await supabase.from('people').select('*').eq('user_id', userId).order('name')
-    setPeople((data ?? []) as Person[])
+    const { data } = await supabase.from('people').select('*').eq('user_id', userId)
+    const sorted = ((data ?? []) as Person[]).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    setPeople(sorted)
     setLoading(false)
   }, [userId])
 
@@ -131,9 +132,18 @@ function PersonRow({ person, onUpdated, onRemoved }: { person: Person; onUpdated
   if (editing) {
     return (
       <div className="border border-[#E5E0D0] rounded-lg p-3 space-y-2 bg-[#FDFCF7]">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className="w-full text-sm border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" />
-        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (optional)" className="w-full text-sm border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" />
-        <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company (optional)" className="w-full text-sm border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" />
+        <div>
+          <label className="block text-[11px] font-medium text-gray-500 mb-0.5">Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className="w-full text-sm text-gray-900 border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-gray-500 mb-0.5">Email</label>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (optional)" className="w-full text-sm text-gray-900 border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-gray-500 mb-0.5">Company</label>
+          <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company (optional)" className="w-full text-sm text-gray-900 border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" />
+        </div>
         <div className="flex items-center gap-2">
           <button onClick={save} disabled={!name.trim() || saving} className="px-3 py-1 text-xs font-medium rounded-md bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors">Save</button>
           <button onClick={() => { setEditing(false); setName(person.name); setEmail(person.email ?? ''); setCompany(person.company ?? '') }} className="px-3 py-1 text-xs font-medium rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">Cancel</button>
@@ -192,9 +202,18 @@ function AddPersonForm({ userId, onSaved, onCancel }: { userId: string; onSaved:
 
   return (
     <div className="border border-amber-200 rounded-lg p-3 space-y-2 bg-amber-50/50 mt-2">
-      <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="Name *" className="w-full text-sm border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-      <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (optional)" className="w-full text-sm border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-      <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company (optional)" className="w-full text-sm border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
+      <div>
+        <label className="block text-[11px] font-medium text-gray-500 mb-0.5">Name</label>
+        <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="Name *" className="w-full text-sm text-gray-900 border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
+      </div>
+      <div>
+        <label className="block text-[11px] font-medium text-gray-500 mb-0.5">Email</label>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (optional)" className="w-full text-sm text-gray-900 border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
+      </div>
+      <div>
+        <label className="block text-[11px] font-medium text-gray-500 mb-0.5">Company</label>
+        <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company (optional)" className="w-full text-sm text-gray-900 border border-gray-200 rounded-md px-2.5 py-1.5 outline-none focus:border-amber-400" onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
+      </div>
       <div className="flex items-center gap-2">
         <button onClick={save} disabled={!name.trim() || saving} className="px-3 py-1 text-xs font-medium rounded-md bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors">Save</button>
         <button onClick={onCancel} className="px-3 py-1 text-xs font-medium rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">Cancel</button>

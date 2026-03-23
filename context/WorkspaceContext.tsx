@@ -20,6 +20,7 @@ interface WorkspaceContextValue {
   activeWorkspace: Workspace | null
   activeScheme: WorkspaceColorScheme | null
   isGlobalView: boolean
+  hydrated: boolean
   setActiveWorkspace: (id: string | null) => void
   refreshWorkspaces: () => Promise<void>
 }
@@ -31,11 +32,13 @@ const LS_KEY = 'pda_active_workspace'
 export function WorkspaceProvider({ userId, children }: { userId: string; children: ReactNode }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  const [hydrated, setHydrated] = useState(false)
 
   // Hydrate from localStorage after mount to avoid SSR mismatch
   useEffect(() => {
     const saved = localStorage.getItem(LS_KEY)
     if (saved) setActiveWorkspaceId(saved)
+    setHydrated(true)
   }, [])
 
   const loadWorkspaces = useCallback(async () => {
@@ -80,6 +83,7 @@ export function WorkspaceProvider({ userId, children }: { userId: string; childr
       activeWorkspace,
       activeScheme,
       isGlobalView: !activeWorkspaceId,
+      hydrated,
       setActiveWorkspace,
       refreshWorkspaces: loadWorkspaces,
     }}>

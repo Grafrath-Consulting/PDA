@@ -360,6 +360,7 @@ export function JournalBlock(props: Props) {
 
   const savingRef = useRef(false)
   const suppressBlurRef = useRef(false)
+  const autosavedBlockIdRef = useRef<string | null>(null)
   const workspaceRef = useRef(activeWorkspace)
   workspaceRef.current = activeWorkspace
   const workspacesRef = useRef(workspaces)
@@ -778,22 +779,36 @@ export function JournalBlock(props: Props) {
       return null
     }
     const supabase = createClient()
-    const { data, error } = await supabase
-      .from('journal_blocks')
-      .insert({
-        user_id: p.userId,
-        context_id: p.contextId ?? null,
-        workspace_id: wsId,
-        content: html,
-        status: 'active',
-      })
-      .select()
-      .single()
+    let saved: Block | null = null
 
-    savingRef.current = false
-    if (error) { console.error(error); return null }
-
-    const saved = data as Block | null
+    if (autosavedBlockIdRef.current) {
+      // Block was already created by autosave — update and fetch it
+      const { data, error } = await supabase
+        .from('journal_blocks')
+        .update({ content: html })
+        .eq('id', autosavedBlockIdRef.current)
+        .select()
+        .single()
+      savingRef.current = false
+      if (error) { console.error(error); return null }
+      saved = data as Block | null
+      autosavedBlockIdRef.current = null
+    } else {
+      const { data, error } = await supabase
+        .from('journal_blocks')
+        .insert({
+          user_id: p.userId,
+          context_id: p.contextId ?? null,
+          workspace_id: wsId,
+          content: html,
+          status: 'active',
+        })
+        .select()
+        .single()
+      savingRef.current = false
+      if (error) { console.error(error); return null }
+      saved = data as Block | null
+    }
     if (saved) {
       // Flush pending properties
       const pendingProps = pendingPropertyIdsRef.current
@@ -926,9 +941,43 @@ export function JournalBlock(props: Props) {
   autosaveRef.current = isNewEntry
     ? async () => {
         if (savingRef.current) return
+        const html = liveHTMLRef.current
         const text = liveTextRef.current.trim()
         if (!text) return
-        await saveNewEntry()
+        savingRef.current = true
+        try {
+          const supabase = createClient()
+          if (autosavedBlockIdRef.current) {
+            // Already auto-saved once — just update content
+            await supabase
+              .from('journal_blocks')
+              .update({ content: html })
+              .eq('id', autosavedBlockIdRef.current)
+          } else {
+            // First autosave — insert the block silently
+            const p = propsRef.current as NewEntryProps
+            const wsId = workspaceRef.current?.id
+              ?? workspacesRef.current.find(w => w.is_default)?.id
+            if (!wsId) { savingRef.current = false; return }
+            const { data, error } = await supabase
+              .from('journal_blocks')
+              .insert({
+                user_id: p.userId,
+                context_id: p.contextId ?? null,
+                workspace_id: wsId,
+                content: html,
+                status: 'active',
+              })
+              .select('id')
+              .single()
+            if (!error && data) {
+              autosavedBlockIdRef.current = data.id
+            }
+          }
+          lastSavedHTMLRef.current = html
+        } finally {
+          savingRef.current = false
+        }
       }
     : async () => {
         const p = propsRef.current as ExistingBlockProps

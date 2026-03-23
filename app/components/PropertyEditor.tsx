@@ -188,9 +188,14 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
           const isOpen = openDropdown === prop.id
 
           return (
-            <div key={prop.id} ref={el => { rowRefs.current[prop.id] = el }} className="px-3 py-1.5">
+            <div
+              key={prop.id}
+              ref={el => { rowRefs.current[prop.id] = el }}
+              className="px-3 py-1.5 cursor-pointer hover:bg-gray-50 transition-colors"
+              onClick={() => setOpenDropdown(isOpen ? null : prop.id)}
+            >
               <div className="flex items-center gap-2">
-                <label className="text-[11px] font-medium text-gray-500 flex-shrink-0">{prop.name}</label>
+                <label className="text-[11px] font-medium text-gray-500 flex-shrink-0 pointer-events-none">{prop.name}</label>
                 {/* Applied value chips */}
                 <div className="flex items-center gap-1 flex-wrap flex-1 min-w-0">
                   {appliedValues.map(v => {
@@ -209,16 +214,12 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
                     <span className="text-[11px] text-gray-300">None</span>
                   )}
                 </div>
-                {/* Dropdown toggle — points right when open, down when closed */}
-                <button
-                  type="button"
-                  onClick={() => setOpenDropdown(isOpen ? null : prop.id)}
-                  className="p-0.5 rounded text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
-                >
+                {/* Dropdown toggle arrow */}
+                <span className="p-0.5 rounded text-gray-400 flex-shrink-0">
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points={isOpen ? "9 6 15 12 9 18" : "6 9 12 15 18 9"} />
                   </svg>
-                </button>
+                </span>
               </div>
             </div>
           )
