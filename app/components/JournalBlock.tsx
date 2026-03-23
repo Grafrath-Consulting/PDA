@@ -319,6 +319,7 @@ export function JournalBlock(props: Props) {
   const { activeWorkspace, activeScheme, activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
   const { propertiesForWorkspace } = useProperties()
   const { dateFormat, timeFormat } = useDateFormat()
+  const propertyWorkspaceId = (!isNewEntry ? (props as ExistingBlockProps).block?.workspace_id : null) ?? activeWorkspaceId
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false)
   const [moveMenuOpen, setMoveMenuOpen] = useState(false)
   const [pillMenuOpen, setPillMenuOpen] = useState(false)
@@ -1663,7 +1664,7 @@ export function JournalBlock(props: Props) {
         <div className="flex items-center gap-1 overflow-hidden pointer-events-auto">
           <PropertyBubbles
             appliedValueIds={appliedProps}
-            properties={propertiesForWorkspace(activeWorkspaceId)}
+            properties={propertiesForWorkspace(propertyWorkspaceId)}
             onClickValue={() => setPropertyEditorOpen(true)}
           />
         </div>
@@ -1687,7 +1688,7 @@ export function JournalBlock(props: Props) {
               <PropertyEditor
                 blockId={block.id}
                 appliedValueIds={appliedProps}
-                properties={propertiesForWorkspace(activeWorkspaceId)}
+                properties={propertiesForWorkspace(propertyWorkspaceId)}
                 onChanged={(newIds) => (props as ExistingBlockProps).onPropertyChanged?.(newIds)}
                 onClose={() => setPropertyEditorOpen(false)}
                 anchorRef={addPropertyBtnRef}
@@ -1696,7 +1697,7 @@ export function JournalBlock(props: Props) {
               <PropertyEditor
                 blockId="__pending__"
                 appliedValueIds={pendingPropertyIds}
-                properties={propertiesForWorkspace(activeWorkspaceId)}
+                properties={propertiesForWorkspace(propertyWorkspaceId)}
                 onChanged={(newIds) => setPendingPropertyIds(newIds)}
                 onClose={() => setPropertyEditorOpen(false)}
                 anchorRef={addPropertyBtnRef}
@@ -1871,6 +1872,7 @@ export function JournalBlock(props: Props) {
             onChange={handleEditorChange}
             editable={(isNewEntry || focused) && !(isInactive && !restoredLocally)}
             toolbarVisible={showToolbar}
+            toolbarBg={activeScheme?.activeMuted}
             onReady={(handle) => { editorHandleRef.current = handle }}
             searchHighlight={!isNewEntry && !focused ? (props as ExistingBlockProps).searchHighlight : undefined}
             matchedChunk={!isNewEntry && !focused ? (props as ExistingBlockProps).matchedChunk : undefined}

@@ -680,7 +680,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
   // ── Top bar colors ──────────────────────────────────────
   const barBg = activeScheme?.primary ?? '#FFFFFF'
-  const barText = activeScheme?.textOnColor ?? undefined
+  const barText = activeScheme?.textOnColor ?? '#1C1917'
   // For icon buttons in the top bar, derive a semi-transparent hover layer
   const btnActiveClass = activeScheme
     ? 'bg-white/20'
@@ -740,7 +740,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         </div>
 
         {/* PDA wordmark — true-centered */}
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none">
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none" style={{ color: barText }}>
           <PdaIcon width={30} height={30} />
           <div className="flex flex-col gap-0">
             <span
@@ -1299,6 +1299,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
             setCreateModalOpen(false)
             setEditingWorkspace(null)
           }}
+          onDeleted={async (_deletedId, targetId) => {
+            await refreshWorkspaces()
+            setActiveWorkspace(targetId)
+            setCreateModalOpen(false)
+            setEditingWorkspace(null)
+          }}
         />
       )}
 
@@ -1366,7 +1372,7 @@ function WorkspaceSwitcherDropdown({
   return (
     <div
       ref={ref}
-      className="absolute top-full left-0 mt-1 w-64 bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50"
+      className="absolute top-full left-0 mt-1 min-w-64 w-max max-w-sm bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50"
     >
       <button
         onClick={() => onSelect(null)}
@@ -1437,12 +1443,14 @@ function CreateWorkspaceModal({
   userId,
   onClose,
   onCreated,
+  onDeleted,
   editingWorkspace,
   allWorkspaces,
 }: {
   userId: string
   onClose: () => void
   onCreated: (ws: Workspace) => void
+  onDeleted?: (deletedId: string, targetId: string) => void
   editingWorkspace?: Workspace | null
   allWorkspaces?: Workspace[]
 }) {
@@ -1453,7 +1461,11 @@ function CreateWorkspaceModal({
   const [colorScheme, setColorScheme] = useState(editingWorkspace?.color_scheme ?? workspaceColorSchemes[0].key)
   const [isDefault, setIsDefault] = useState(editingWorkspace?.is_default ?? false)
   const [saving, setSaving] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const currentDefault = allWorkspaces?.find(w => w.is_default && w.id !== editingWorkspace?.id)
+  const otherWorkspaces = allWorkspaces?.filter(w => w.id !== editingWorkspace?.id) ?? []
   const inputRef = useRef<HTMLInputElement>(null)
   const emojiButtonRef = useRef<HTMLButtonElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
@@ -1531,6 +1543,40 @@ function CreateWorkspaceModal({
       if (error || !data) { console.error(error); setSaving(false); return }
       onCreated(data as Workspace)
     }
+  }
+
+  async function handleDelete() {
+    if (!editingWorkspace || !deleteTargetId || deleting) return
+    setDeleting(true)
+    const supabase = createClient()
+
+    // Move all entries to target workspace
+    const { error: moveBlocksErr } = await supabase
+      .from('journal_blocks')
+      .update({ workspace_id: deleteTargetId })
+      .eq('workspace_id', editingWorkspace.id)
+    if (moveBlocksErr) { console.error(moveBlocksErr); setDeleting(false); return }
+
+    // Move workspace-scoped properties to target workspace
+    const { error: movePropsErr } = await supabase
+      .from('properties')
+      .update({ workspace_id: deleteTargetId })
+      .eq('workspace_id', editingWorkspace.id)
+    if (movePropsErr) { console.error(movePropsErr); setDeleting(false); return }
+
+    // If this was the default workspace, make the target the default
+    if (editingWorkspace.is_default) {
+      await supabase.from('workspaces').update({ is_default: true }).eq('id', deleteTargetId)
+    }
+
+    // Delete the workspace
+    const { error: deleteErr } = await supabase
+      .from('workspaces')
+      .delete()
+      .eq('id', editingWorkspace.id)
+    if (deleteErr) { console.error(deleteErr); setDeleting(false); return }
+
+    onDeleted?.(editingWorkspace.id, deleteTargetId)
   }
 
   const selectedScheme = workspaceColorSchemes.find(s => s.key === colorScheme)!
@@ -1621,6 +1667,67 @@ function CreateWorkspaceModal({
             </span>
           </label>
         </div>
+
+        {/* Delete workspace */}
+        {isEditing && otherWorkspaces.length > 0 && !showDeleteConfirm && (
+          <div className="px-5 pb-1">
+            <button
+              onClick={() => { setDeleteTargetId(otherWorkspaces[0]?.id ?? null); setShowDeleteConfirm(true) }}
+              className="text-xs text-red-400 hover:text-red-600 transition-colors"
+            >
+              Delete this workspace...
+            </button>
+          </div>
+        )}
+
+        {isEditing && showDeleteConfirm && (
+          <div className="mx-5 mb-2 p-3 border border-red-200 bg-red-50 rounded-lg space-y-3">
+            <div className="flex items-start gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              <div>
+                <p className="text-sm font-medium text-red-800">Delete &ldquo;{editingWorkspace?.name}&rdquo;?</p>
+                <p className="text-xs text-red-600 mt-1">
+                  This cannot be undone. All entries and custom properties will be moved to the workspace you choose below.
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-red-700 mb-1">Move everything to:</label>
+              <select
+                value={deleteTargetId ?? ''}
+                onChange={(e) => setDeleteTargetId(e.target.value)}
+                className="w-full px-3 py-1.5 text-sm text-gray-900 border border-red-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-red-300"
+              >
+                {otherWorkspaces.map(w => (
+                  <option key={w.id} value={w.id}>
+                    {w.emoji ? `${w.emoji} ` : ''}{w.name}{w.is_default ? ' (Default)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-3 py-1 text-xs text-gray-600 hover:bg-red-100 rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={!deleteTargetId || deleting}
+                className="px-3 py-1 text-xs text-white bg-red-600 hover:bg-red-700 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {deleting ? 'Deleting...' : 'Delete Workspace'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">

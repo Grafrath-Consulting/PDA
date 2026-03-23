@@ -55,6 +55,7 @@ interface Props {
   minHeight?: string
   editable?: boolean
   toolbarVisible?: boolean
+  toolbarBg?: string
   onReady?: (handle: TipTapEditorHandle) => void
   searchHighlight?: string | string[]
   matchedChunk?: string
@@ -62,7 +63,7 @@ interface Props {
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
-  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, onReady, searchHighlight, matchedChunk, people },
+  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, toolbarBg, onReady, searchHighlight, matchedChunk, people },
   ref
 ) {
   // Keep refs so the closures inside useEditor always call the latest callbacks
@@ -468,7 +469,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   return (
     <div className={`tiptap-wrapper relative ${className}`}>
       {toolbarVisible && (
-        <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-[#E5E0D0] bg-[#FFFEF7]/50 rounded-t-lg flex-wrap">
+        <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-[#E5E0D0] rounded-t-lg flex-wrap" style={{ backgroundColor: toolbarBg ?? 'rgba(255, 254, 247, 0.5)' }}>
           <ToolbarBtn
             active={editor.isActive('bold')}
             onClick={() => editor.chain().focus().toggleBold().run()}
