@@ -363,6 +363,9 @@ export function JournalBlock(props: Props) {
   const savingRef = useRef(false)
   const suppressBlurRef = useRef(false)
   const autosavedBlockIdRef = useRef<string | null>(null)
+  const [pendingEntryType, setPendingEntryType] = useState<'info' | 'task'>('info')
+  const pendingEntryTypeRef = useRef<'info' | 'task'>('info')
+  pendingEntryTypeRef.current = pendingEntryType
   const workspaceRef = useRef(activeWorkspace)
   workspaceRef.current = activeWorkspace
   const workspacesRef = useRef(workspaces)
@@ -787,7 +790,7 @@ export function JournalBlock(props: Props) {
       // Block was already created by autosave — update and fetch it
       const { data, error } = await supabase
         .from('journal_blocks')
-        .update({ content: html })
+        .update({ content: html, entry_type: pendingEntryTypeRef.current })
         .eq('id', autosavedBlockIdRef.current)
         .select()
         .single()
@@ -804,6 +807,7 @@ export function JournalBlock(props: Props) {
           workspace_id: wsId,
           content: html,
           status: 'active',
+          entry_type: pendingEntryTypeRef.current,
         })
         .select()
         .single()
@@ -859,6 +863,7 @@ export function JournalBlock(props: Props) {
     liveTextRef.current = ''
     setPendingPropertyIds(new Set())
     setPendingFiles([])
+    setPendingEntryType('info')
     setFocused(false)
     setEditorKey(k => k + 1)
     if (saved) {
@@ -950,10 +955,10 @@ export function JournalBlock(props: Props) {
         try {
           const supabase = createClient()
           if (autosavedBlockIdRef.current) {
-            // Already auto-saved once — just update content
+            // Already auto-saved once — just update content and entry_type
             await supabase
               .from('journal_blocks')
-              .update({ content: html })
+              .update({ content: html, entry_type: pendingEntryTypeRef.current })
               .eq('id', autosavedBlockIdRef.current)
           } else {
             // First autosave — insert the block silently
@@ -969,6 +974,7 @@ export function JournalBlock(props: Props) {
                 workspace_id: wsId,
                 content: html,
                 status: 'active',
+                entry_type: pendingEntryTypeRef.current,
               })
               .select('id')
               .single()
@@ -1036,6 +1042,7 @@ export function JournalBlock(props: Props) {
 
     liveHTMLRef.current = ''
     liveTextRef.current = ''
+    setPendingEntryType('info')
     setFocused(false)
     setEditorKey(k => k + 1)
     p.onSaved(data as Block)
@@ -1133,9 +1140,10 @@ export function JournalBlock(props: Props) {
       return
     }
 
-    if (!isNewEntry && focused && e.altKey && !e.shiftKey && !e.ctrlKey && (e.key === '`' || e.key === '~')) {
+    if (focused && e.altKey && !e.shiftKey && !e.ctrlKey && (e.key === '`' || e.key === '~')) {
       e.preventDefault()
-      toggleEntryType()
+      if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') }
+      else { toggleEntryType() }
       return
     }
 
@@ -1170,6 +1178,7 @@ export function JournalBlock(props: Props) {
       clearAutosaveTimer()
       setPendingPropertyIds(new Set())
       setPendingFiles([])
+      setPendingEntryType('info')
       setEditorKey(k => k + 1)
       return
     }
@@ -1546,7 +1555,7 @@ export function JournalBlock(props: Props) {
   const contentHTML = block ? toEditorHTML(block.content) : ''
   const showToolbar = focused && formattingVisible
 
-  const isTask = block?.entry_type === 'task'
+  const isTask = isNewEntry ? pendingEntryType === 'task' : block?.entry_type === 'task'
   const isComplete = block?.task_status === 'done'
 
   // Lifecycle state — determines rendering mode for non-active entries
@@ -1569,10 +1578,10 @@ export function JournalBlock(props: Props) {
 
   // Build popover menu items — shown for both new entry and existing blocks.
   const popoverItems: { key: string; label: string; shortcut?: string; shortcutTip?: string; icon: React.ReactNode; onClick: () => void; className?: string; separator?: boolean }[] = [
-    ...(block ? [{
+    {
       key: 'convert', label: isTask ? 'Convert to Info' : 'Convert to Task', shortcut: '⌥`', shortcutTip: 'Alt + Backtick', icon: convertIcon(),
-      onClick: () => { setPopoverOpen(false); toggleEntryType() },
-    }] : []),
+      onClick: () => { setPopoverOpen(false); if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') } else { toggleEntryType() } },
+    },
     { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', shortcutTip: 'Alt + Shift + S', icon: sparkleIcon(), onClick: () => popoverAction({ type: 'summarize' }) },
     ...(block ? [
       { key: 'history', label: 'View History', shortcut: '⌥⇧H', shortcutTip: 'Alt + Shift + H', icon: historyIcon(), onClick: () => { setPopoverOpen(false); setShowHistory(true) } },
@@ -1584,7 +1593,7 @@ export function JournalBlock(props: Props) {
       onClick: () => setMoveMenuOpen(prev => !prev),
     }] : []),
     ...(block ? [{ key: 'archive', label: 'Archive', shortcut: '⌥⇧D', shortcutTip: 'Alt + Shift + D', icon: archiveIcon(), onClick: () => { setPopoverOpen(false); archiveBlock() }, separator: true }] : []),
-    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
+    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
   ]
 
   // Disable split when selection covers entire block content

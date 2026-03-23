@@ -697,6 +697,17 @@ export function JournalPage({ userId, email, displayName }: Props) {
   // ── Top bar colors ──────────────────────────────────────
   const barBg = activeScheme?.primary ?? '#FFFFFF'
   const barText = activeScheme?.textOnColor ?? '#1C1917'
+
+  // Sync PWA title bar color with workspace scheme
+  useEffect(() => {
+    let meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null
+    if (!meta) {
+      meta = document.createElement('meta')
+      meta.name = 'theme-color'
+      document.head.appendChild(meta)
+    }
+    meta.content = barBg
+  }, [barBg])
   // For icon buttons in the top bar, derive a semi-transparent hover layer
   const btnActiveClass = activeScheme
     ? 'bg-white/20'
