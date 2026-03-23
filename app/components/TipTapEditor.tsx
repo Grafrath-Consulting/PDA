@@ -314,7 +314,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
         style: `min-height: ${minHeight}`,
       },
       handleKeyDown(_view, event) {
-        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        if ((event.key === 'Enter' || event.key === 's') && (event.ctrlKey || event.metaKey)) {
           event.preventDefault()
           onSubmitRef.current?.()
           return true

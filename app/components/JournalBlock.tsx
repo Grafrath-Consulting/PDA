@@ -321,6 +321,8 @@ export function JournalBlock(props: Props) {
   const { dateFormat, timeFormat } = useDateFormat()
   const propertyWorkspaceId = (!isNewEntry ? (props as ExistingBlockProps).block?.workspace_id : null) ?? activeWorkspaceId
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false)
+  const propertyEditorOpenRef = useRef(false)
+  propertyEditorOpenRef.current = propertyEditorOpen
   const [moveMenuOpen, setMoveMenuOpen] = useState(false)
   const [pillMenuOpen, setPillMenuOpen] = useState(false)
   const pillRef = useRef<HTMLDivElement>(null)
@@ -1223,6 +1225,8 @@ export function JournalBlock(props: Props) {
     if (suppressBlurRef.current) return
     // If focus moved to another element inside the card, stay active
     if (cardRef.current?.contains(e.relatedTarget as Node)) return
+    // If the property editor popup is open (portaled to body), stay active
+    if (propertyEditorOpenRef.current) return
     // If focus moved to an emoji picker (portaled to body, possibly in shadow DOM), stay active
     const related = e.relatedTarget as HTMLElement | null
     if (related?.closest?.('em-emoji-picker') || related?.tagName === 'EM-EMOJI-PICKER') return
@@ -1914,7 +1918,7 @@ export function JournalBlock(props: Props) {
             ref={editorRef}
             content={contentHTML}
             placeholder={isNewEntry
-              ? 'Type to create a new entry \u00b7 Ctrl+Enter to save \u00b7 Esc to cancel'
+              ? 'Type to create a new entry \u00b7 Ctrl+Enter or Ctrl+S to save \u00b7 Esc to cancel'
               : undefined}
             autoFocus={isNewEntry}
             onSubmit={handleSave}
