@@ -45,20 +45,29 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [pickerTop, setPickerTop] = useState(0)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const [isMobile, setIsMobile] = useState(false)
+
+  function computePos(rect: DOMRect) {
+    const narrow = window.innerWidth < 640
+    setIsMobile(narrow)
+    if (narrow) {
+      setPos({ top: rect.bottom + 4, left: Math.max(8, Math.min(rect.left, window.innerWidth - 240)) })
+    } else {
+      setPos({ top: rect.top, left: rect.right + 8 })
+    }
+  }
 
   // Position the portal relative to the anchor button
   useLayoutEffect(() => {
     if (!anchorRef?.current) return
-    const rect = anchorRef.current.getBoundingClientRect()
-    setPos({ top: rect.top, left: rect.right + 8 })
+    computePos(anchorRef.current.getBoundingClientRect())
   }, [anchorRef])
 
   // Reposition on scroll/resize
   useEffect(() => {
     if (!anchorRef?.current) return
     function update() {
-      const rect = anchorRef!.current!.getBoundingClientRect()
-      setPos({ top: rect.top, left: rect.right + 8 })
+      computePos(anchorRef!.current!.getBoundingClientRect())
     }
     window.addEventListener('scroll', update, true)
     window.addEventListener('resize', update)
@@ -226,13 +235,13 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
         })}
       </div>
 
-      {/* Value picker panel — separate box to the right, bottom-aligned with the active row */}
+      {/* Value picker panel — to the right on desktop, below on mobile */}
       {openProp && (
         <div
-          className={`absolute left-full ml-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px] whitespace-nowrap ${
+          className={`absolute bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px] whitespace-nowrap ${
             needsScroll ? 'max-h-[320px] overflow-y-auto' : ''
-          }`}
-          style={{ top: pickerTop, transform: 'translateY(-100%)' }}
+          } ${isMobile ? 'left-0 mt-1' : 'left-full ml-1'}`}
+          style={isMobile ? { top: '100%' } : { top: pickerTop, transform: 'translateY(-100%)' }}
         >
           <button
             type="button"

@@ -68,6 +68,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [filterDeletedTo, setFilterDeletedTo] = useState('')
   const [filterAssignee, setFilterAssignee] = useState<string | null>(null) // null=any, 'unassigned', or person id
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const switcherContainerRef = useRef<HTMLDivElement>(null)
   const [searchMode, setSearchMode] = useState<'smart' | 'exact'>('smart')
   const [searchNonce, setSearchNonce] = useState(0)
   const [smartSearchResults, setSmartSearchResults] = useState<Block[] | null>(null)
@@ -131,6 +132,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [prefsOpen, setPrefsOpen] = useState(false)
   const [peopleModalOpen, setPeopleModalOpen] = useState(false)
   const [aboutModalOpen, setAboutModalOpen] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [peopleList, setPeopleList] = useState<{ id: string; name: string }[]>([])
 
   useEffect(() => {
@@ -706,16 +708,16 @@ export function JournalPage({ userId, email, displayName }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <header
-        className="h-14 border-b flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-200 relative"
+        className="h-14 border-b flex items-center justify-between px-3 sm:px-6 flex-shrink-0 transition-colors duration-200 relative"
         style={{
           backgroundColor: barBg,
           color: barText,
           borderColor: activeScheme ? 'transparent' : '#E5E0D0',
         }}
       >
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           {/* Workspace switcher */}
-          <div className="relative">
+          <div className="relative" ref={switcherContainerRef}>
           <button
             onClick={() => setSwitcherOpen(prev => !prev)}
             className={`flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors ${activeScheme ? 'hover:bg-white/10' : 'hover:bg-gray-100'}`}
@@ -732,7 +734,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
             ) : (
               <>
                 {activeWorkspace?.emoji && <span className="w-6 h-6 rounded-full flex items-center justify-center text-sm flex-shrink-0" style={{ backgroundColor: activeScheme?.muted ?? '#F3F4F6' }}>{activeWorkspace.emoji}</span>}
-                <span className="text-sm font-medium">{activeWorkspace?.name}</span>
+                <span className="text-sm font-medium truncate max-w-[80px] sm:max-w-none">{activeWorkspace?.name}</span>
               </>
             )}
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
@@ -748,13 +750,14 @@ export function JournalPage({ userId, email, displayName }: Props) {
               onNewWorkspace={() => { setSwitcherOpen(false); setCreateModalOpen(true) }}
               onEditWorkspace={(ws) => { setSwitcherOpen(false); setEditingWorkspace(ws); setCreateModalOpen(true) }}
               onClose={() => setSwitcherOpen(false)}
+              containerRef={switcherContainerRef}
             />
           )}
           </div>
         </div>
 
         {/* PDA wordmark — true-centered */}
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none" style={{ color: barText }}>
+        <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1.5 pointer-events-none" style={{ color: barText }}>
           <PdaIcon width={30} height={30} />
           <div className="flex flex-col gap-0">
             <span
@@ -772,11 +775,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0 ml-1">
+          {/* Desktop-only buttons (hidden on mobile, shown in overflow menu instead) */}
           <button
             onClick={() => setReportOpen(true)}
             title="Send report"
-            className={`p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
+            className={`hidden sm:block p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -788,14 +792,14 @@ export function JournalPage({ userId, email, displayName }: Props) {
           <button
             onClick={() => setPropsManagerOpen(true)}
             title="Manage properties"
-            className={`p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
+            className={`hidden sm:block p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
               <line x1="7" y1="7" x2="7.01" y2="7" />
             </svg>
           </button>
-          <div className="relative">
+          <div className="relative hidden sm:block">
             <button
               onClick={() => setSortDropdownOpen(prev => !prev)}
               onKeyDown={(e) => { if (e.key === 'Escape' && sortDropdownOpen) { e.stopPropagation(); setSortDropdownOpen(false) } }}
@@ -909,18 +913,18 @@ export function JournalPage({ userId, email, displayName }: Props) {
           <button
             onClick={togglePanel}
             title={panelOpen ? 'Close focus panel' : 'Open focus panel'}
-            className={`p-1.5 rounded-lg transition-colors ${panelOpen ? btnActiveClass : btnInactiveClass}`}
+            className={`hidden sm:block p-1.5 rounded-lg transition-colors ${panelOpen ? btnActiveClass : btnInactiveClass}`}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <line x1="15" y1="3" x2="15" y2="21" />
             </svg>
           </button>
-          {/* People button */}
+          {/* People button (desktop only) */}
           <button
             onClick={() => setPeopleModalOpen(true)}
             title="People"
-            className={`p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
+            className={`hidden sm:block p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -929,11 +933,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
           </button>
-          {/* User / Account button */}
+          {/* User / Account button (desktop only) */}
           <button
             onClick={() => setPrefsOpen(true)}
             title="Account settings"
-            className={`p-1 rounded-lg transition-colors ${btnInactiveClass}`}
+            className={`hidden sm:block p-1 rounded-lg transition-colors ${btnInactiveClass}`}
           >
             <div className="w-7 h-7 rounded-full bg-[#FEF3C7] flex items-center justify-center flex-shrink-0">
               <span className="text-xs font-medium text-[#92400E]">
@@ -941,11 +945,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
               </span>
             </div>
           </button>
-          {/* About / Version button */}
+          {/* About / Version button (desktop only) */}
           <button
             onClick={() => setAboutModalOpen(true)}
             title="About PDA"
-            className={`p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
+            className={`hidden sm:block p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" />
@@ -953,14 +957,126 @@ export function JournalPage({ userId, email, displayName }: Props) {
               <line x1="12" y1="8" x2="12.01" y2="8" />
             </svg>
           </button>
+          {/* Mobile overflow menu (three-dot) */}
+          <div className="relative sm:hidden">
+            <button
+              onClick={() => setMobileMenuOpen(prev => !prev)}
+              title="More options"
+              className={`p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="2" />
+                <circle cx="12" cy="12" r="2" />
+                <circle cx="12" cy="19" r="2" />
+              </svg>
+            </button>
+            {mobileMenuOpen && createPortal(
+              <div className="fixed inset-0 z-[29]" onClick={() => setMobileMenuOpen(false)} />,
+              document.body
+            )}
+            {mobileMenuOpen && (
+              <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 w-max">
+                {/* Sort options submenu */}
+                <div className="px-3 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">Sort</div>
+                {[
+                  { mode: 'created_desc' as SortMode, label: 'Created — Newest' },
+                  { mode: 'created_asc' as SortMode, label: 'Created — Oldest' },
+                  { mode: 'modified_desc' as SortMode, label: 'Modified — Newest' },
+                  { mode: 'modified_asc' as SortMode, label: 'Modified — Oldest' },
+                  { mode: 'due_date' as SortMode, label: 'Due Date' },
+                  { mode: 'manual' as SortMode, label: 'Manual' },
+                ].map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    onClick={() => { saveSortMode(mode); setMobileMenuOpen(false) }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-sm whitespace-nowrap transition-colors ${
+                      sortMode === mode
+                        ? 'bg-amber-50 text-amber-800 font-medium'
+                        : 'text-gray-700 hover:bg-[#FFFEF7]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <div className="border-t border-[#E5E0D0] my-1" />
+                <button
+                  onClick={() => { togglePanel(); setMobileMenuOpen(false) }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <line x1="15" y1="3" x2="15" y2="21" />
+                  </svg>
+                  {panelOpen ? 'Close Focus Panel' : 'Open Focus Panel'}
+                </button>
+                <button
+                  onClick={() => { setReportOpen(true); setMobileMenuOpen(false) }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                  </svg>
+                  Send Report
+                </button>
+                <button
+                  onClick={() => { setPropsManagerOpen(true); setMobileMenuOpen(false) }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                    <line x1="7" y1="7" x2="7.01" y2="7" />
+                  </svg>
+                  Manage Properties
+                </button>
+                <button
+                  onClick={() => { setPeopleModalOpen(true); setMobileMenuOpen(false) }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  </svg>
+                  People
+                </button>
+                <div className="border-t border-[#E5E0D0] my-1" />
+                <button
+                  onClick={() => { setPrefsOpen(true); setMobileMenuOpen(false) }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
+                >
+                  <div className="w-5 h-5 rounded-full bg-[#FEF3C7] flex items-center justify-center flex-shrink-0">
+                    <span className="text-[10px] font-medium text-[#92400E]">
+                      {(displayName || email || '?')[0].toUpperCase()}
+                    </span>
+                  </div>
+                  Account Settings
+                </button>
+                <button
+                  onClick={() => { setAboutModalOpen(true); setMobileMenuOpen(false) }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                  About PDA
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
       {/* ── Unified search & filter panel ── */}
-      <div className="border-b border-[#E5E0D0] bg-[#FDFCF7] px-6 py-2.5 flex-shrink-0 overflow-x-auto">
+      <div className="border-b border-[#E5E0D0] bg-[#FDFCF7] px-3 sm:px-6 py-2.5 flex-shrink-0">
         {/* Row 1: Pinned properties (or context filter) + search box */}
-        <div className="flex items-center gap-3">
-          <div className="flex-1 min-w-0 flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+          <div className="flex-1 min-w-0">
             {(() => {
               const props = advancedOpen
                 ? propertiesForWorkspace(activeWorkspaceId)
@@ -980,54 +1096,56 @@ export function JournalPage({ userId, email, displayName }: Props) {
               ) : null
             })()}
           </div>
-          {/* Search input */}
-          <div className="relative flex-shrink-0 w-64">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
-              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder={searchMode === 'smart' ? "Search\u2026 (Ctrl+K)" : "Filter\u2026 (Ctrl+K)"}
-              className={`w-full pl-7 pr-7 py-1 text-xs rounded-md border outline-none transition-colors text-gray-900 placeholder-gray-400 bg-white ${smartSearchLoading ? 'animate-pulse' : ''}`}
-              style={{
-                borderColor: smartSearchLoading ? '#F59E0B' : (hasActiveSearch ? '#F59E0B' : '#E5E0D0'),
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') { setSearchText(''); searchInputRef.current?.blur() }
-                if (e.key === 'Enter') { setDebouncedSearch(searchText); setSearchNonce(n => n + 1) }
-              }}
-            />
-            {searchText && (
-              <button
-                onClick={() => setSearchText('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-              </button>
-            )}
-          </div>
-          {/* Expand/collapse toggle */}
-          <button
-            onClick={toggleAdvanced}
-            className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-gray-600 transition-colors"
-            title={advancedOpen ? 'Collapse filters' : 'Expand filters'}
-          >
+          {/* Search input + filter toggle */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 sm:flex-none sm:w-64">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
+                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder={searchMode === 'smart' ? "Search\u2026 (Ctrl+K)" : "Filter\u2026 (Ctrl+K)"}
+                className={`w-full pl-7 pr-7 py-1 text-xs rounded-md border outline-none transition-colors text-gray-900 placeholder-gray-400 bg-white ${smartSearchLoading ? 'animate-pulse' : ''}`}
+                style={{
+                  borderColor: smartSearchLoading ? '#F59E0B' : (hasActiveSearch ? '#F59E0B' : '#E5E0D0'),
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') { setSearchText(''); searchInputRef.current?.blur() }
+                  if (e.key === 'Enter') { setDebouncedSearch(searchText); setSearchNonce(n => n + 1) }
+                }}
+              />
+              {searchText && (
+                <button
+                  onClick={() => setSearchText('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </button>
+              )}
+            </div>
+            {/* Expand/collapse toggle */}
+            <button
+              onClick={toggleAdvanced}
+              className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-gray-600 transition-colors"
+              title={advancedOpen ? 'Collapse filters' : 'Expand filters'}
+            >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
               <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
               <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
               <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
             </svg>
-          </button>
+            </button>
+          </div>
         </div>
 
         {/* Row 2 (expanded): Type, Status, Date, Search mode, Clear filters */}
         {advancedOpen && (
-          <div className="flex items-center gap-4 flex-wrap text-[11px] mt-2.5 pt-2.5 border-t border-[#EDE9DB]">
+          <div className="flex items-center gap-3 sm:gap-4 flex-wrap text-[11px] mt-2.5 pt-2.5 border-t border-[#EDE9DB]">
             <div className="flex items-center gap-1.5">
               <span className="text-gray-400 font-medium">Type:</span>
               {([['info', 'Info'], ['task', 'Task']] as const).map(([t, label]) => (
@@ -1249,7 +1367,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
           className="flex-1 overflow-y-auto min-w-0 transition-colors duration-200"
           style={{ backgroundColor: isGlobalView ? '#FAFAF8' : (activeScheme?.muted ?? '#FAFAF8') }}
         >
-          <div className="px-6 py-6 space-y-4">
+          <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-4">
             <ContextFilter
               contexts={contexts}
               active={contextFilter}
@@ -1368,6 +1486,7 @@ function WorkspaceSwitcherDropdown({
   onNewWorkspace,
   onEditWorkspace,
   onClose,
+  containerRef,
 }: {
   workspaces: Workspace[]
   activeId: string | null
@@ -1375,12 +1494,17 @@ function WorkspaceSwitcherDropdown({
   onNewWorkspace: () => void
   onEditWorkspace: (ws: Workspace) => void
   onClose: () => void
+  containerRef?: React.RefObject<HTMLDivElement | null>
 }) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      const target = e.target as Node
+      // Ignore clicks inside the dropdown or the trigger container (so toggle works)
+      if (ref.current && ref.current.contains(target)) return
+      if (containerRef?.current && containerRef.current.contains(target)) return
+      onClose()
     }
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
@@ -1438,7 +1562,7 @@ function WorkspaceSwitcherDropdown({
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); onEditWorkspace(ws) }}
-              className="px-2 py-1 text-[10px] text-gray-400 hover:text-amber-600 opacity-0 group-hover/ws:opacity-100 transition-opacity"
+              className="px-2 py-1 text-[10px] text-gray-400 hover:text-amber-600 opacity-100 sm:opacity-0 group-hover/ws:opacity-100 transition-opacity"
             >
               Edit
             </button>

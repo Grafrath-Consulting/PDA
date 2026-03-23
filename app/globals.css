@@ -24,6 +24,14 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+  /* Hide scrollbar but keep scrolling functional */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* Slide-in animation for preferences panel */
@@ -48,6 +56,16 @@ body {
   color: #d1d5db;
   pointer-events: none;
   height: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+@media (max-width: 639px) {
+  .tiptap-wrapper .tiptap p.is-editor-empty:first-child::before {
+    content: "New entry\2026";
+  }
 }
 
 .tiptap-wrapper .tiptap p { margin: 0.25em 0; }
