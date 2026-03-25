@@ -813,7 +813,11 @@ export function JournalBlock(props: Props) {
       }
     }
     requestAnimationFrame(() => {
-      if (whitespaceSide) {
+      if (whitespaceSide === 'right') {
+        // Right-side whitespace: focusAtCoords places cursor at end of the visual line
+        editorRef.current?.focusAtCoords(x, y)
+      } else if (whitespaceSide === 'left') {
+        // Left-side whitespace: select the entire line
         editorRef.current?.focusAtCoords(x, y)
         setTimeout(() => {
           const pm = cardRef.current?.querySelector('.ProseMirror') as HTMLElement
@@ -830,8 +834,6 @@ export function JournalBlock(props: Props) {
           if (targetEl) {
             const range = document.createRange()
             range.selectNodeContents(targetEl)
-            if (whitespaceSide === 'right') range.collapse(false) // cursor at end
-            // left side: keep full selection (selectNodeContents)
             const sel = window.getSelection()
             sel?.removeAllRanges()
             sel?.addRange(range)

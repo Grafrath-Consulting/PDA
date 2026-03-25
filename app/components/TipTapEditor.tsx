@@ -339,6 +339,10 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
         }
         if (!side) return false
 
+        // Right-side: let ProseMirror handle cursor placement at end of visual line
+        if (side === 'right') return false
+
+        // Left-side: select the entire line
         const pm = view.dom
         const blockEls = Array.from(pm.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'))
         let targetEl: Element | null = null
@@ -352,8 +356,6 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
         if (targetEl) {
           const range = document.createRange()
           range.selectNodeContents(targetEl)
-          if (side === 'right') range.collapse(false) // cursor at end
-          // left: full line selection
           const sel = window.getSelection()
           sel?.removeAllRanges()
           sel?.addRange(range)
