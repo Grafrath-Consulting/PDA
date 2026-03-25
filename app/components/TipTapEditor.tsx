@@ -12,6 +12,7 @@ import Link from '@tiptap/extension-link'
 import Highlight from '@tiptap/extension-highlight'
 import Mention from '@tiptap/extension-mention'
 import { Extension } from '@tiptap/core'
+import { TextSelection } from '@tiptap/pm/state'
 import { ReactRenderer } from '@tiptap/react'
 import type { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion'
 import { MentionSuggestionList, MentionSuggestionHandle, MentionSuggestionItem } from './MentionSuggestion'
@@ -47,6 +48,7 @@ export interface TipTapEditorHandle {
   getSelectionTo: () => number
   getDOMSelectionRange: () => { from: number; to: number }
   deleteRange: (from: number, to: number) => string
+  selectLineAt: (pos: number) => void
 }
 
 interface Props {
@@ -318,6 +320,48 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
         class: 'outline-none max-w-none',
         style: `min-height: ${minHeight}`,
       },
+      handleClick(view, _pos, event) {
+        // Click in whitespace next to text: select the entire line/paragraph
+        const target = event.target as HTMLElement
+        const isEditorRoot = target.classList.contains('ProseMirror')
+        const isBlockEl = target.matches('p, li, h1, h2, h3, h4, h5, h6, blockquote')
+        if (!isEditorRoot && !isBlockEl) return false
+
+        // Determine which side of text the click is on
+        let side: 'left' | 'right' | null = null
+        if (isEditorRoot) {
+          side = 'right'
+        } else if (isBlockEl) {
+          const range = document.createRange()
+          range.selectNodeContents(target)
+          const textRect = range.getBoundingClientRect()
+          if (event.clientX < textRect.left - 4) side = 'left'
+          else if (event.clientX > textRect.right + 4) side = 'right'
+        }
+        if (!side) return false
+
+        const pm = view.dom
+        const blockEls = Array.from(pm.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'))
+        let targetEl: Element | null = null
+        let closestDist = Infinity
+        for (const el of blockEls) {
+          const rect = el.getBoundingClientRect()
+          const mid = rect.top + rect.height / 2
+          const dist = Math.abs(event.clientY - mid)
+          if (dist < closestDist) { closestDist = dist; targetEl = el }
+        }
+        if (targetEl) {
+          const range = document.createRange()
+          range.selectNodeContents(targetEl)
+          if (side === 'right') range.collapse(false) // cursor at end
+          // left: full line selection
+          const sel = window.getSelection()
+          sel?.removeAllRanges()
+          sel?.addRange(range)
+          return true
+        }
+        return false
+      },
       handleKeyDown(_view, event) {
         if ((event.key === 'Enter' || event.key === 's') && (event.ctrlKey || event.metaKey)) {
           event.preventDefault()
@@ -424,6 +468,19 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       if (!wasEditable) editor.setEditable(false)
       return result
     },
+    selectLineAt: (pos: number) => {
+      if (!editor) return
+      try {
+        const resolved = editor.state.doc.resolve(pos)
+        const depth = resolved.depth > 0 ? 1 : 0
+        if (depth === 0 && resolved.parent === editor.state.doc) return
+        const blockStart = depth > 0 ? resolved.start(depth) : resolved.start()
+        const blockEnd = depth > 0 ? resolved.end(depth) : resolved.end()
+        if (blockEnd > blockStart) {
+          editor.commands.setTextSelection({ from: blockStart, to: blockEnd })
+        }
+      } catch { /* position out of range */ }
+    },
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openLinkEditor is stable, only editor instance matters
   }), [editor])
 
@@ -474,6 +531,18 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
         const result = editor.getHTML()
         if (!wasEditable) editor.setEditable(false)
         return result
+      },
+      selectLineAt: (pos: number) => {
+        try {
+          const resolved = editor.state.doc.resolve(pos)
+          const depth = resolved.depth > 0 ? 1 : 0
+          if (depth === 0 && resolved.parent === editor.state.doc) return
+          const blockStart = depth > 0 ? resolved.start(depth) : resolved.start()
+          const blockEnd = depth > 0 ? resolved.end(depth) : resolved.end()
+          if (blockEnd > blockStart) {
+            editor.commands.setTextSelection({ from: blockStart, to: blockEnd })
+          }
+        } catch { /* position out of range */ }
       },
     }
     onReadyRef.current?.(handle)

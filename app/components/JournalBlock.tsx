@@ -732,6 +732,24 @@ export function JournalBlock(props: Props) {
   // Clicking a non-focused block sets it to focused/editable. The actual
   // editor focus + cursor placement is deferred to requestAnimationFrame
   // so React has time to re-render with editable={true} first.
+  // Find the nearest block element at a Y coordinate and select its line
+  function selectLineAtY(clickY: number) {
+    const editor = getEditor()
+    if (!editor) return
+    const pm = cardRef.current?.querySelector('.ProseMirror')
+    if (!pm) return
+    const blockEls = Array.from(pm.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'))
+    for (const el of blockEls) {
+      const rect = el.getBoundingClientRect()
+      if (clickY >= rect.top && clickY <= rect.bottom) {
+        // Use focusAtCoords to place cursor in this line, then select via editor
+        const pos = editor.getSelectionFrom()
+        editor.selectLineAt(pos)
+        return
+      }
+    }
+  }
+
   function handleContentMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return // left click only
     // If already focused, clicking inside the card but OUTSIDE the editor
@@ -742,13 +760,27 @@ export function JournalBlock(props: Props) {
       const tiptapEl = cardRef.current?.querySelector('.tiptap-wrapper')
       if (!tiptapEl?.contains(e.target as Node)) {
         e.preventDefault()
-        const ce = cardRef.current?.querySelector('[contenteditable="true"]') as HTMLElement
-        if (ce) {
-          ce.focus()
-          const sel = window.getSelection()
-          if (sel) {
-            sel.selectAllChildren(ce)
-            sel.collapseToEnd()
+        const pm = cardRef.current?.querySelector('.ProseMirror') as HTMLElement
+        if (pm) {
+          const pmRect = pm.getBoundingClientRect()
+          const side = e.clientX < pmRect.left ? 'left' : 'right'
+          pm.focus()
+          const blockEls = Array.from(pm.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'))
+          let targetEl: Element | null = null
+          let closestDist = Infinity
+          for (const el of blockEls) {
+            const rect = el.getBoundingClientRect()
+            const mid = rect.top + rect.height / 2
+            const dist = Math.abs(e.clientY - mid)
+            if (dist < closestDist) { closestDist = dist; targetEl = el }
+          }
+          if (targetEl) {
+            const range = document.createRange()
+            range.selectNodeContents(targetEl)
+            if (side === 'right') range.collapse(false)
+            const sel = window.getSelection()
+            sel?.removeAllRanges()
+            sel?.addRange(range)
           }
         }
       }
@@ -765,24 +797,71 @@ export function JournalBlock(props: Props) {
     // Register this block's deactivation so the *next* activated block can call it
     deactivatePreviousBlock = () => saveExistingBlock()
     const x = e.clientX, y = e.clientY
+    const target = e.target as HTMLElement
     const tiptapEl = cardRef.current?.querySelector('.tiptap-wrapper')
-    const clickedInEditor = tiptapEl?.contains(e.target as Node)
+    const clickedInEditor = tiptapEl?.contains(target)
+    // Detect whitespace click and which side (left = select line, right = cursor at end)
+    let whitespaceSide: 'left' | 'right' | null = null
+    if (!clickedInEditor) {
+      // Card padding — determine side based on editor position
+      const pm = cardRef.current?.querySelector('.ProseMirror')
+      if (pm) {
+        const pmRect = pm.getBoundingClientRect()
+        whitespaceSide = x < pmRect.left ? 'left' : 'right'
+      } else {
+        whitespaceSide = 'right'
+      }
+    } else {
+      const pm = cardRef.current?.querySelector('.ProseMirror')
+      if (pm) {
+        const blockEls = Array.from(pm.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'))
+        for (const el of blockEls) {
+          const rect = el.getBoundingClientRect()
+          if (y >= rect.top && y <= rect.bottom) {
+            const range = document.createRange()
+            range.selectNodeContents(el)
+            const textRect = range.getBoundingClientRect()
+            if (x < textRect.left - 4) whitespaceSide = 'left'
+            else if (x > textRect.right + 4) whitespaceSide = 'right'
+            break
+          }
+        }
+        if (target === pm) whitespaceSide = 'right'
+      }
+    }
     requestAnimationFrame(() => {
-      if (clickedInEditor) {
+      if (whitespaceSide) {
+        editorRef.current?.focusAtCoords(x, y)
+        setTimeout(() => {
+          const pm = cardRef.current?.querySelector('.ProseMirror') as HTMLElement
+          if (!pm) return
+          const blockEls = Array.from(pm.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'))
+          let targetEl: Element | null = null
+          let closestDist = Infinity
+          for (const el of blockEls) {
+            const rect = el.getBoundingClientRect()
+            const mid = rect.top + rect.height / 2
+            const dist = Math.abs(y - mid)
+            if (dist < closestDist) { closestDist = dist; targetEl = el }
+          }
+          if (targetEl) {
+            const range = document.createRange()
+            range.selectNodeContents(targetEl)
+            if (whitespaceSide === 'right') range.collapse(false) // cursor at end
+            // left side: keep full selection (selectNodeContents)
+            const sel = window.getSelection()
+            sel?.removeAllRanges()
+            sel?.addRange(range)
+          }
+        }, 100)
+      } else if (clickedInEditor) {
         editorRef.current?.focusAtCoords(x, y)
       } else {
-        // Bypass TipTap's API — directly focus the contenteditable element
-        // and place the cursor at the end using native browser APIs.
-        // This avoids issues with TipTap's command chain silently failing
-        // when the editor just transitioned from non-editable to editable.
         const ce = cardRef.current?.querySelector('[contenteditable="true"]') as HTMLElement
         if (ce) {
           ce.focus()
           const sel = window.getSelection()
-          if (sel) {
-            sel.selectAllChildren(ce)
-            sel.collapseToEnd()
-          }
+          if (sel) { sel.selectAllChildren(ce); sel.collapseToEnd() }
         }
       }
     })
@@ -2464,18 +2543,20 @@ export function JournalBlock(props: Props) {
             />
             {pendingDueDate && (
               <>
-                <button
-                  onClick={() => setPendingDueDateType('deadline')}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium border rounded-full transition-colors ${pendingDueDateType === 'deadline' ? 'bg-red-50 border-red-300 text-red-600' : 'border-gray-200 text-gray-400'}`}
-                >
-                  Deadline
-                </button>
-                <button
-                  onClick={() => setPendingDueDateType('target')}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium border rounded-full transition-colors ${pendingDueDateType === 'target' ? 'bg-amber-50 border-amber-300 text-amber-600' : 'border-gray-200 text-gray-400'}`}
-                >
-                  Target
-                </button>
+                <div className="flex items-center bg-gray-100 rounded-md p-0.5">
+                  <button
+                    onClick={() => setPendingDueDateType('deadline')}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'deadline' ? 'bg-red-100 text-red-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    Deadline
+                  </button>
+                  <button
+                    onClick={() => setPendingDueDateType('target')}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'target' || !pendingDueDateType ? 'bg-amber-100 text-amber-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    Target
+                  </button>
+                </div>
                 <button onClick={() => { setPendingDueDate(null); setPendingDueDateType(null) }} className="text-gray-300 hover:text-gray-500">
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
                 </button>
@@ -2614,17 +2695,17 @@ export function JournalBlock(props: Props) {
                       onChange={onTimeChange}
                       timeFormat={timeFormat}
                     />
-                    <div className="flex items-center rounded overflow-hidden border border-gray-200 ml-2">
+                    <div className="flex items-center bg-gray-100 rounded-md p-0.5 ml-2">
                       <button
                         onClick={() => updateTaskField('due_date_type', 'deadline')}
-                        className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                          block.due_date_type === 'deadline' ? 'bg-red-100 text-red-700' : 'text-gray-400 hover:text-gray-600'
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                          block.due_date_type === 'deadline' ? 'bg-red-100 text-red-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'
                         }`}
                       >Deadline</button>
                       <button
                         onClick={() => updateTaskField('due_date_type', 'target')}
-                        className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                          block.due_date_type === 'target' || !block.due_date_type ? 'bg-amber-100 text-amber-700' : 'text-gray-400 hover:text-gray-600'
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                          block.due_date_type === 'target' || !block.due_date_type ? 'bg-amber-100 text-amber-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'
                         }`}
                       >Target</button>
                     </div>
