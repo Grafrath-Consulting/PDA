@@ -1746,25 +1746,26 @@ export function JournalBlock(props: Props) {
     p.onUpdate({ ...p.block, entry_type: next, ...(next === 'info' && p.block.status === 'complete' ? { status: 'active' as const } : {}) })
   }
 
-  async function updateTaskField(field: string, value: unknown) {
+  function updateTaskField(field: string, value: unknown) {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    const supabase = createClient()
-    await supabase.from('journal_blocks').update({ [field]: value }).eq('id', p.block.id)
     p.onUpdate({ ...p.block, [field]: value })
+    const supabase = createClient()
+    supabase.from('journal_blocks').update({ [field]: value }).eq('id', p.block.id).then(() => {})
   }
 
   function handlePersonAdded(person: Person) {
     setPeople(prev => [...prev, person].sort((a, b) => a.name.localeCompare(b.name)))
   }
 
-  async function setTaskStatus(taskStatus: 'not_started' | 'in_progress' | 'done') {
+  function setTaskStatus(taskStatus: 'not_started' | 'in_progress' | 'done') {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
     const blockStatus = taskStatus === 'done' ? 'complete' as const : 'active' as const
-    const supabase = createClient()
-    await supabase.from('journal_blocks').update({ task_status: taskStatus, status: blockStatus }).eq('id', p.block.id)
+    // Optimistic update — show immediately, persist in background
     p.onUpdate({ ...p.block, task_status: taskStatus, status: blockStatus })
+    const supabase = createClient()
+    supabase.from('journal_blocks').update({ task_status: taskStatus, status: blockStatus }).eq('id', p.block.id).then(() => {})
   }
 
   async function moveToWorkspace(targetWsId: string | null) {
