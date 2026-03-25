@@ -487,10 +487,17 @@ export function JournalPage({ userId, email, displayName }: Props) {
     })
   }, [initialised, blocks])
 
+  // Track previous workspace to detect workspace switches
+  const prevWorkspaceRef = useRef(activeWorkspaceId)
   useEffect(() => {
     if (!initialised) return
     // In smart mode, the smart search API handles everything — skip exact fetch
     if (searchMode === 'smart' && debouncedSearch) return
+    // On workspace switch, clear blocks immediately to show loading placeholders
+    if (prevWorkspaceRef.current !== activeWorkspaceId) {
+      setBlocks([])
+      prevWorkspaceRef.current = activeWorkspaceId
+    }
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1487,7 +1494,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
             <BlockFeed
               blocks={searchMode === 'smart' && filteredSmartResults ? filteredSmartResults : sortedBlocks}
-              loading={searchMode === 'smart' ? smartSearchLoading : (loading && !initialised)}
+              loading={searchMode === 'smart' ? smartSearchLoading : (loading && (blocks.length === 0))}
               hasMore={searchMode === 'smart' && filteredSmartResults ? false : hasMore}
               onLoadMore={loadMore}
               onBlockUpdate={handleBlockUpdate}
