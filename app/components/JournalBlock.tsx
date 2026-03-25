@@ -538,7 +538,20 @@ export function JournalBlock(props: Props) {
   const propertyWorkspaceId = (!isNewEntry ? (props as ExistingBlockProps).block?.workspace_id : null) ?? activeWorkspaceId
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false)
   const propertyEditorOpenRef = useRef(false)
+  const prevPropertyEditorOpen = useRef(false)
   propertyEditorOpenRef.current = propertyEditorOpen
+
+  // When property editor closes, refocus the text editor so keyboard shortcuts work
+  useEffect(() => {
+    if (prevPropertyEditorOpen.current && !propertyEditorOpen) {
+      requestAnimationFrame(() => {
+        if (!cardRef.current?.contains(document.activeElement)) {
+          editorRef.current?.focus()
+        }
+      })
+    }
+    prevPropertyEditorOpen.current = propertyEditorOpen
+  }, [propertyEditorOpen])
   const [moveMenuOpen, setMoveMenuOpen] = useState(false)
   const [pillMenuOpen, setPillMenuOpen] = useState(false)
   const pillRef = useRef<HTMLDivElement>(null)
@@ -1121,8 +1134,14 @@ export function JournalBlock(props: Props) {
   }
 
   // ── Save: new entry → INSERT, existing → UPDATE + block_version ─────
+  const pendingSaveRef = useRef(false)
   const saveNewEntry = useCallback(async () => {
-    if (savingRef.current) return
+    if (savingRef.current) {
+      // An autosave is in flight — queue the full save for when it completes
+      pendingSaveRef.current = true
+      return
+    }
+    pendingSaveRef.current = false
     const html = liveHTMLRef.current
     const text = liveTextRef.current.trim()
     if (!text) return
@@ -1334,7 +1353,7 @@ export function JournalBlock(props: Props) {
       lastSavedHTMLRef.current = html
     } finally {
       savingRef.current = false
-      if (!focusedRef.current && liveTextRef.current.trim()) {
+      if (pendingSaveRef.current || (!focusedRef.current && liveTextRef.current.trim())) {
         saveNewEntry()
       }
     }
