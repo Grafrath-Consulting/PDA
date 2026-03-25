@@ -27,10 +27,20 @@ const TabHandler = Extension.create({
   addKeyboardShortcuts() {
     return {
       Tab: ({ editor }) => {
+        // Inside a list item: indent (sink) the list item
+        if (editor.isActive('listItem')) {
+          return editor.commands.sinkListItem('listItem')
+        }
         editor.commands.insertContent('\t')
         return true
       },
-      'Shift-Tab': () => true, // prevent reverse-focus navigation
+      'Shift-Tab': ({ editor }) => {
+        // Inside a list item: outdent (lift) the list item
+        if (editor.isActive('listItem')) {
+          return editor.commands.liftListItem('listItem')
+        }
+        return true // prevent reverse-focus navigation
+      },
     }
   },
 })
