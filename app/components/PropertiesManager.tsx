@@ -4,6 +4,13 @@ import { useState, useRef, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useProperties, Property, PropertyValue } from '@/context/PropertiesContext'
 import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
+import { getScheme } from '@/constants/workspaceColorSchemes'
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  DragEndEvent, DragStartEvent, DragOverlay,
+} from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 const VALUE_COLORS = [
   'red', 'amber', 'green', 'blue', 'indigo', 'violet', 'pink', 'gray',
@@ -33,10 +40,78 @@ interface Props {
   userId: string
 }
 
+function SortablePropertyRow({
+  property,
+  workspaces,
+  onChanged,
+  isDragActive,
+}: {
+  property: Property
+  workspaces: Workspace[]
+  onChanged: () => void
+  isDragActive: boolean
+}) {
+  const {
+    setNodeRef,
+    setActivatorNodeRef,
+    listeners,
+    attributes,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: property.id })
+
+  const style: React.CSSProperties = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+    opacity: isDragging ? 0.3 : 1,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className="relative group/sortable">
+      {!isDragActive && (
+        <div
+          ref={setActivatorNodeRef}
+          {...listeners}
+          {...attributes}
+          className="absolute -left-6 top-1/2 -translate-y-1/2 z-10 w-5 h-8 flex items-center justify-center rounded text-gray-300 hover:text-gray-400 cursor-grab active:cursor-grabbing opacity-0 group-hover/sortable:opacity-100 transition-opacity"
+        >
+          <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
+            <circle cx="3" cy="3" r="1.5"/><circle cx="7" cy="3" r="1.5"/>
+            <circle cx="3" cy="8" r="1.5"/><circle cx="7" cy="8" r="1.5"/>
+            <circle cx="3" cy="13" r="1.5"/><circle cx="7" cy="13" r="1.5"/>
+          </svg>
+        </div>
+      )}
+      <PropertyRow property={property} workspaces={workspaces} onChanged={onChanged} />
+    </div>
+  )
+}
+
 export function PropertiesManager({ open, onClose, userId }: Props) {
-  const { allProperties, refetch } = useProperties()
+  const { allProperties, refetch, reorderProperties } = useProperties()
   const { workspaces, activeWorkspaceId } = useWorkspace()
   const [creating, setCreating] = useState(false)
+  const [activeProp, setActiveProp] = useState<Property | null>(null)
+
+  const sensors = useSensors(useSensor(PointerSensor, {
+    activationConstraint: { distance: 8 },
+  }))
+
+  function handleDragStart(event: DragStartEvent) {
+    const prop = allProperties.find(p => p.id === String(event.active.id))
+    setActiveProp(prop ?? null)
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    setActiveProp(null)
+    const { active, over } = event
+    if (over && active.id !== over.id) {
+      const fromIndex = allProperties.findIndex(p => p.id === String(active.id))
+      const toIndex = allProperties.findIndex(p => p.id === String(over.id))
+      if (fromIndex !== -1 && toIndex !== -1) reorderProperties(fromIndex, toIndex)
+    }
+  }
 
   if (!open) return null
 
@@ -44,7 +119,7 @@ export function PropertiesManager({ open, onClose, userId }: Props) {
     <div className="fixed inset-0 z-50 flex" onClick={onClose}>
       <div className="absolute inset-0 bg-black/20" />
       <div
-        className="relative w-[420px] bg-white shadow-xl flex flex-col h-full"
+        className="relative w-full max-w-[525px] bg-white shadow-xl flex flex-col h-full"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#E5E0D0]">
@@ -54,10 +129,32 @@ export function PropertiesManager({ open, onClose, userId }: Props) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {allProperties.map((prop) => (
-            <PropertyRow key={prop.id} property={prop} workspaces={workspaces} onChanged={refetch} />
-          ))}
+        <div className="flex-1 overflow-y-auto px-5 pl-8 py-4 space-y-4">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={allProperties.map(p => p.id)} strategy={verticalListSortingStrategy}>
+              {allProperties.map((prop) => (
+                <SortablePropertyRow
+                  key={prop.id}
+                  property={prop}
+                  workspaces={workspaces}
+                  onChanged={refetch}
+                  isDragActive={!!activeProp}
+                />
+              ))}
+            </SortableContext>
+            <DragOverlay dropAnimation={null}>
+              {activeProp && (
+                <div className="opacity-90 shadow-xl rounded-lg">
+                  <PropertyRow property={activeProp} workspaces={workspaces} onChanged={() => {}} />
+                </div>
+              )}
+            </DragOverlay>
+          </DndContext>
 
           {allProperties.length === 0 && !creating && (
             <p className="text-sm text-gray-400 text-center py-8">No properties yet.</p>
@@ -68,7 +165,7 @@ export function PropertiesManager({ open, onClose, userId }: Props) {
               userId={userId}
               workspaces={workspaces}
               activeWorkspaceId={activeWorkspaceId}
-              existingNames={allProperties.map(p => p.name)}
+              allProperties={allProperties}
               onCreated={() => { setCreating(false); refetch() }}
               onCancel={() => setCreating(false)}
             />
@@ -102,6 +199,7 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
   const [showNewColorPicker, setShowNewColorPicker] = useState(false)
   const [optimisticPinned, setOptimisticPinned] = useState(property.pinned_in_filter_bar)
   const [optimisticMulti, setOptimisticMulti] = useState(property.allow_multiple)
+  const [optimisticArchived, setOptimisticArchived] = useState(property.archived)
   const newColorRef = useRef<HTMLDivElement>(null)
 
   // Sync optimistic state when property updates from server
@@ -111,6 +209,9 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
   useEffect(() => {
     setOptimisticMulti(property.allow_multiple)
   }, [property.allow_multiple])
+  useEffect(() => {
+    setOptimisticArchived(property.archived)
+  }, [property.archived])
 
   useEffect(() => {
     if (!showNewColorPicker) return
@@ -121,9 +222,10 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
     return () => document.removeEventListener('mousedown', handler)
   }, [showNewColorPicker])
 
-  const scopeLabel = property.workspace_id
-    ? workspaces.find(w => w.id === property.workspace_id)?.name ?? 'Workspace'
-    : 'Global'
+  const scopeWorkspace = property.workspace_id
+    ? workspaces.find(w => w.id === property.workspace_id) ?? null
+    : null
+  const scopeScheme = scopeWorkspace ? getScheme(scopeWorkspace.color_scheme) : null
 
   async function saveName() {
     if (!name.trim() || name === property.name) { setEditing(false); return }
@@ -161,8 +263,8 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
   }
 
   return (
-    <div className="border border-gray-200 rounded-lg p-3">
-      <div className="flex items-center justify-between mb-2">
+    <div className={`border rounded-lg p-3 ${optimisticArchived ? 'border-dashed border-gray-300 opacity-70' : 'border-gray-200'}`}>
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
         {editing ? (
           <input
             autoFocus
@@ -227,7 +329,24 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
               Multi
             </button>
           </div>
-          <span className="text-[11px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{scopeLabel}</span>
+          <button
+            onClick={async () => {
+              const next = !optimisticArchived
+              setOptimisticArchived(next)
+              const supabase = createClient()
+              await supabase.from('properties').update({ archived: next }).eq('id', property.id)
+              onChanged()
+            }}
+            className={`transition-colors ${optimisticArchived ? 'text-amber-500' : 'text-gray-300 hover:text-gray-400'}`}
+            title={optimisticArchived ? 'Unarchive property' : 'Archive property'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {optimisticArchived
+                ? <><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></>
+                : <><path d="M21 8V21H3V8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></>
+              }
+            </svg>
+          </button>
           <button onClick={deleteProperty} className="text-gray-300 hover:text-red-500 transition-colors" title="Delete property">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
           </button>
@@ -280,12 +399,33 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
           <button onClick={() => setAddingValue(false)} className="text-xs text-gray-400 hover:text-gray-600 flex-shrink-0">Cancel</button>
         </div>
       ) : (
-        <button
-          onClick={() => { setNewValueColor(randomColor(property.values.map(v => v.color))); setAddingValue(true) }}
-          className="text-[11px] text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          + Add value
-        </button>
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => { setNewValueColor(randomColor(property.values.map(v => v.color))); setAddingValue(true) }}
+            className="text-[11px] text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            + Add value
+          </button>
+          {scopeWorkspace ? (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium"
+              style={{
+                backgroundColor: scopeScheme?.primary ?? '#6B7280',
+                color: scopeScheme?.textOnColor ?? '#FFFFFF',
+              }}
+            >
+              {scopeWorkspace.emoji && <span className="w-4 h-4 rounded-full inline-flex items-center justify-center text-[10px] leading-none flex-shrink-0" style={{ backgroundColor: scopeScheme?.muted ?? '#F3F4F6' }}>{scopeWorkspace.emoji}</span>}
+              {scopeWorkspace.name}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                <circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              Global
+            </span>
+          )}
+        </div>
       )}
     </div>
   )
@@ -323,6 +463,12 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
     onChanged()
   }
 
+  async function toggleArchived() {
+    const supabase = createClient()
+    await supabase.from('property_values').update({ archived: !value.archived }).eq('id', value.id)
+    onChanged()
+  }
+
   async function remove() {
     if (!window.confirm(`Remove "${value.label}"?`)) return
     const supabase = createClient()
@@ -333,7 +479,9 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
   const swatch = value.color ? COLOR_SWATCHES[value.color] : '#D1D5DB'
 
   return (
-    <div ref={chipRef} className="relative group inline-flex items-center gap-1 bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5">
+    <div ref={chipRef} className={`relative group inline-flex items-center gap-1 bg-gray-50 border rounded px-1.5 py-0.5 ${
+      value.archived ? 'border-dashed border-gray-300 opacity-60' : 'border-gray-200'
+    }`}>
       <button
         onClick={() => setShowColorPicker(!showColorPicker)}
         className="w-2.5 h-2.5 rounded-full flex-shrink-0"
@@ -351,6 +499,18 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
       ) : (
         <button onClick={() => setEditing(true)} className="text-[11px] text-gray-700 hover:text-gray-900">{value.label}</button>
       )}
+      <button
+        onClick={toggleArchived}
+        title={value.archived ? 'Unarchive value' : 'Archive value'}
+        className="text-gray-300 hover:text-amber-500 opacity-0 group-hover:opacity-100 transition-opacity ml-0.5"
+      >
+        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          {value.archived
+            ? <><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></>
+            : <><path d="M21 8V21H3V8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></>
+          }
+        </svg>
+      </button>
       <button onClick={remove} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity ml-0.5">
         <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
       </button>
@@ -383,14 +543,14 @@ function NewPropertyForm({
   userId,
   workspaces,
   activeWorkspaceId,
-  existingNames,
+  allProperties,
   onCreated,
   onCancel,
 }: {
   userId: string
   workspaces: Workspace[]
   activeWorkspaceId: string | null
-  existingNames: string[]
+  allProperties: Property[]
   onCreated: () => void
   onCancel: () => void
 }) {
@@ -405,8 +565,12 @@ function NewPropertyForm({
   async function handleSave() {
     const trimmed = name.trim()
     if (!trimmed) return
-    if (existingNames.some(n => n.toLowerCase() === trimmed.toLowerCase())) {
-      setError('A property with this name already exists.')
+    const targetWsId = scope === 'global' ? null : scope
+    const duplicate = allProperties.some(p =>
+      p.name.toLowerCase() === trimmed.toLowerCase() && p.workspace_id === targetWsId
+    )
+    if (duplicate) {
+      setError('A property with this name already exists in this scope.')
       return
     }
     setSaving(true)
@@ -415,6 +579,7 @@ function NewPropertyForm({
       user_id: userId,
       name: trimmed,
       workspace_id: scope === 'global' ? null : scope,
+      sort_order: allProperties.reduce((max, p) => Math.max(max, p.sort_order ?? 0), 0) + 1,
     })
     if (dbErr) {
       setError(dbErr.message)

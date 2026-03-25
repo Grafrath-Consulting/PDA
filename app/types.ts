@@ -7,6 +7,7 @@ export interface Block {
   context_id: string | null
   workspace_id: string | null
   content: string | null
+  draft_content: string | null
   status: BlockStatus
   entry_type: 'info' | 'task'
   task_status: TaskStatus
@@ -21,7 +22,7 @@ export interface Block {
   is_archived: boolean
   pinned: boolean
   position: number
-  sort_order?: number | null
+  sort_order: number
 }
 
 export interface Context {

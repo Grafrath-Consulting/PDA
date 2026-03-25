@@ -10,6 +10,7 @@ export interface PropertyValue {
   label: string
   color: string | null
   sort_order: number
+  archived: boolean
 }
 
 export interface Property {
@@ -19,6 +20,8 @@ export interface Property {
   name: string
   pinned_in_filter_bar: boolean
   allow_multiple: boolean
+  archived: boolean
+  sort_order: number
   values: PropertyValue[]
 }
 
@@ -27,6 +30,7 @@ interface PropertiesContextValue {
   globalProperties: Property[]
   propertiesForWorkspace: (workspaceId: string | null) => Property[]
   refetch: () => Promise<void>
+  reorderProperties: (fromIndex: number, toIndex: number) => void
 }
 
 const PropertiesContext = createContext<PropertiesContextValue | null>(null)
@@ -39,15 +43,15 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
     const supabase = createClient()
     const { data: props } = await supabase
       .from('properties')
-      .select('id, user_id, workspace_id, name, pinned_in_filter_bar, allow_multiple')
+      .select('id, user_id, workspace_id, name, pinned_in_filter_bar, allow_multiple, archived, sort_order')
       .eq('user_id', userId)
-      .order('name')
+      .order('sort_order')
 
     if (!props || props.length === 0) { setAllProperties([]); return }
 
     const { data: vals } = await supabase
       .from('property_values')
-      .select('id, property_id, label, color, sort_order')
+      .select('id, property_id, label, color, sort_order, archived')
       .in('property_id', props.map(p => p.id))
       .order('sort_order')
 
@@ -68,6 +72,19 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
 
   useEffect(() => { load() }, [load, activeWorkspaceId])
 
+  const reorderProperties = useCallback((fromIndex: number, toIndex: number) => {
+    setAllProperties(prev => {
+      const next = [...prev]
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
+      const supabase = createClient()
+      next.forEach((p, i) => {
+        supabase.from('properties').update({ sort_order: i + 1 }).eq('id', p.id).then(() => {})
+      })
+      return next
+    })
+  }, [])
+
   const globalProperties = allProperties.filter(p => p.workspace_id === null)
 
   const propertiesForWorkspace = useCallback((workspaceId: string | null): Property[] => {
@@ -82,6 +99,7 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
       globalProperties,
       propertiesForWorkspace,
       refetch: load,
+      reorderProperties,
     }}>
       {children}
     </PropertiesContext.Provider>

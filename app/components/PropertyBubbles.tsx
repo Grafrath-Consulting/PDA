@@ -66,7 +66,9 @@ export function PropertyBubbles({ appliedValueIds, properties, onClickValue }: P
             title={`${property.name}: ${value.label}`}
             onClick={(e) => { e.stopPropagation(); onClickValue?.(propertyValueId) }}
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-opacity hover:opacity-80 flex-shrink-0"
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-opacity hover:opacity-80 flex-shrink-0 ${
+              value.archived ? 'border border-dashed border-gray-300' : ''
+            }`}
             style={{ backgroundColor: c.bg, color: c.text }}
           >
             {value.label}

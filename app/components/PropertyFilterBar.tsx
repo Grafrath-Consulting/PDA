@@ -62,7 +62,7 @@ export function PropertyFilterBar({ properties, activeFilters, onToggleFilter, o
               </svg>
             </button>
           )}
-          <span className="text-[10px] text-gray-400 font-medium mr-0.5">{prop.name}</span>
+          <span className={`text-[10px] font-medium mr-0.5 ${prop.archived ? 'text-gray-300 italic' : 'text-gray-400'}`}>{prop.name}</span>
           {prop.values.map((val) => {
             const isActive = activeFilters.has(val.id)
             const bg = val.color ? PILL_COLORS[val.color] : undefined
@@ -73,7 +73,9 @@ export function PropertyFilterBar({ properties, activeFilters, onToggleFilter, o
                 className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-all ${
                   isActive
                     ? 'border-amber-400 ring-1 ring-amber-300 shadow-sm'
-                    : 'border-gray-200 hover:border-gray-300'
+                    : val.archived
+                      ? 'border-dashed border-gray-300 hover:border-gray-400'
+                      : 'border-gray-200 hover:border-gray-300'
                 }`}
                 style={{
                   backgroundColor: isActive ? (bg ?? '#FEF3C7') : (bg ?? '#F9FAFB'),

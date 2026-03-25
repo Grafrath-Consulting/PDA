@@ -212,6 +212,12 @@ export function AiSettingsPanel({ userId }: { userId: string }) {
               className={inputClass}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSaveKey() }}
             />
+            <p className="text-[11px] text-gray-400">
+              Don&apos;t have a key? Get one at{' '}
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600 transition-colors">
+                console.anthropic.com/settings/keys
+              </a>
+            </p>
             <div className="flex items-center gap-2">
               <button onClick={handleSaveKey} disabled={keySaving || !keyInput.trim()} className={btnPrimary}>
                 {keySaving ? 'Saving...' : 'Save Key'}

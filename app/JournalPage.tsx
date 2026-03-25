@@ -11,7 +11,6 @@ import { JournalBlock } from './components/JournalBlock'
 import { BlockFeed } from './components/BlockFeed'
 import { ContextFilter } from './components/ContextFilter'
 import { UserPreferencesPanel } from '@/components/UserPreferencesPanel'
-import { versionString, buildDateString } from '@/lib/version'
 import { RightPanel } from './components/RightPanel'
 import { PropertyFilterBar } from './components/PropertyFilterBar'
 import { PropertiesManager } from './components/PropertiesManager'
@@ -41,12 +40,15 @@ interface Props {
 }
 
 export function JournalPage({ userId, email, displayName }: Props) {
-  const { activeWorkspace, activeWorkspaceId, activeScheme, isGlobalView, hydrated, workspaces, setActiveWorkspace, refreshWorkspaces } = useWorkspace()
-  const { propertiesForWorkspace } = useProperties()
+  const { activeWorkspace, activeWorkspaceId, activeScheme, isGlobalView, hydrated, workspaces, setActiveWorkspace, refreshWorkspaces, reorderWorkspaces } = useWorkspace()
+  const { propertiesForWorkspace, allProperties } = useProperties()
   const { dateFormat } = useDateFormat()
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null)
+  const [wsSelectMode, setWsSelectMode] = useState(false)
+  const [selectedWsIds, setSelectedWsIds] = useState<Set<string> | null>(null) // null = all
+  const rememberedWsIdsRef = useRef<Set<string> | null>(null)
   const [propsManagerOpen, setPropsManagerOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
 
@@ -99,6 +101,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
   activeWorkspaceIdRef.current = activeWorkspaceId
   const isGlobalViewRef = useRef(isGlobalView)
   isGlobalViewRef.current = isGlobalView
+  const selectedWsIdsRef = useRef(selectedWsIds)
+  selectedWsIdsRef.current = selectedWsIds
   const contextFilterRef = useRef(contextFilter)
   contextFilterRef.current = contextFilter
   const debouncedSearchRef = useRef(debouncedSearch)
@@ -131,9 +135,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
   filterAssigneeRef.current = filterAssignee
   const [prefsOpen, setPrefsOpen] = useState(false)
   const [peopleModalOpen, setPeopleModalOpen] = useState(false)
-  const [aboutModalOpen, setAboutModalOpen] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [peopleList, setPeopleList] = useState<{ id: string; name: string }[]>([])
+  const [apiKeyBannerDismissed, setApiKeyBannerDismissed] = useState(false)
+  const [apiKeyMissing, setApiKeyMissing] = useState(false)
 
   useEffect(() => {
     const saved = localStorage.getItem(PANEL_STORAGE_KEY)
@@ -153,6 +158,13 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setPeopleList((data ?? []) as { id: string; name: string }[])
   }, [userId])
   useEffect(() => { fetchPeople() }, [fetchPeople])
+
+  // Check if API key is configured
+  useEffect(() => {
+    fetch('/api/user/ai-config').then(r => r.json()).then(data => {
+      if (!data.configured) setApiKeyMissing(true)
+    }).catch(() => {})
+  }, [])
 
   // Cmd+K / Ctrl+K to focus inline search
   useEffect(() => {
@@ -269,7 +281,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const supabase = createClient()
     supabase
       .from('profiles')
-      .select('autosave_interval_seconds, journal_sort_mode')
+      .select('autosave_interval_seconds, journal_sort_mode, ws_select_mode, ws_selected_ids')
       .eq('id', userId)
       .single()
       .then(({ data }) => {
@@ -280,8 +292,28 @@ export function JournalPage({ userId, email, displayName }: Props) {
           setSortMode(data.journal_sort_mode as SortMode)
           localStorage.setItem(SORT_MODE_KEY, data.journal_sort_mode)
         }
+        if (data?.ws_select_mode) {
+          setWsSelectMode(true)
+          const ids = (data.ws_selected_ids ?? []) as string[]
+          if (ids.length > 0) {
+            setSelectedWsIds(new Set(ids))
+            rememberedWsIdsRef.current = new Set(ids)
+          }
+        }
       })
   }, [userId])
+
+  // Persist workspace selection prefs when they change
+  const wsSelectInitialised = useRef(false)
+  useEffect(() => {
+    // Skip the first render (loading from DB)
+    if (!wsSelectInitialised.current) { wsSelectInitialised.current = true; return }
+    const supabase = createClient()
+    supabase.from('profiles').update({
+      ws_select_mode: wsSelectMode,
+      ws_selected_ids: selectedWsIds ? Array.from(selectedWsIds) : [],
+    }).eq('id', userId).then(() => {})
+  }, [wsSelectMode, selectedWsIds, userId])
 
   async function saveSortMode(mode: SortMode) {
     setSortMode(mode)
@@ -309,7 +341,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   }, [userId])
 
   const fetchBlocks = useCallback(async (cursor?: string) => {
-    if (loading) return
+    if (cursor && loading) return
     setLoading(true)
 
     const isSearching = !!debouncedSearchRef.current
@@ -324,6 +356,9 @@ export function JournalPage({ userId, email, displayName }: Props) {
     // Workspace filter
     if (!isGlobalViewRef.current && activeWorkspaceIdRef.current) {
       query = query.eq('workspace_id', activeWorkspaceIdRef.current)
+    } else if (isGlobalViewRef.current && selectedWsIdsRef.current) {
+      // Multi-select mode: filter to selected workspaces
+      query = query.in('workspace_id', Array.from(selectedWsIdsRef.current))
     }
 
     // Status filter — build OR conditions for each selected bucket
@@ -427,6 +462,31 @@ export function JournalPage({ userId, email, displayName }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, hydrated])
 
+  // On load, commit any blocks that have unsaved drafts from a previous session
+  const draftRecoveryDone = useRef(false)
+  useEffect(() => {
+    if (!initialised || draftRecoveryDone.current) return
+    draftRecoveryDone.current = true
+    const drafty = blocks.filter(b => b.draft_content != null)
+    if (drafty.length === 0) return
+    const supabase = createClient()
+    Promise.all(drafty.map(async (block) => {
+      await supabase
+        .from('journal_blocks')
+        .update({ content: block.draft_content, draft_content: null })
+        .eq('id', block.id)
+      return { ...block, content: block.draft_content!, draft_content: null }
+    })).then((committed) => {
+      setBlocks(prev => prev.map(b => {
+        const updated = committed.find(c => c.id === b.id)
+        return updated ?? b
+      }))
+      for (const b of committed) {
+        fetch('/api/ai/embed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blockId: b.id }) }).catch(() => {})
+      }
+    })
+  }, [initialised, blocks])
+
   useEffect(() => {
     if (!initialised) return
     // In smart mode, the smart search API handles everything — skip exact fetch
@@ -434,7 +494,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, searchMode, searchNonce])
+  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, searchMode, searchNonce])
 
   // Batch-load entry_properties for all visible blocks (including smart search results)
   const visibleBlockIds = (() => {
@@ -480,16 +540,16 @@ export function JournalPage({ userId, email, displayName }: Props) {
   }
 
   function handleNewBlock(block: Block) {
-    const minOrder = blocks.reduce((m, b) => Math.min(m, b.sort_order ?? 0), 0)
-    const withOrder = { ...block, sort_order: minOrder - 1 }
+    const minOrder = blocks.reduce((m, b) => Math.min(m, b.sort_order, 0), 0)
+    const newOrder = minOrder - 1
+    const withOrder = { ...block, sort_order: newOrder }
     setBlocks(prev => [withOrder, ...prev])
-    if (sortMode === 'manual') {
-      const supabase = createClient()
-      supabase.from('journal_blocks')
-        .update({ sort_order: minOrder - 1 })
-        .eq('id', block.id)
-        .then(({ error }) => { if (error) console.error(error) })
-    }
+    // Always persist sort_order so it's never null
+    const supabase = createClient()
+    supabase.from('journal_blocks')
+      .update({ sort_order: newOrder })
+      .eq('id', block.id)
+      .then(({ error }) => { if (error) console.error(error) })
   }
 
   function handleBlockUpdate(updated: Block) {
@@ -517,48 +577,55 @@ export function JournalPage({ userId, email, displayName }: Props) {
       const withUpdatedSource = prev.map((b) =>
         b.id === updatedSourceBlock.id ? updatedSourceBlock : b
       )
-      const idx = withUpdatedSource.findIndex(
-        (b) => b.created_at <= newBlock.created_at
-      )
-      if (idx === -1) return [...withUpdatedSource, newBlock]
+      // Insert the new block just before the source block
+      const sourceIdx = withUpdatedSource.findIndex((b) => b.id === updatedSourceBlock.id)
+      if (sourceIdx === -1) return [...withUpdatedSource, newBlock]
       return [
-        ...withUpdatedSource.slice(0, idx),
+        ...withUpdatedSource.slice(0, sourceIdx),
         newBlock,
-        ...withUpdatedSource.slice(idx),
+        ...withUpdatedSource.slice(sourceIdx),
       ]
     })
   }
 
   function handleReorder(activeId: string, overId: string) {
-    // Ensure every block has a numeric sort_order before computing
-    const sorted = sortedBlocks.map((b, i) => ({
-      ...b,
-      sort_order: b.sort_order ?? i,
-    }))
+    const sorted = [...sortedBlocks]
     const oldIdx = sorted.findIndex(b => b.id === activeId)
     const newIdx = sorted.findIndex(b => b.id === overId)
     if (oldIdx === -1 || newIdx === -1 || oldIdx === newIdx) return
 
+    // Splice to get the new order
     const reordered = [...sorted]
     const [moved] = reordered.splice(oldIdx, 1)
     reordered.splice(newIdx, 0, moved)
 
-    const above = reordered[newIdx - 1]?.sort_order ?? null
-    const below = reordered[newIdx + 1]?.sort_order ?? null
-    const newSortOrder =
-      above !== null && below !== null ? (above + below) / 2
-      : above !== null ? above + 1
-      : below !== null ? below - 1
-      : newIdx
+    // Reassign sequential sort_order values for all visible blocks
+    const updates: { id: string; sort_order: number }[] = []
+    const updatedBlocks = new Map<string, number>()
+    reordered.forEach((b, i) => {
+      const newOrder = i + 1
+      if (b.sort_order !== newOrder) {
+        updates.push({ id: b.id, sort_order: newOrder })
+      }
+      updatedBlocks.set(b.id, newOrder)
+    })
 
-    const updated = { ...moved, sort_order: newSortOrder }
-    setBlocks(prev => prev.map(b => b.id === activeId ? updated : b))
+    // Update local state
+    setBlocks(prev => prev.map(b => {
+      const newOrder = updatedBlocks.get(b.id)
+      return newOrder !== undefined ? { ...b, sort_order: newOrder } : b
+    }))
 
-    const supabase = createClient()
-    supabase.from('journal_blocks')
-      .update({ sort_order: newSortOrder })
-      .eq('id', activeId)
-      .then(({ error }) => { if (error) console.error(error) })
+    // Persist all changed sort_orders
+    if (updates.length > 0) {
+      const supabase = createClient()
+      for (const { id, sort_order } of updates) {
+        supabase.from('journal_blocks')
+          .update({ sort_order })
+          .eq('id', id)
+          .then(({ error }) => { if (error) console.error(error) })
+      }
+    }
   }
 
   function togglePropertyFilter(valueId: string) {
@@ -577,34 +644,45 @@ export function JournalPage({ userId, email, displayName }: Props) {
   // Filter blocks by active property filters.
   // Within a property: OR (block matches if it has ANY selected value for that property).
   // Across properties: AND (block must satisfy every property that has selections).
+  // Workspace-scoped properties only apply to blocks from that workspace — blocks from
+  // other workspaces pass through (aren't excluded by a property they don't have).
   const filteredBlocks = activePropertyFilters.size > 0
     ? (() => {
-        const props = propertiesForWorkspace(activeWorkspaceId)
-        // Group selected filter value IDs by their parent property
-        const byProperty = new Map<string, string[]>()
+        const allProps = isGlobalView ? allProperties : propertiesForWorkspace(activeWorkspaceId)
+        // Group selected filter value IDs by their parent property, including workspace scope
+        const byProperty = new Map<string, { valueIds: string[]; workspaceId: string | null }>()
         Array.from(activePropertyFilters).forEach(valueId => {
-          for (const prop of props) {
+          for (const prop of allProps) {
             if (prop.values.some(v => v.id === valueId)) {
-              const arr = byProperty.get(prop.id) || []
-              arr.push(valueId)
-              byProperty.set(prop.id, arr)
+              const existing = byProperty.get(prop.id)
+              if (existing) {
+                existing.valueIds.push(valueId)
+              } else {
+                byProperty.set(prop.id, { valueIds: [valueId], workspaceId: prop.workspace_id })
+              }
               break
             }
           }
         })
         return blocks.filter(b => {
           const applied = blockProperties.get(b.id)
-          if (!applied) return false
-          // AND across properties: every property group must have at least one match
           const groups = Array.from(byProperty.values())
-          return groups.every(selectedValues => selectedValues.some((vid: string) => applied.has(vid)))
+          return groups.every(({ valueIds, workspaceId }) => {
+            // If this is a workspace-scoped property and the block is from a different workspace,
+            // this filter doesn't apply — the block passes through
+            if (workspaceId !== null && b.workspace_id !== workspaceId) return true
+            // Block must have at least one of the selected values for this property
+            if (!applied) return false
+            return valueIds.some(vid => applied.has(vid))
+          })
         })
       })()
     : blocks
 
   // Derive sorted blocks for rendering
   const sortedBlocks = sortMode === 'manual'
-    ? [...filteredBlocks].sort((a, b) => (a.sort_order ?? Infinity) - (b.sort_order ?? Infinity))
+    ? [...filteredBlocks].sort((a, b) => a.sort_order - b.sort_order
+        || new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     : sortMode === 'due_date'
     ? (() => {
         const tasks = filteredBlocks.filter(b => b.entry_type === 'task')
@@ -621,13 +699,17 @@ export function JournalPage({ userId, email, displayName }: Props) {
     : [...filteredBlocks].sort((a, b) => {
         switch (sortMode) {
           case 'created_asc':
-            return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            return (new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+              || (new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime())
           case 'modified_desc':
-            return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+            return (new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+              || (new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
           case 'modified_asc':
-            return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
+            return (new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime())
+              || (new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
           default: // created_desc
-            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            return (new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+              || (new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
         }
       })
 
@@ -670,25 +752,28 @@ export function JournalPage({ userId, email, displayName }: Props) {
       const to = filterDueTo + 'T23:59:59'
       results = results.filter(b => (b.due_date ?? '') <= to && b.due_date != null)
     }
-    // Property filters: OR within property, AND across properties
+    // Property filters: OR within property, AND across properties, workspace-scoped
     if (activePropertyFilters.size > 0) {
-      const props = propertiesForWorkspace(activeWorkspaceId)
-      const byProperty = new Map<string, string[]>()
+      const allProps = isGlobalView ? allProperties : propertiesForWorkspace(activeWorkspaceId)
+      const byProperty = new Map<string, { valueIds: string[]; workspaceId: string | null }>()
       Array.from(activePropertyFilters).forEach(valueId => {
-        for (const prop of props) {
+        for (const prop of allProps) {
           if (prop.values.some(v => v.id === valueId)) {
-            const arr = byProperty.get(prop.id) || []
-            arr.push(valueId)
-            byProperty.set(prop.id, arr)
+            const existing = byProperty.get(prop.id)
+            if (existing) { existing.valueIds.push(valueId) }
+            else { byProperty.set(prop.id, { valueIds: [valueId], workspaceId: prop.workspace_id }) }
             break
           }
         }
       })
       results = results.filter(b => {
         const applied = blockProperties.get(b.id)
-        if (!applied) return false
         const groups = Array.from(byProperty.values())
-        return groups.every(selectedValues => selectedValues.some((vid: string) => applied.has(vid)))
+        return groups.every(({ valueIds, workspaceId }) => {
+          if (workspaceId !== null && b.workspace_id !== workspaceId) return true
+          if (!applied) return false
+          return valueIds.some(vid => applied.has(vid))
+        })
       })
     }
     return results
@@ -709,9 +794,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
     meta.content = barBg
   }, [barBg])
   // For icon buttons in the top bar, derive a semi-transparent hover layer
-  const btnActiveClass = activeScheme
-    ? 'bg-white/20'
-    : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
   const btnInactiveClass = activeScheme
     ? 'hover:bg-white/10'
     : 'text-[#78716C] hover:bg-amber-50 hover:text-amber-700'
@@ -740,7 +822,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
                   <line x1="2" y1="12" x2="22" y2="12" />
                   <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
                 </svg>
-                <span className="text-sm font-medium text-gray-600">All Workspaces</span>
+                <span className="text-sm font-medium text-gray-600">{selectedWsIds ? 'Selected Workspaces' : 'All Workspaces'}</span>
               </>
             ) : (
               <>
@@ -757,11 +839,54 @@ export function JournalPage({ userId, email, displayName }: Props) {
             <WorkspaceSwitcherDropdown
               workspaces={workspaces}
               activeId={activeWorkspace?.id ?? null}
-              onSelect={(id) => { setActiveWorkspace(id); setSwitcherOpen(false) }}
+              onSelect={(id) => {
+                if (id) {
+                  // Selecting a specific workspace — keep select mode and selections intact
+                  setActiveWorkspace(id)
+                  setSwitcherOpen(false)
+                } else {
+                  // "All/Selected Workspaces" clicked — switch to global view with current selections
+                  setActiveWorkspace(null)
+                }
+              }}
               onNewWorkspace={() => { setSwitcherOpen(false); setCreateModalOpen(true) }}
               onEditWorkspace={(ws) => { setSwitcherOpen(false); setEditingWorkspace(ws); setCreateModalOpen(true) }}
               onClose={() => setSwitcherOpen(false)}
               containerRef={switcherContainerRef}
+              onReorder={reorderWorkspaces}
+              selectMode={wsSelectMode}
+              selectedIds={selectedWsIds}
+              onToggleSelectMode={() => {
+                if (wsSelectMode) {
+                  // Turning off: remember selections, show all
+                  rememberedWsIdsRef.current = selectedWsIds
+                  setWsSelectMode(false)
+                  setSelectedWsIds(null)
+                } else {
+                  // Turning on: restore prior selections
+                  setWsSelectMode(true)
+                  setSelectedWsIds(rememberedWsIdsRef.current)
+                  setActiveWorkspace(null)
+                }
+              }}
+              onToggleWsSelection={(wsId) => {
+                setSelectedWsIds(prev => {
+                  // If null (all selected), initialize with all IDs then toggle
+                  const allIds = new Set(workspaces.map(w => w.id))
+                  const current = prev ?? allIds
+                  const next = new Set(current)
+                  if (next.has(wsId)) {
+                    // Don't allow unchecking the last one
+                    if (next.size <= 1) return prev
+                    next.delete(wsId)
+                  } else {
+                    next.add(wsId)
+                  }
+                  // If all are selected again, go back to null (all)
+                  if (next.size === workspaces.length) return null
+                  return next
+                })
+              }}
             />
           )}
           </div>
@@ -787,7 +912,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         </div>
 
         <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0 ml-1">
-          {/* Desktop-only buttons (hidden on mobile, shown in overflow menu instead) */}
+          {/* Send Report (desktop only) */}
           <button
             onClick={() => setReportOpen(true)}
             title="Send report"
@@ -798,137 +923,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
               <polyline points="14 2 14 8 20 8" />
               <line x1="16" y1="13" x2="8" y2="13" />
               <line x1="16" y1="17" x2="8" y2="17" />
-            </svg>
-          </button>
-          <button
-            onClick={() => setPropsManagerOpen(true)}
-            title="Manage properties"
-            className={`hidden sm:block p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-              <line x1="7" y1="7" x2="7.01" y2="7" />
-            </svg>
-          </button>
-          <div className="relative hidden sm:block">
-            <button
-              onClick={() => setSortDropdownOpen(prev => !prev)}
-              onKeyDown={(e) => { if (e.key === 'Escape' && sortDropdownOpen) { e.stopPropagation(); setSortDropdownOpen(false) } }}
-              title="Sort options"
-              className={`p-1.5 rounded-lg transition-colors flex items-center gap-1 ${sortMode === 'manual' ? btnInactiveClass : btnActiveClass}`}
-            >
-              {/* Generic sort icon */}
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 6h18M3 12h12M3 18h6" />
-              </svg>
-              {/* Sort type indicator */}
-              {sortMode === 'manual' ? (
-                /* Drag grip dots */
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                  <circle cx="9" cy="6" r="2" /><circle cx="15" cy="6" r="2" />
-                  <circle cx="9" cy="12" r="2" /><circle cx="15" cy="12" r="2" />
-                  <circle cx="9" cy="18" r="2" /><circle cx="15" cy="18" r="2" />
-                </svg>
-              ) : sortMode === 'due_date' ? (
-                /* Calendar icon for due date */
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
-                </svg>
-              ) : sortMode.startsWith('created') ? (
-                /* Clock icon for date created */
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10" />
-                  <polyline points="12 6 12 12 16 14" />
-                </svg>
-              ) : (
-                /* Pencil icon for date modified */
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                </svg>
-              )}
-              {/* Direction arrow (not shown for manual or due_date) */}
-              {sortMode !== 'manual' && sortMode !== 'due_date' && (
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                  {sortMode.endsWith('_desc') ? (
-                    <path d="M12 4v16M5 13l7 7 7-7" />
-                  ) : (
-                    <path d="M12 20V4M5 11l7-7 7 7" />
-                  )}
-                </svg>
-              )}
-            </button>
-            {sortDropdownOpen && createPortal(
-              <div className="fixed inset-0 z-[29]" onClick={() => setSortDropdownOpen(false)} />,
-              document.body
-            )}
-            {sortDropdownOpen && (
-              <div
-                className="absolute right-0 top-full mt-1 z-30 bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 w-max"
-              >
-                {[
-                  { mode: 'created_desc' as SortMode, label: 'Date Created — Newest First' },
-                  { mode: 'created_asc' as SortMode, label: 'Date Created — Oldest First' },
-                  { mode: 'modified_desc' as SortMode, label: 'Date Modified — Newest First' },
-                  { mode: 'modified_asc' as SortMode, label: 'Date Modified — Oldest First' },
-                  { mode: 'due_date' as SortMode, label: 'Due Date' },
-                  { mode: 'manual' as SortMode, label: 'Manual (drag to reorder)' },
-                ].map(({ mode, label }) => (
-                  <button
-                    key={mode}
-                    onClick={() => { saveSortMode(mode); setSortDropdownOpen(false) }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm whitespace-nowrap transition-colors ${
-                      sortMode === mode
-                        ? 'bg-amber-50 text-amber-800 font-medium'
-                        : 'text-gray-700 hover:bg-[#FFFEF7]'
-                    }`}
-                  >
-                    <span className="flex items-center gap-0.5 flex-shrink-0 w-[22px]">
-                      {mode === 'manual' ? (
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                          <circle cx="9" cy="6" r="2" /><circle cx="15" cy="6" r="2" />
-                          <circle cx="9" cy="12" r="2" /><circle cx="15" cy="12" r="2" />
-                          <circle cx="9" cy="18" r="2" /><circle cx="15" cy="18" r="2" />
-                        </svg>
-                      ) : mode === 'due_date' ? (
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
-                        </svg>
-                      ) : (
-                        <>
-                          {mode.startsWith('created') ? (
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <circle cx="12" cy="12" r="10" />
-                              <polyline points="12 6 12 12 16 14" />
-                            </svg>
-                          ) : (
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                            </svg>
-                          )}
-                          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                            {mode.endsWith('_desc') ? (
-                              <path d="M12 4v16M5 13l7 7 7-7" />
-                            ) : (
-                              <path d="M12 20V4M5 11l7-7 7 7" />
-                            )}
-                          </svg>
-                        </>
-                      )}
-                    </span>
-                    <span>{label}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <button
-            onClick={togglePanel}
-            title={panelOpen ? 'Close focus panel' : 'Open focus panel'}
-            className={`hidden sm:block p-1.5 rounded-lg transition-colors ${panelOpen ? btnActiveClass : btnInactiveClass}`}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="15" y1="3" x2="15" y2="21" />
             </svg>
           </button>
           {/* People button (desktop only) */}
@@ -956,18 +950,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
               </span>
             </div>
           </button>
-          {/* About / Version button (desktop only) */}
-          <button
-            onClick={() => setAboutModalOpen(true)}
-            title="About PDA"
-            className={`hidden sm:block p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="16" x2="12" y2="12" />
-              <line x1="12" y1="8" x2="12.01" y2="8" />
-            </svg>
-          </button>
           {/* Mobile overflow menu (three-dot) */}
           <div className="relative sm:hidden">
             <button
@@ -987,39 +969,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
             )}
             {mobileMenuOpen && (
               <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 w-max">
-                {/* Sort options submenu */}
-                <div className="px-3 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">Sort</div>
-                {[
-                  { mode: 'created_desc' as SortMode, label: 'Created — Newest' },
-                  { mode: 'created_asc' as SortMode, label: 'Created — Oldest' },
-                  { mode: 'modified_desc' as SortMode, label: 'Modified — Newest' },
-                  { mode: 'modified_asc' as SortMode, label: 'Modified — Oldest' },
-                  { mode: 'due_date' as SortMode, label: 'Due Date' },
-                  { mode: 'manual' as SortMode, label: 'Manual' },
-                ].map(({ mode, label }) => (
-                  <button
-                    key={mode}
-                    onClick={() => { saveSortMode(mode); setMobileMenuOpen(false) }}
-                    className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-sm whitespace-nowrap transition-colors ${
-                      sortMode === mode
-                        ? 'bg-amber-50 text-amber-800 font-medium'
-                        : 'text-gray-700 hover:bg-[#FFFEF7]'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-                <div className="border-t border-[#E5E0D0] my-1" />
-                <button
-                  onClick={() => { togglePanel(); setMobileMenuOpen(false) }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <line x1="15" y1="3" x2="15" y2="21" />
-                  </svg>
-                  {panelOpen ? 'Close Focus Panel' : 'Open Focus Panel'}
-                </button>
                 <button
                   onClick={() => { setReportOpen(true); setMobileMenuOpen(false) }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
@@ -1031,16 +980,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
                     <line x1="16" y1="17" x2="8" y2="17" />
                   </svg>
                   Send Report
-                </button>
-                <button
-                  onClick={() => { setPropsManagerOpen(true); setMobileMenuOpen(false) }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-                    <line x1="7" y1="7" x2="7.01" y2="7" />
-                  </svg>
-                  Manage Properties
                 </button>
                 <button
                   onClick={() => { setPeopleModalOpen(true); setMobileMenuOpen(false) }}
@@ -1066,17 +1005,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
                   </div>
                   Account Settings
                 </button>
-                <button
-                  onClick={() => { setAboutModalOpen(true); setMobileMenuOpen(false) }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="16" x2="12" y2="12" />
-                    <line x1="12" y1="8" x2="12.01" y2="8" />
-                  </svg>
-                  About PDA
-                </button>
               </div>
             )}
           </div>
@@ -1084,30 +1012,157 @@ export function JournalPage({ userId, email, displayName }: Props) {
       </header>
 
       {/* ── Unified search & filter panel ── */}
-      <div className="border-b border-[#E5E0D0] bg-[#FDFCF7] px-3 sm:px-6 py-2.5 flex-shrink-0">
-        {/* Row 1: Pinned properties (or context filter) + search box */}
+      <div
+        className="border-b px-3 sm:px-6 py-2.5 flex-shrink-0 transition-colors duration-200"
+        style={{
+          backgroundColor: activeScheme ? activeScheme.muted : '#FDFCF7',
+          borderColor: activeScheme ? 'transparent' : '#E5E0D0',
+        }}
+      >
+        {/* Row 1: Sort + Properties + search box + toggles */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
-          <div className="flex-1 min-w-0">
-            {(() => {
-              const props = advancedOpen
-                ? propertiesForWorkspace(activeWorkspaceId)
-                : propertiesForWorkspace(activeWorkspaceId).filter(p => p.pinned_in_filter_bar)
-              return props.length > 0 ? (
-                <PropertyFilterBar
-                  properties={props}
-                  activeFilters={activePropertyFilters}
-                  onToggleFilter={togglePropertyFilter}
-                  onClearFilters={clearPropertyFilters}
-                  showPinToggle={advancedOpen}
-                  onTogglePin={advancedOpen ? async (propertyId, pinned) => {
-                    const supabase = createClient()
-                    await supabase.from('properties').update({ pinned_in_filter_bar: pinned }).eq('id', propertyId)
-                  } : undefined}
-                />
-              ) : null
-            })()}
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {/* Sort dropdown — left side */}
+            <div className="relative flex-shrink-0">
+              <button
+                onClick={() => setSortDropdownOpen(prev => !prev)}
+                onKeyDown={(e) => { if (e.key === 'Escape' && sortDropdownOpen) { e.stopPropagation(); setSortDropdownOpen(false) } }}
+                title="Sort options"
+                className={`p-1 rounded-lg transition-colors flex items-center gap-1 ${sortMode === 'manual' ? 'text-gray-400 hover:text-gray-600' : 'text-amber-700'}`}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 6h18M3 12h12M3 18h6" />
+                </svg>
+                {sortMode === 'manual' ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <circle cx="9" cy="6" r="2" /><circle cx="15" cy="6" r="2" />
+                    <circle cx="9" cy="12" r="2" /><circle cx="15" cy="12" r="2" />
+                    <circle cx="9" cy="18" r="2" /><circle cx="15" cy="18" r="2" />
+                  </svg>
+                ) : sortMode === 'due_date' ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+                  </svg>
+                ) : sortMode.startsWith('created') ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                  </svg>
+                )}
+                {sortMode !== 'manual' && sortMode !== 'due_date' && (
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    {sortMode.endsWith('_desc') ? (
+                      <path d="M12 4v16M5 13l7 7 7-7" />
+                    ) : (
+                      <path d="M12 20V4M5 11l7-7 7 7" />
+                    )}
+                  </svg>
+                )}
+              </button>
+              {sortDropdownOpen && createPortal(
+                <div className="fixed inset-0 z-[29]" onClick={() => setSortDropdownOpen(false)} />,
+                document.body
+              )}
+              {sortDropdownOpen && (
+                <div className="absolute left-0 top-full mt-1 z-30 bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 w-max">
+                  {[
+                    { mode: 'created_desc' as SortMode, label: 'Date Created — Newest First' },
+                    { mode: 'created_asc' as SortMode, label: 'Date Created — Oldest First' },
+                    { mode: 'modified_desc' as SortMode, label: 'Date Modified — Newest First' },
+                    { mode: 'modified_asc' as SortMode, label: 'Date Modified — Oldest First' },
+                    { mode: 'due_date' as SortMode, label: 'Due Date' },
+                    { mode: 'manual' as SortMode, label: 'Manual (drag to reorder)' },
+                  ].map(({ mode, label }) => (
+                    <button
+                      key={mode}
+                      onClick={() => { saveSortMode(mode); setSortDropdownOpen(false) }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm whitespace-nowrap transition-colors ${
+                        sortMode === mode
+                          ? 'bg-amber-50 text-amber-800 font-medium'
+                          : 'text-gray-700 hover:bg-[#FFFEF7]'
+                      }`}
+                    >
+                      <span className="flex items-center gap-0.5 flex-shrink-0 w-[22px]">
+                        {mode === 'manual' ? (
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                            <circle cx="9" cy="6" r="2" /><circle cx="15" cy="6" r="2" />
+                            <circle cx="9" cy="12" r="2" /><circle cx="15" cy="12" r="2" />
+                            <circle cx="9" cy="18" r="2" /><circle cx="15" cy="18" r="2" />
+                          </svg>
+                        ) : mode === 'due_date' ? (
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+                          </svg>
+                        ) : (
+                          <>
+                            {mode.startsWith('created') ? (
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                              </svg>
+                            ) : (
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                              </svg>
+                            )}
+                            <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              {mode.endsWith('_desc') ? (
+                                <path d="M12 4v16M5 13l7 7 7-7" />
+                              ) : (
+                                <path d="M12 20V4M5 11l7-7 7 7" />
+                              )}
+                            </svg>
+                          </>
+                        )}
+                      </span>
+                      <span>{label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Manage Properties button — before property pills */}
+            <button
+              onClick={() => setPropsManagerOpen(true)}
+              title="Manage properties"
+              className="flex-shrink-0 p-1 rounded-lg transition-colors text-gray-400 hover:text-gray-600"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                <line x1="7" y1="7" x2="7.01" y2="7" />
+              </svg>
+            </button>
+            {/* Property filter pills */}
+            <div className="flex-1 min-w-0">
+              {(() => {
+                // In global/multi-workspace view, show all properties; in single workspace, show that workspace's
+                const allProps = isGlobalView
+                  ? allProperties
+                  : propertiesForWorkspace(activeWorkspaceId)
+                const props = advancedOpen
+                  ? allProps
+                  : allProps.filter(p => p.pinned_in_filter_bar)
+                return props.length > 0 ? (
+                  <PropertyFilterBar
+                    properties={props}
+                    activeFilters={activePropertyFilters}
+                    onToggleFilter={togglePropertyFilter}
+                    onClearFilters={clearPropertyFilters}
+                    showPinToggle={advancedOpen}
+                    onTogglePin={advancedOpen ? async (propertyId, pinned) => {
+                      const supabase = createClient()
+                      await supabase.from('properties').update({ pinned_in_filter_bar: pinned }).eq('id', propertyId)
+                    } : undefined}
+                  />
+                ) : null
+              })()}
+            </div>
           </div>
-          {/* Search input + filter toggle */}
+          {/* Search input + toggles */}
           <div className="flex items-center gap-2">
             <div className="relative flex-1 sm:flex-none sm:w-64">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -1138,18 +1193,29 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 </button>
               )}
             </div>
-            {/* Expand/collapse toggle */}
+            {/* Expand/collapse filters toggle */}
             <button
               onClick={toggleAdvanced}
               className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-gray-600 transition-colors"
               title={advancedOpen ? 'Collapse filters' : 'Expand filters'}
             >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
-              <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
-              <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
-              <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
-            </svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
+                <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
+                <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
+              </svg>
+            </button>
+            {/* Focus panel toggle */}
+            <button
+              onClick={togglePanel}
+              title={panelOpen ? 'Close focus panel' : 'Open focus panel'}
+              className={`flex-shrink-0 p-1 rounded-lg transition-colors ${panelOpen ? 'text-amber-700' : 'text-gray-400 hover:text-gray-600'}`}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="15" y1="3" x2="15" y2="21" />
+              </svg>
             </button>
           </div>
         </div>
@@ -1373,6 +1439,30 @@ export function JournalPage({ userId, email, displayName }: Props) {
         )}
       </div>
 
+      {/* API key missing banner */}
+      {apiKeyMissing && !apiKeyBannerDismissed && (
+        <div className="bg-amber-50 border-b border-amber-200 px-3 sm:px-6 py-2.5 flex items-center gap-3 flex-shrink-0">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+          </svg>
+          <p className="text-xs text-amber-800 flex-1">
+            AI features require an Anthropic API key. Add yours in Settings to get started.
+          </p>
+          <button
+            onClick={() => { setPrefsOpen(true); setApiKeyBannerDismissed(true) }}
+            className="text-xs font-medium text-amber-700 hover:text-amber-900 whitespace-nowrap px-2 py-1 rounded hover:bg-amber-100 transition-colors"
+          >
+            Go to Settings
+          </button>
+          <button
+            onClick={() => setApiKeyBannerDismissed(true)}
+            className="text-amber-400 hover:text-amber-600 flex-shrink-0"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 flex overflow-hidden">
         <div
           className="flex-1 overflow-y-auto min-w-0 transition-colors duration-200"
@@ -1424,6 +1514,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
           <RightPanel
             userId={userId}
             refreshKey={blocks.length}
+            onClose={() => setPanelOpen(false)}
             onTaskClick={(blockId) => {
               const el = document.getElementById(`block-${blockId}`)
               if (el) {
@@ -1471,19 +1562,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
       <PeopleModal open={peopleModalOpen} onClose={() => { setPeopleModalOpen(false); fetchPeople() }} userId={userId} />
 
-      {/* About modal */}
-      {aboutModalOpen && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setAboutModalOpen(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl px-8 py-6 max-w-sm w-full text-center">
-            <h2 className="text-lg font-bold text-gray-900 mb-1">PDA</h2>
-            <p className="text-sm text-gray-500 mb-1">{versionString()}</p>
-            <p className="text-xs text-gray-400 mb-4">Built {buildDateString()}</p>
-            <button onClick={() => setAboutModalOpen(false)} className="px-4 py-1.5 text-sm rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">Close</button>
-          </div>
-        </div>,
-        document.body
-      )}
     </div>
   )
 }
@@ -1498,6 +1576,11 @@ function WorkspaceSwitcherDropdown({
   onEditWorkspace,
   onClose,
   containerRef,
+  onReorder,
+  selectMode,
+  selectedIds,
+  onToggleSelectMode,
+  onToggleWsSelection,
 }: {
   workspaces: Workspace[]
   activeId: string | null
@@ -1506,8 +1589,15 @@ function WorkspaceSwitcherDropdown({
   onEditWorkspace: (ws: Workspace) => void
   onClose: () => void
   containerRef?: React.RefObject<HTMLDivElement | null>
+  onReorder: (fromIndex: number, toIndex: number) => void
+  selectMode: boolean
+  selectedIds: Set<string> | null
+  onToggleSelectMode: () => void
+  onToggleWsSelection: (wsId: string) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -1533,30 +1623,82 @@ function WorkspaceSwitcherDropdown({
       ref={ref}
       className="absolute top-full left-0 mt-1 min-w-64 w-max max-w-sm bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50"
     >
-      <button
-        onClick={() => onSelect(null)}
-        className={`w-full flex items-center gap-3 px-3 py-2 text-sm text-left transition-colors ${
-          activeId === null ? 'bg-amber-50 text-amber-800' : 'text-gray-900 hover:bg-gray-50'
-        }`}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-gray-400">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="2" y1="12" x2="22" y2="12" />
-          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-        </svg>
-        <span className="flex-1">All Workspaces</span>
-      </button>
+      <div className={`flex items-center px-3 py-2 transition-colors ${
+        activeId === null && !selectMode ? 'bg-amber-50 text-amber-800' : activeId === null && selectMode ? 'bg-amber-50/50 text-amber-800' : 'text-gray-900 hover:bg-gray-50'
+      }`}>
+        <button
+          onClick={() => { onSelect(null); onClose() }}
+          className="flex items-center gap-3 flex-1 text-sm text-left"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-gray-400">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="2" y1="12" x2="22" y2="12" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
+          <span className="flex-1">{selectMode ? 'Selected Workspaces' : 'All Workspaces'}</span>
+        </button>
+        <div className="flex items-center bg-gray-100 rounded-md p-0.5" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => { if (!selectMode) onToggleSelectMode() }}
+            className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+              selectMode ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Select
+          </button>
+          <button
+            onClick={() => { if (selectMode) onToggleSelectMode() }}
+            className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+              !selectMode ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            All
+          </button>
+        </div>
+      </div>
 
       {workspaces.length > 0 && <div className="h-px bg-gray-100 my-1" />}
 
-      {workspaces.map((ws) => {
+      {workspaces.map((ws, i) => {
         const scheme = workspaceColorSchemes.find(s => s.key === ws.color_scheme)
         return (
-          <div key={ws.id} className="flex items-center group/ws">
+          <div
+            key={ws.id}
+            className={`flex items-center group/ws ${dropIndex === i && dragIndex !== null && dragIndex !== i ? 'border-t-2 border-amber-400' : ''}`}
+            draggable
+            onDragStart={(e) => {
+              setDragIndex(i)
+              e.dataTransfer.effectAllowed = 'move'
+            }}
+            onDragOver={(e) => {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              setDropIndex(i)
+            }}
+            onDragLeave={() => setDropIndex(null)}
+            onDrop={(e) => {
+              e.preventDefault()
+              if (dragIndex !== null && dragIndex !== i) {
+                onReorder(dragIndex, i)
+              }
+              setDragIndex(null)
+              setDropIndex(null)
+            }}
+            onDragEnd={() => { setDragIndex(null); setDropIndex(null) }}
+            style={dragIndex === i ? { opacity: 0.4 } : undefined}
+          >
+            {/* Drag handle */}
+            <div className="pl-1.5 pr-0 py-2 cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-400 opacity-0 group-hover/ws:opacity-100 transition-opacity flex-shrink-0">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="8" cy="4" r="2" /><circle cx="16" cy="4" r="2" />
+                <circle cx="8" cy="12" r="2" /><circle cx="16" cy="12" r="2" />
+                <circle cx="8" cy="20" r="2" /><circle cx="16" cy="20" r="2" />
+              </svg>
+            </div>
             <button
               onClick={() => onSelect(ws.id)}
-              className={`flex-1 flex items-center gap-3 px-3 py-2 text-sm text-left transition-colors ${
-                activeId === ws.id ? 'bg-amber-50 text-amber-800' : 'text-gray-900 hover:bg-gray-50'
+              className={`flex-1 flex items-center gap-3 pl-1 pr-3 py-2 text-sm text-left transition-colors ${
+                !selectMode && activeId === ws.id ? 'bg-amber-50 text-amber-800' : 'text-gray-900 hover:bg-gray-50'
               }`}
             >
               <span className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-sm" style={{ backgroundColor: workspaceColorSchemes.find(s => s.key === ws.color_scheme)?.muted ?? '#F3F4F6' }}>{ws.emoji || '\u2022'}</span>
@@ -1564,7 +1706,20 @@ function WorkspaceSwitcherDropdown({
                 {ws.name}
                 {ws.is_default && <span className="text-[10px] text-gray-400 ml-1">(Default)</span>}
               </span>
-              {scheme && (
+              {selectMode ? (
+                <span
+                  onClick={(e) => { e.stopPropagation(); onToggleWsSelection(ws.id) }}
+                  className="w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors cursor-pointer"
+                  style={{
+                    borderColor: scheme?.primary ?? '#D1D5DB',
+                    backgroundColor: (!selectedIds || selectedIds.has(ws.id)) ? (scheme?.primary ?? '#6B7280') : 'transparent',
+                  }}
+                >
+                  {(!selectedIds || selectedIds.has(ws.id)) && (
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                  )}
+                </span>
+              ) : scheme && (
                 <span
                   className="w-3 h-3 rounded-full flex-shrink-0"
                   style={{ backgroundColor: scheme.primary }}
@@ -1696,6 +1851,7 @@ function CreateWorkspaceModal({
           emoji,
           color_scheme: colorScheme,
           is_default: isDefault,
+          sort_order: (allWorkspaces ?? []).reduce((max, w) => Math.max(max, w.sort_order ?? 0), 0) + 1,
         })
         .select('*')
         .single()

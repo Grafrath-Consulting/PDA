@@ -18,7 +18,7 @@ export default async function Journal() {
     <WorkspaceProvider userId={user.id}>
       <PropertiesProvider userId={user.id}>
         <DateFormatProvider userId={user.id}>
-          <div className="flex h-screen bg-[#FFFEF7] font-[family-name:var(--font-geist-sans)]">
+          <div className="flex h-screen overflow-x-hidden bg-[#FFFEF7] font-[family-name:var(--font-geist-sans)]">
             <JournalPage userId={user.id} email={email} displayName={displayName} />
           </div>
         </DateFormatProvider>

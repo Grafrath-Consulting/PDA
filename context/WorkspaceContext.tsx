@@ -12,6 +12,7 @@ export interface Workspace {
   color_scheme: string
   is_default: boolean
   created_at: string
+  sort_order: number
 }
 
 interface WorkspaceContextValue {
@@ -23,6 +24,7 @@ interface WorkspaceContextValue {
   hydrated: boolean
   setActiveWorkspace: (id: string | null) => void
   refreshWorkspaces: () => Promise<void>
+  reorderWorkspaces: (fromIndex: number, toIndex: number) => void
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null)
@@ -47,7 +49,7 @@ export function WorkspaceProvider({ userId, children }: { userId: string; childr
       .from('workspaces')
       .select('*')
       .eq('user_id', userId)
-      .order('created_at', { ascending: true })
+      .order('sort_order', { ascending: true })
     setWorkspaces((data ?? []) as Workspace[])
   }, [userId])
 
@@ -70,6 +72,20 @@ export function WorkspaceProvider({ userId, children }: { userId: string; childr
     }
   }, [])
 
+  const reorderWorkspaces = useCallback((fromIndex: number, toIndex: number) => {
+    setWorkspaces(prev => {
+      const next = [...prev]
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
+      // Persist new order to DB (fire-and-forget)
+      const supabase = createClient()
+      next.forEach((ws, i) => {
+        supabase.from('workspaces').update({ sort_order: i + 1 }).eq('id', ws.id).then(() => {})
+      })
+      return next
+    })
+  }, [])
+
   const activeWorkspace = activeWorkspaceId
     ? workspaces.find(w => w.id === activeWorkspaceId) ?? null
     : null
@@ -86,6 +102,7 @@ export function WorkspaceProvider({ userId, children }: { userId: string; childr
       hydrated,
       setActiveWorkspace,
       refreshWorkspaces: loadWorkspaces,
+      reorderWorkspaces,
     }}>
       {children}
     </WorkspaceContext.Provider>

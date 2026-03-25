@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import { createClient } from '@/lib/supabase/client'
 import { Block, BlockStatus, SelectionAction } from '../types'
@@ -54,11 +55,14 @@ function TimePickerDropdown({ value, onChange, timeFormat }: { value: string; on
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  // Scroll to current value when opening
+  // Scroll to current value (or 8:00 AM default) when opening
   useEffect(() => {
     if (!open || !listRef.current) return
     const active = listRef.current.querySelector('[data-active="true"]')
-    if (active) active.scrollIntoView({ block: 'center' })
+    if (active) { active.scrollIntoView({ block: 'center' }); return }
+    // Default scroll to 8:00 AM
+    const default8am = listRef.current.querySelector('[data-slot="08:00"]')
+    if (default8am) default8am.scrollIntoView({ block: 'start' })
   }, [open])
 
   return (
@@ -94,6 +98,7 @@ function TimePickerDropdown({ value, onChange, timeFormat }: { value: string; on
               key={t}
               type="button"
               data-active={t === value ? 'true' : undefined}
+              data-slot={t}
               onClick={() => { onChange(t); setOpen(false) }}
               className={`w-full px-3 py-1 text-xs text-left hover:bg-gray-50 transition-colors ${
                 t === value ? 'text-amber-700 font-medium bg-amber-50' : 'text-gray-700'
@@ -111,6 +116,8 @@ function TimePickerDropdown({ value, onChange, timeFormat }: { value: string; on
 interface MenuState {
   selText: string
   selHTML: string
+  editorFrom: number
+  editorTo: number
   x: number
   y: number
 }
@@ -262,19 +269,12 @@ const REFUSAL_PHRASES = [
   "i'm unable to", "i am unable to",
   "there's nothing to summarize", "there is nothing to summarize",
   "no content to summarize", "no text to summarize",
-  "please paste", "please provide", "please share",
-  "i'd be happy to help", "i would be happy to help",
+  "please paste the text", "please provide the text", "please share the text",
 ]
 
-function isSummaryRefusal(summary: string, inputText: string): boolean {
+function isSummaryRefusal(summary: string): boolean {
   const lower = summary.toLowerCase().trim()
-  // Check for refusal phrases
-  if (REFUSAL_PHRASES.some(p => lower.includes(p))) return true
-  // A valid compression should be significantly shorter — allow some slack
-  // for short inputs where rephrasing may not reduce length much.
-  const inputLen = inputText.trim().length
-  if (inputLen > 100 && summary.trim().length > inputLen) return true
-  return false
+  return REFUSAL_PHRASES.some(p => lower.includes(p))
 }
 
 interface Person {
@@ -283,6 +283,221 @@ interface Person {
 }
 
 const ICON_SIZE = 14
+
+function AssigneeSelect({ value, people, userId, onChange, onPersonAdded }: {
+  value: string | null
+  people: Person[]
+  userId: string
+  onChange: (id: string | null) => void
+  onPersonAdded: (person: Person) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [search, setSearch] = useState('')
+  const [newName, setNewName] = useState('')
+  const [newEmail, setNewEmail] = useState('')
+  const [newCompany, setNewCompany] = useState('')
+  const [saving, setSaving] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const addNameRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setAdding(false); setSearch('') }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  useEffect(() => {
+    if (open && !adding) searchRef.current?.focus()
+  }, [open, adding])
+
+  useEffect(() => {
+    if (adding) addNameRef.current?.focus()
+  }, [adding])
+
+  const selectedName = value ? (people.find(p => p.id === value)?.name ?? 'Unknown') : 'Me'
+  const query = search.toLowerCase()
+  const filtered = query
+    ? people.filter(p => p.name.toLowerCase().includes(query))
+    : people
+  const showMe = !query || 'me'.includes(query)
+
+  async function handleSave() {
+    if (!newName.trim()) return
+    setSaving(true)
+    const supabase = createClient()
+    const { data, error } = await supabase.from('people').insert({
+      user_id: userId,
+      name: newName.trim(),
+      email: newEmail.trim() || null,
+      company: newCompany.trim() || null,
+    }).select('id, name').single()
+    setSaving(false)
+    if (error || !data) return
+    const person = data as Person
+    onPersonAdded(person)
+    onChange(person.id)
+    setNewName(''); setNewEmail(''); setNewCompany('')
+    setAdding(false); setSearch(''); setOpen(false)
+  }
+
+  return (
+    <div ref={ref} className="relative flex items-center gap-1">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+      <button
+        onClick={() => { setOpen(!open); setAdding(false); setSearch('') }}
+        className="text-xs bg-transparent border-none outline-none cursor-pointer text-gray-600 hover:text-gray-900 py-0.5 flex items-center gap-0.5"
+      >
+        {selectedName}
+        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-gray-400"><polyline points="6 9 12 15 18 9" /></svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl min-w-[200px] z-50 flex flex-col max-h-[280px]">
+          {!adding ? (
+            <>
+              {/* Search input */}
+              {people.length > 3 && (
+                <div className="px-2 pt-2 pb-1 flex-shrink-0">
+                  <input
+                    ref={searchRef}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') { setOpen(false); setSearch('') }
+                      if (e.key === 'Enter' && filtered.length === 1) { onChange(filtered[0].id); setOpen(false); setSearch('') }
+                    }}
+                    placeholder="Search..."
+                    className="w-full text-xs text-gray-900 border border-gray-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-amber-300"
+                  />
+                </div>
+              )}
+              {/* Scrollable list */}
+              <div className="overflow-y-auto flex-1 py-1">
+                {showMe && (
+                  <button
+                    onClick={() => { onChange(null); setOpen(false); setSearch('') }}
+                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 transition-colors ${!value ? 'font-medium text-amber-700' : 'text-gray-700'}`}
+                  >
+                    Me
+                  </button>
+                )}
+                {filtered.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => { onChange(p.id); setOpen(false); setSearch('') }}
+                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 transition-colors ${value === p.id ? 'font-medium text-amber-700' : 'text-gray-700'}`}
+                  >
+                    {p.name}
+                  </button>
+                ))}
+                {!showMe && filtered.length === 0 && (
+                  <p className="px-3 py-1.5 text-xs text-gray-400">No match</p>
+                )}
+              </div>
+              {/* Pinned Add person button */}
+              <div className="border-t border-gray-100 flex-shrink-0">
+                <button
+                  onClick={() => { setAdding(true); setNewName(search); setSearch('') }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50 transition-colors flex items-center gap-1.5"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                  Add person
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="px-3 py-2 space-y-2">
+              <input
+                ref={addNameRef}
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setAdding(false) }}
+                placeholder="Name *"
+                className="w-full text-xs text-gray-900 border border-gray-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-amber-300"
+              />
+              <input
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setAdding(false) }}
+                placeholder="Email"
+                className="w-full text-xs text-gray-900 border border-gray-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-amber-300"
+              />
+              <input
+                value={newCompany}
+                onChange={(e) => setNewCompany(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setAdding(false) }}
+                placeholder="Company"
+                className="w-full text-xs text-gray-900 border border-gray-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-amber-300"
+              />
+              <div className="flex items-center justify-end gap-1.5">
+                <button onClick={() => setAdding(false)} className="text-[10px] text-gray-400 hover:text-gray-600 px-2 py-0.5">Cancel</button>
+                <button onClick={handleSave} disabled={saving || !newName.trim()} className="text-[10px] text-white bg-gray-900 hover:bg-gray-800 px-2 py-0.5 rounded disabled:opacity-40">
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EntryTypeToggle({ isTask, onClick }: { isTask: boolean; onClick: () => void }) {
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const [hover, setHover] = useState(false)
+  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null)
+
+  useEffect(() => {
+    if (!hover || !btnRef.current) { setTooltipPos(null); return }
+    const rect = btnRef.current.getBoundingClientRect()
+    setTooltipPos({ top: rect.top - 4, left: rect.left + rect.width / 2 })
+  }, [hover])
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        className="pointer-events-auto text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+        title={isTask ? 'Task — click to convert' : 'Info — click to convert'}
+        onClick={onClick}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+      >
+        {isTask ? (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" fill="white" /><polyline points="17 8 10 15 7 12" /></svg>
+        ) : (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" fill="white" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+        )}
+      </button>
+      {hover && tooltipPos && createPortal(
+        <div
+          className="fixed px-2 py-1 rounded-lg bg-white border border-gray-200 shadow-lg text-[10px] text-gray-400 font-medium whitespace-nowrap pointer-events-none"
+          style={{ top: tooltipPos.top, left: tooltipPos.left, transform: 'translate(-50%, -100%)', zIndex: 9999 }}
+        >
+          {isTask ? (
+            <span className="flex items-center gap-1">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="17 8 10 15 7 12" /></svg>
+              <span className="text-gray-300">→</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+            </span>
+          ) : (
+            <span className="flex items-center gap-1">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+              <span className="text-gray-300">→</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="17 8 10 15 7 12" /></svg>
+            </span>
+          )}
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
 
 function archiveIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></svg>
@@ -316,6 +531,7 @@ let deactivatePreviousBlock: (() => void) | null = null
 export function JournalBlock(props: Props) {
   const { autosaveInterval = 30, formattingVisible, onToggleFormatting } = props
   const isNewEntry = !props.block
+  const currentUserId = isNewEntry ? (props as NewEntryProps).userId : props.block!.user_id
   const { activeWorkspace, activeScheme, activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
   const { propertiesForWorkspace } = useProperties()
   const { dateFormat, timeFormat } = useDateFormat()
@@ -329,11 +545,14 @@ export function JournalBlock(props: Props) {
 
   const [showHistory, setShowHistory] = useState(false)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
+  const menuStateRef = useRef<MenuState | null>(null)
+  menuStateRef.current = menuState
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [focused, setFocused] = useState(false)
   const [editorKey, setEditorKey] = useState(0)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [summarizing, setSummarizing] = useState(false)
+  const [summaryPreview, setSummaryPreview] = useState<{ original: string; summary: string; newContent: string; isFullBlock: boolean } | null>(null)
   const [people, setPeople] = useState<Person[]>([])
   const [peopleLoaded, setPeopleLoaded] = useState(false)
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -366,6 +585,12 @@ export function JournalBlock(props: Props) {
   const [pendingEntryType, setPendingEntryType] = useState<'info' | 'task'>('info')
   const pendingEntryTypeRef = useRef<'info' | 'task'>('info')
   pendingEntryTypeRef.current = pendingEntryType
+  const [pendingTaskStatus, setPendingTaskStatus] = useState<'not_started' | 'in_progress' | 'done'>('not_started')
+  const [pendingOwnerId, setPendingOwnerId] = useState<string | null>(null)
+  const [pendingDueDate, setPendingDueDate] = useState<string | null>(null)
+  const [pendingDueDateType, setPendingDueDateType] = useState<'deadline' | 'target' | null>(null)
+  const pendingTaskFieldsRef = useRef({ taskStatus: 'not_started' as 'not_started' | 'in_progress' | 'done', ownerId: null as string | null, dueDate: null as string | null, dueDateType: null as 'deadline' | 'target' | null })
+  pendingTaskFieldsRef.current = { taskStatus: pendingTaskStatus, ownerId: pendingOwnerId, dueDate: pendingDueDate, dueDateType: pendingDueDateType }
   const workspaceRef = useRef(activeWorkspace)
   workspaceRef.current = activeWorkspace
   const workspacesRef = useRef(workspaces)
@@ -379,7 +604,11 @@ export function JournalBlock(props: Props) {
   focusedRef.current = isNewEntry || focused
 
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedHTMLRef = useRef(props.block?.content ?? '')
+  const lastDraftHTMLRef = useRef<string | null>(null)
+  const accessTokenRef = useRef<string | null>(null)
 
 
   // Track the last props.block.content we synced into the editor,
@@ -416,6 +645,19 @@ export function JournalBlock(props: Props) {
       autosaveTimerRef.current = null
     }
   }
+  function clearDraftTimer() {
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null }
+  }
+  function clearCommitTimer() {
+    if (commitTimerRef.current) { clearTimeout(commitTimerRef.current); commitTimerRef.current = null }
+  }
+
+  // Capture access token for beforeunload fetch with keepalive
+  useEffect(() => {
+    createClient().auth.getSession().then(({ data }) => {
+      accessTokenRef.current = data.session?.access_token ?? null
+    })
+  }, [])
 
   useEffect(() => clearAutosaveTimer, [])
 
@@ -465,7 +707,9 @@ export function JournalBlock(props: Props) {
 
         const menuX = rect.left + rect.width / 2
         const menuY = rect.bottom
-        setMenuState({ selText, selHTML, x: menuX, y: menuY })
+        const editor = editorRef.current ?? editorHandleRef.current
+        const domRange = editor?.getDOMSelectionRange?.() ?? { from: 0, to: 0 }
+        setMenuState({ selText, selHTML, editorFrom: domRange.from, editorTo: domRange.to, x: menuX, y: menuY })
       })
     }
 
@@ -567,6 +811,8 @@ export function JournalBlock(props: Props) {
   function deactivate() {
     deactivatePreviousBlock = null
     clearAutosaveTimer()
+    clearDraftTimer()
+    clearCommitTimer()
     setFocused(false)
     savingRef.current = false
   }
@@ -640,35 +886,80 @@ export function JournalBlock(props: Props) {
     }
 
     if (action.type === 'split_block') {
-      const newContent = removeTextFromHTML(currentContent, selText)
+      const now = new Date().toISOString()
+      const splitTs = new Date(new Date(block.created_at).getTime() + 1).toISOString()
+      const splitSortOrder = (block.sort_order ?? 0) + 0.5
+
+      // Temporarily make the editor editable so we can programmatically delete the selection
+      const editor = getEditor()
+      let newContent: string
+      if (editor) {
+        const from = menuStateRef.current?.editorFrom ?? 0
+        const to = menuStateRef.current?.editorTo ?? 0
+        if (from > 0 && to > from) {
+          newContent = editor.deleteRange(from, to)
+        } else {
+          newContent = removeTextFromHTML(currentContent, selText)
+          editor.setContent(newContent)
+        }
+      } else {
+        newContent = removeTextFromHTML(currentContent, selText)
+      }
+      // Clean up empty list items left behind by deleteRange
+      newContent = newContent
+        .replace(/<li><p><br[^>]*><\/p><\/li>/g, '')
+        .replace(/<li><p>\s*<\/p><\/li>/g, '')
+        .replace(/<(ul|ol)>\s*<\/(ul|ol)>/g, '')
       const isEmpty = !htmlToText(newContent).trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'active'
-      await supabase.from('journal_blocks')
-        .update({ content: newContent, status: newStatus, is_archived: isEmpty })
-        .eq('id', block.id)
-      const splitCreatedAt = new Date(
-        new Date(block.created_at).getTime() - 1
-      ).toISOString()
-      const splitSortOrder = (block.sort_order ?? 0) - 0.5
+
+      // Create the new block inheriting all properties from the original
       const { data: newBlock } = await supabase.from('journal_blocks')
-        .insert({ user_id: block.user_id, context_id: block.context_id, content: selHTML || selText, status: 'active', created_at: splitCreatedAt, sort_order: splitSortOrder })
-        .select().single()
-      const updatedSourceBlock = { ...block, content: newContent, status: newStatus }
-      if (newBlock) p.onSplitBlock(newBlock as Block, updatedSourceBlock as Block)
-      if (isEmpty) { p.onRemove(block.id); p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true }) }
-      else {
-        const htmlToApply = toEditorHTML(newContent)
-        syncEditorContent(newContent)
-        deactivate()
-        // Re-apply after React re-renders and TipTap editable-change effects settle.
-        // This guards against TipTap reverting content when editable flips to false.
-        requestAnimationFrame(() => {
-          editorRef.current?.setContent(htmlToApply)
-          liveHTMLRef.current = htmlToApply
-          liveTextRef.current = htmlToText(htmlToApply)
-          lastSavedHTMLRef.current = htmlToApply
-          lastSyncedContentRef.current = newContent
+        .insert({
+          user_id: block.user_id,
+          context_id: block.context_id,
+          workspace_id: block.workspace_id,
+          entry_type: block.entry_type,
+          owner_id: block.owner_id,
+          due_date: block.due_date,
+          due_date_type: block.due_date_type,
+          task_status: block.task_status,
+          content: selHTML || selText,
+          status: 'active',
+          created_at: splitTs,
+          updated_at: splitTs,
+          sort_order: splitSortOrder,
         })
+        .select().single()
+      if (!newBlock) return
+
+      // Copy property values from source block to new block
+      const { data: srcProps } = await supabase
+        .from('entry_properties')
+        .select('property_value_id')
+        .eq('entry_id', block.id)
+      if (srcProps && srcProps.length > 0) {
+        await supabase.from('entry_properties').insert(
+          srcProps.map((ep: { property_value_id: string }) => ({
+            entry_id: (newBlock as Block).id,
+            property_value_id: ep.property_value_id,
+          }))
+        )
+      }
+
+      await supabase.from('journal_blocks')
+        .update({ content: newContent, draft_content: null, status: newStatus, is_archived: isEmpty, updated_at: now })
+        .eq('id', block.id)
+      const updatedSourceBlock = { ...block, content: newContent, draft_content: null, status: newStatus, updated_at: now }
+      if (isEmpty) {
+        p.onSplitBlock(newBlock as Block, updatedSourceBlock)
+        p.onRemove(block.id)
+        p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true })
+      } else {
+        syncEditorContent(newContent)
+        p.onUpdate({ ...block, content: newContent, draft_content: null, status: newStatus, updated_at: now })
+        p.onSplitBlock(newBlock as Block, updatedSourceBlock)
+        deactivate()
       }
       return
     }
@@ -711,21 +1002,22 @@ export function JournalBlock(props: Props) {
           setErrorMessage('Summarization returned empty result.')
           return
         }
-        if (isSummaryRefusal(json.summary, textToSummarize)) {
+        if (isSummaryRefusal(json.summary)) {
           setErrorMessage("Couldn't summarize — try selecting more meaningful text.")
           return
         }
+        // Summary is now HTML — use directly for full block, or strip tags for partial replacement
+        const summaryHTML = json.summary
         const newContent = isFullBlock
-          ? `<p>${json.summary.replace(/\n/g, '</p><p>')}</p>`
-          : replaceTextInHTML(currentContent, selText, json.summary)
+          ? summaryHTML
+          : replaceTextInHTML(currentContent, selText, summaryHTML.replace(/<[^>]*>/g, ''))
         if (newContent === currentContent) {
           setErrorMessage('Summary could not be applied — text mismatch.')
           return
         }
-        await supabase.from('journal_blocks').update({ content: newContent, status: 'active' }).eq('id', block.id)
-        syncEditorContent(newContent)
-        p.onUpdate({ ...block, content: newContent, status: 'active' })
-        deactivate()
+        // Show preview — use original HTML for full block, plain text for partial selection
+        const originalDisplay = isFullBlock ? currentContent : `<p>${textToSummarize.replace(/\n/g, '</p><p>')}</p>`
+        setSummaryPreview({ original: originalDisplay, summary: summaryHTML, newContent, isFullBlock })
       } finally {
         setSummarizing(false)
       }
@@ -786,11 +1078,18 @@ export function JournalBlock(props: Props) {
     const supabase = createClient()
     let saved: Block | null = null
 
+    const taskFields = pendingEntryTypeRef.current === 'task' ? {
+      task_status: pendingTaskFieldsRef.current.taskStatus,
+      owner_id: pendingTaskFieldsRef.current.ownerId,
+      due_date: pendingTaskFieldsRef.current.dueDate,
+      due_date_type: pendingTaskFieldsRef.current.dueDateType,
+    } : {}
+
     if (autosavedBlockIdRef.current) {
       // Block was already created by autosave — update and fetch it
       const { data, error } = await supabase
         .from('journal_blocks')
-        .update({ content: html, entry_type: pendingEntryTypeRef.current })
+        .update({ content: html, entry_type: pendingEntryTypeRef.current, ...taskFields })
         .eq('id', autosavedBlockIdRef.current)
         .select()
         .single()
@@ -808,6 +1107,7 @@ export function JournalBlock(props: Props) {
           content: html,
           status: 'active',
           entry_type: pendingEntryTypeRef.current,
+          ...taskFields,
         })
         .select()
         .single()
@@ -863,7 +1163,7 @@ export function JournalBlock(props: Props) {
     liveTextRef.current = ''
     setPendingPropertyIds(new Set())
     setPendingFiles([])
-    setPendingEntryType('info')
+    setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null)
     setFocused(false)
     setEditorKey(k => k + 1)
     if (saved) {
@@ -880,6 +1180,8 @@ export function JournalBlock(props: Props) {
 
     // Always deactivate visually, even if a save is already in flight
     clearAutosaveTimer()
+    clearDraftTimer()
+    clearCommitTimer()
     setFocused(false)
 
     if (savingRef.current) return
@@ -907,32 +1209,17 @@ export function JournalBlock(props: Props) {
       return
     }
 
-    // Write block_version before updating — skip if the most recent version
-    // already has the same content (avoids duplicates from rapid edits).
-    const { data: latestVersion } = await supabase
-      .from('block_versions')
-      .select('content')
-      .eq('block_id', block.id)
-      .order('edited_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (latestVersion?.content !== block.content) {
-      await supabase.from('block_versions').insert({
-        block_id: block.id,
-        content: block.content,
-        content_html: block.content,
-        edited_at: new Date().toISOString(),
-      })
-    }
-
+    // Version history is handled by the handle_block_update trigger,
+    // which inserts the old content into block_versions before any update.
     const { data: saved } = await supabase
       .from('journal_blocks')
-      .update({ content: html })
+      .update({ content: html, draft_content: null })
       .eq('id', block.id)
       .select()
       .single()
     lastSavedHTMLRef.current = html
-    const savedBlock = (saved as Block) ?? { ...block, content: html }
+    lastDraftHTMLRef.current = null
+    const savedBlock = (saved as Block) ?? { ...block, content: html, draft_content: null }
     lastSyncedContentRef.current = savedBlock.content
     p.onUpdate(savedBlock)
     savingRef.current = false
@@ -942,65 +1229,89 @@ export function JournalBlock(props: Props) {
 
   const handleSave = isNewEntry ? saveNewEntry : saveExistingBlock
 
-  // ── Autosave (silent content update, no block_version) ──────────────
+  // ── Autosave (new entries) & Draft save (existing blocks) ───────────
   const autosaveRef = useRef(() => {})
 
-  autosaveRef.current = isNewEntry
-    ? async () => {
-        if (savingRef.current) return
-        const html = liveHTMLRef.current
-        const text = liveTextRef.current.trim()
-        if (!text) return
-        savingRef.current = true
-        try {
-          const supabase = createClient()
-          if (autosavedBlockIdRef.current) {
-            // Already auto-saved once — just update content and entry_type
-            await supabase
-              .from('journal_blocks')
-              .update({ content: html, entry_type: pendingEntryTypeRef.current })
-              .eq('id', autosavedBlockIdRef.current)
-          } else {
-            // First autosave — insert the block silently
-            const p = propsRef.current as NewEntryProps
-            const wsId = workspaceRef.current?.id
-              ?? workspacesRef.current.find(w => w.is_default)?.id
-            if (!wsId) { savingRef.current = false; return }
-            const { data, error } = await supabase
-              .from('journal_blocks')
-              .insert({
-                user_id: p.userId,
-                context_id: p.contextId ?? null,
-                workspace_id: wsId,
-                content: html,
-                status: 'active',
-                entry_type: pendingEntryTypeRef.current,
-              })
-              .select('id')
-              .single()
-            if (!error && data) {
-              autosavedBlockIdRef.current = data.id
-            }
-          }
-          lastSavedHTMLRef.current = html
-        } finally {
-          savingRef.current = false
-        }
-      }
-    : async () => {
-        const p = propsRef.current as ExistingBlockProps
-        if (!p.block || savingRef.current) return
-        if (!focusedRef.current) return
-        const html = liveHTMLRef.current
-        if (html === lastSavedHTMLRef.current) return
-
-        const supabase = createClient()
+  // New-entry autosave: inserts/updates the block content directly
+  autosaveRef.current = async () => {
+    if (savingRef.current) return
+    const html = liveHTMLRef.current
+    const text = liveTextRef.current.trim()
+    if (!text) return
+    savingRef.current = true
+    try {
+      const supabase = createClient()
+      if (autosavedBlockIdRef.current) {
         await supabase
           .from('journal_blocks')
-          .update({ content: html })
-          .eq('id', p.block.id)
-        lastSavedHTMLRef.current = html
+          .update({ content: html, entry_type: pendingEntryTypeRef.current })
+          .eq('id', autosavedBlockIdRef.current)
+      } else {
+        const p = propsRef.current as NewEntryProps
+        const wsId = workspaceRef.current?.id
+          ?? workspacesRef.current.find(w => w.is_default)?.id
+        if (!wsId) { savingRef.current = false; return }
+        const { data, error } = await supabase
+          .from('journal_blocks')
+          .insert({
+            user_id: p.userId,
+            context_id: p.contextId ?? null,
+            workspace_id: wsId,
+            content: html,
+            status: 'active',
+            entry_type: pendingEntryTypeRef.current,
+          })
+          .select('id')
+          .single()
+        if (!error && data) {
+          autosavedBlockIdRef.current = data.id
+        }
       }
+      lastSavedHTMLRef.current = html
+    } finally {
+      savingRef.current = false
+      if (!focusedRef.current && liveTextRef.current.trim()) {
+        saveNewEntry()
+      }
+    }
+  }
+
+  // Draft save for existing blocks: writes to draft_content only (no history)
+  async function saveDraft(blockId: string) {
+    const html = liveHTMLRef.current
+    if (html === lastSavedHTMLRef.current) return
+    if (html === lastDraftHTMLRef.current) return
+    const supabase = createClient()
+    await supabase.from('journal_blocks').update({ draft_content: html }).eq('id', blockId)
+    lastDraftHTMLRef.current = html
+  }
+
+  // beforeunload: save draft via fetch+keepalive so it survives page close
+  useEffect(() => {
+    if (isNewEntry) return
+    function handleBeforeUnload() {
+      const blockId = (propsRef.current as ExistingBlockProps).block?.id
+      if (!blockId) return
+      const html = liveHTMLRef.current
+      if (html === lastSavedHTMLRef.current) return
+      const token = accessTokenRef.current
+      if (!token) return
+      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/journal_blocks?id=eq.${blockId}`
+      fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          'Authorization': `Bearer ${token}`,
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ draft_content: html }),
+        keepalive: true,
+      }).catch(() => {})
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [isNewEntry])
 
   function handleEditorChange(html: string, text: string) {
     liveHTMLRef.current = html
@@ -1009,11 +1320,19 @@ export function JournalBlock(props: Props) {
     if (isNewEntry) {
       if (trimmed && !focused) setFocused(true)
       if (!trimmed && !hasPendingData) { setFocused(false); clearAutosaveTimer(); return }
+      // New entries: autosave after inactivity
+      clearAutosaveTimer()
+      autosaveTimerRef.current = setTimeout(() => autosaveRef.current(), autosaveInterval * 1000)
+    } else if (focusedRef.current) {
+      const blockId = (propsRef.current as ExistingBlockProps).block?.id
+      if (!blockId) return
+      // Draft save: 5 seconds after last keystroke
+      clearDraftTimer()
+      draftTimerRef.current = setTimeout(() => saveDraft(blockId), 5000)
+      // Commit (history): 60 seconds of inactivity
+      clearCommitTimer()
+      commitTimerRef.current = setTimeout(() => saveExistingBlock(), 60000)
     }
-    // Don't start autosave timers for unfocused existing blocks
-    if (!isNewEntry && !focusedRef.current) return
-    clearAutosaveTimer()
-    autosaveTimerRef.current = setTimeout(() => autosaveRef.current(), autosaveInterval * 1000)
   }
 
   async function handleNewEntryShortcut(action: SelectionAction) {
@@ -1042,7 +1361,7 @@ export function JournalBlock(props: Props) {
 
     liveHTMLRef.current = ''
     liveTextRef.current = ''
-    setPendingEntryType('info')
+    setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null)
     setFocused(false)
     setEditorKey(k => k + 1)
     p.onSaved(data as Block)
@@ -1107,7 +1426,7 @@ export function JournalBlock(props: Props) {
         }
         const json = await res.json()
         if (!json.summary) return
-        if (isSummaryRefusal(json.summary, fullText)) {
+        if (isSummaryRefusal(json.summary)) {
           setErrorMessage("Couldn't summarize — try selecting more meaningful text.")
           return
         }
@@ -1127,6 +1446,12 @@ export function JournalBlock(props: Props) {
       editorRef.current?.setContent(revertTo)
       liveHTMLRef.current = revertTo
       liveTextRef.current = htmlToText(revertTo)
+      // Clear any saved draft since we're reverting
+      const blockId = (propsRef.current as ExistingBlockProps).block?.id
+      if (blockId && lastDraftHTMLRef.current !== null) {
+        lastDraftHTMLRef.current = null
+        createClient().from('journal_blocks').update({ draft_content: null }).eq('id', blockId).then(() => {})
+      }
       deactivate()
       return
     }
@@ -1178,7 +1503,7 @@ export function JournalBlock(props: Props) {
       clearAutosaveTimer()
       setPendingPropertyIds(new Set())
       setPendingFiles([])
-      setPendingEntryType('info')
+      setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null)
       setEditorKey(k => k + 1)
       return
     }
@@ -1253,7 +1578,8 @@ export function JournalBlock(props: Props) {
           const text = liveTextRef.current.trim()
           const hasPending = pendingPropertyIdsRef.current.size > 0 || pendingFilesRef.current.length > 0
           if (!text && !hasPending) { setFocused(false); return }
-          if (!text) { setFocused(false); return } // unfocus but keep pending data
+          setFocused(false)
+          if (!text) return // unfocus but keep pending data
           saveNewEntry()
         } else if (focusedRef.current) {
           // Extra guard: if this block was just activated in the same rAF
@@ -1272,7 +1598,8 @@ export function JournalBlock(props: Props) {
       const text = liveTextRef.current.trim()
       const hasPending = pendingPropertyIdsRef.current.size > 0 || pendingFilesRef.current.length > 0
       if (!text && !hasPending) { setFocused(false); return }
-      if (!text) { setFocused(false); return } // unfocus but keep pending data
+      setFocused(false)
+      if (!text) return // unfocus but keep pending data
       saveNewEntry()
     } else if (focused) {
       deactivatePreviousBlock = null // already deactivating, prevent double-save
@@ -1365,6 +1692,10 @@ export function JournalBlock(props: Props) {
     p.onUpdate({ ...p.block, [field]: value })
   }
 
+  function handlePersonAdded(person: Person) {
+    setPeople(prev => [...prev, person].sort((a, b) => a.name.localeCompare(b.name)))
+  }
+
   async function setTaskStatus(taskStatus: 'not_started' | 'in_progress' | 'done') {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
@@ -1389,10 +1720,22 @@ export function JournalBlock(props: Props) {
     }
   }
 
-  // Lazy-load people when a task block is visible
+  // Load people for assignee dropdown
   const blockForPeople = props.block
   useEffect(() => {
-    if (isNewEntry || peopleLoaded) return
+    if (peopleLoaded) return
+    // For new entries, use props.people if available
+    if (isNewEntry) {
+      if (props.people && props.people.length > 0) {
+        setPeople(props.people as Person[])
+        setPeopleLoaded(true)
+      } else {
+        const supabase = createClient()
+        supabase.from('people').select('id, name').eq('user_id', currentUserId).order('name')
+          .then(({ data }) => { setPeople((data ?? []) as Person[]); setPeopleLoaded(true) })
+      }
+      return
+    }
     if (!blockForPeople || blockForPeople.entry_type !== 'task') return
     const supabase = createClient()
     supabase
@@ -1404,7 +1747,7 @@ export function JournalBlock(props: Props) {
         setPeople((data ?? []) as Person[])
         setPeopleLoaded(true)
       })
-  }, [isNewEntry, blockForPeople, peopleLoaded])
+  }, [isNewEntry, blockForPeople, peopleLoaded, currentUserId, props.people])
 
   // Load attachments for existing blocks
   useEffect(() => {
@@ -1593,7 +1936,7 @@ export function JournalBlock(props: Props) {
       onClick: () => setMoveMenuOpen(prev => !prev),
     }] : []),
     ...(block ? [{ key: 'archive', label: 'Archive', shortcut: '⌥⇧D', shortcutTip: 'Alt + Shift + D', icon: archiveIcon(), onClick: () => { setPopoverOpen(false); archiveBlock() }, separator: true }] : []),
-    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
+    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
   ]
 
   // Disable split when selection covers entire block content
@@ -1698,14 +2041,14 @@ export function JournalBlock(props: Props) {
       <div
         className="absolute top-0 left-4 right-14 -translate-y-1/2 z-10 flex items-center gap-1 pointer-events-none"
       >
-        {/* Entry type indicator */}
-        <div className="pointer-events-auto text-gray-400" title={isTask ? 'Task' : 'Info'}>
-          {isTask ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" fill="white" /><polyline points="17 8 10 15 7 12" /></svg>
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" fill="white" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
-          )}
-        </div>
+        {/* Entry type indicator — click to switch */}
+        <EntryTypeToggle
+          isTask={isTask}
+          onClick={() => {
+            if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') }
+            else { toggleEntryType() }
+          }}
+        />
         {/* Status badge for inactive entries */}
         {isInactive && !restoredLocally && (
           <span className={`pointer-events-auto px-2 py-0.5 rounded-full text-[10px] font-medium leading-tight ${
@@ -1941,7 +2284,7 @@ export function JournalBlock(props: Props) {
             people={props.people}
           />
         </div>
-        {summarizing && (
+        {summarizing && !summaryPreview && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="flex items-center gap-2 text-sm text-amber-700">
               <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
@@ -1951,6 +2294,64 @@ export function JournalBlock(props: Props) {
               Summarizing…
             </div>
           </div>
+        )}
+        {summaryPreview && createPortal(
+          <div className="fixed inset-0 bg-black/20 z-50 flex items-center justify-center p-4" onMouseDown={() => { setSummaryPreview(null); setSummarizing(false) }}>
+            <div
+              className="bg-white rounded-xl shadow-xl w-full max-w-3xl flex flex-col max-h-[85vh]"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                <h3 className="text-sm font-semibold text-gray-900">Summary Preview</h3>
+                <button onClick={() => { setSummaryPreview(null); setSummarizing(false) }} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Original</p>
+                  <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 max-h-[35vh] overflow-y-auto tiptap-content text-sm text-gray-600 leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: summaryPreview.original }}
+                  />
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-green-600 uppercase tracking-wide mb-1.5">Summary</p>
+                  <div className="bg-green-50 rounded-lg p-4 border border-green-200 tiptap-content text-sm text-gray-800 leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: summaryPreview.summary }}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">
+                <button
+                  onClick={() => { setSummaryPreview(null); setSummarizing(false) }}
+                  className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const preview = summaryPreview
+                    setSummaryPreview(null)
+                    setSummarizing(false)
+                    const p = propsRef.current as ExistingBlockProps
+                    const block = p.block
+                    if (!block) return
+                    const supabase = createClient()
+                    await supabase.from('journal_blocks').update({ content: preview.newContent, draft_content: null, status: 'active' }).eq('id', block.id)
+                    syncEditorContent(preview.newContent)
+                    lastSavedHTMLRef.current = preview.newContent
+                    lastDraftHTMLRef.current = null
+                    p.onUpdate({ ...block, content: preview.newContent, draft_content: null, status: 'active' })
+                    deactivate()
+                  }}
+                  className="px-4 py-1.5 text-sm text-white bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors"
+                >
+                  Accept
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
         )}
       </div>
 
@@ -2013,7 +2414,78 @@ export function JournalBlock(props: Props) {
         </div>
       )}
 
-      {/* ── TASK FIELDS PANEL ── */}
+      {/* ── TASK FIELDS PANEL (new entry) ── */}
+      {isNewEntry && isTask && (
+        <div
+          className="flex items-center gap-3 px-4 py-1.5 border-t border-gray-100 flex-wrap"
+          onMouseDown={(e) => { e.stopPropagation() }}
+        >
+          <div className="flex items-center gap-0.5">
+            {([
+              { value: 'not_started' as const, label: 'Not Started', color: 'gray' },
+              { value: 'in_progress' as const, label: 'In Progress', color: 'blue' },
+              { value: 'done' as const, label: 'Done', color: 'green' },
+            ]).map(({ value, label, color }) => {
+              const isActive = pendingTaskStatus === value
+              const colors = {
+                gray: isActive ? 'bg-gray-100 border-gray-400 text-gray-700' : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-500',
+                blue: isActive ? 'bg-blue-50 border-blue-400 text-blue-700' : 'border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-500',
+                green: isActive ? 'bg-green-50 border-green-400 text-green-700' : 'border-gray-200 text-gray-400 hover:border-green-300 hover:text-green-500',
+              }[color]
+              return (
+                <button
+                  key={value}
+                  onClick={() => setPendingTaskStatus(value)}
+                  className={`px-2 py-0.5 text-[11px] font-medium border rounded-full transition-colors ${colors}`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          <span className="w-px h-4 bg-gray-200" />
+          <AssigneeSelect
+            value={pendingOwnerId}
+            people={people}
+            userId={currentUserId}
+            onChange={setPendingOwnerId}
+            onPersonAdded={handlePersonAdded}
+          />
+          <span className="w-px h-4 bg-gray-200" />
+          <div className="flex items-center gap-1">
+            <input
+              type="date"
+              value={pendingDueDate ? pendingDueDate.split('T')[0] : ''}
+              onChange={(e) => {
+                if (!e.target.value) { setPendingDueDate(null); setPendingDueDateType(null) }
+                else { setPendingDueDate(`${e.target.value}T23:59:59`); if (!pendingDueDateType) setPendingDueDateType('target') }
+              }}
+              className="text-xs bg-transparent border-none outline-none cursor-pointer text-gray-600 py-0.5"
+            />
+            {pendingDueDate && (
+              <>
+                <button
+                  onClick={() => setPendingDueDateType('deadline')}
+                  className={`px-1.5 py-0.5 text-[10px] font-medium border rounded-full transition-colors ${pendingDueDateType === 'deadline' ? 'bg-red-50 border-red-300 text-red-600' : 'border-gray-200 text-gray-400'}`}
+                >
+                  Deadline
+                </button>
+                <button
+                  onClick={() => setPendingDueDateType('target')}
+                  className={`px-1.5 py-0.5 text-[10px] font-medium border rounded-full transition-colors ${pendingDueDateType === 'target' ? 'bg-amber-50 border-amber-300 text-amber-600' : 'border-gray-200 text-gray-400'}`}
+                >
+                  Target
+                </button>
+                <button onClick={() => { setPendingDueDate(null); setPendingDueDateType(null) }} className="text-gray-300 hover:text-gray-500">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── TASK FIELDS PANEL (existing block) ── */}
       {block && isTask && (
         <div
           className="flex items-center gap-3 px-4 py-1.5 border-t border-gray-100 flex-wrap"
@@ -2043,17 +2515,13 @@ export function JournalBlock(props: Props) {
             })}
           </div>
           <span className="w-px h-4 bg-gray-200" />
-          <div className="flex items-center gap-1">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
-            <select
-              value={block.owner_id ?? ''}
-              onChange={(e) => updateTaskField('owner_id', e.target.value || null)}
-              className="text-xs bg-transparent border-none outline-none cursor-pointer text-gray-600 hover:text-gray-900 py-0.5 -ml-0.5 pr-4"
-            >
-              <option value="">Me</option>
-              {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
+          <AssigneeSelect
+            value={block.owner_id}
+            people={people}
+            userId={block.user_id}
+            onChange={(id) => updateTaskField('owner_id', id)}
+            onPersonAdded={handlePersonAdded}
+          />
           <span className="w-px h-4 bg-gray-200" />
           {(() => {
             // Parse timestamptz into date and time parts (using local time)

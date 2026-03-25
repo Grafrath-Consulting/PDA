@@ -12,7 +12,12 @@
       "Bash(find C:/Projects/PDA/components -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" \\\\\\) 2>/dev/null | sort)",
       "Bash(find C:/Projects/PDA/app -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" \\\\\\) 2>/dev/null | sort)",
       "Bash(npm run:*)",
-      "Bash(npx next:*)"
+      "Bash(npx next:*)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "Bash(npx tsc:*)",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_snapshot"
     ]
   }
 }

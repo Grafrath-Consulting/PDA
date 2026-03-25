@@ -43,6 +43,10 @@ export interface TipTapEditorHandle {
   focusAtCoords: (x: number, y: number) => void
   setContent: (html: string) => void
   openLinkEditor: (prefilledText?: string) => void
+  getSelectionFrom: () => number
+  getSelectionTo: () => number
+  getDOMSelectionRange: () => { from: number; to: number }
+  deleteRange: (from: number, to: number) => string
 }
 
 interface Props {
@@ -246,6 +250,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
     extensions: [
       StarterKit.configure({
         heading: false,
+        trailingNode: false,
       }),
       Underline,
       Highlight.configure({ multicolor: false }),
@@ -394,6 +399,31 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       if (!editor) return
       openLinkEditor(editor, prefilledText)
     },
+    getSelectionFrom: () => editor?.state.selection.from ?? 0,
+    getSelectionTo: () => editor?.state.selection.to ?? 0,
+    getDOMSelectionRange: () => {
+      if (!editor) return { from: 0, to: 0 }
+      const sel = window.getSelection()
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return { from: 0, to: 0 }
+      const range = sel.getRangeAt(0)
+      try {
+        const from = editor.view.posAtDOM(range.startContainer, range.startOffset)
+        const to = editor.view.posAtDOM(range.endContainer, range.endOffset)
+        return { from: Math.min(from, to), to: Math.max(from, to) }
+      } catch {
+        return { from: 0, to: 0 }
+      }
+    },
+    deleteRange: (from: number, to: number) => {
+      if (!editor) return ''
+      const wasEditable = editor.isEditable
+      if (!wasEditable) editor.setEditable(true)
+      editor.chain().focus().setTextSelection({ from, to }).deleteSelection().run()
+      lastHTMLRef.current = editor.getHTML()
+      const result = editor.getHTML()
+      if (!wasEditable) editor.setEditable(false)
+      return result
+    },
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openLinkEditor is stable, only editor instance matters
   }), [editor])
 
@@ -422,6 +452,29 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       },
       setContent: (html: string) => { lastHTMLRef.current = html; editor.commands.setContent(html); lastHTMLRef.current = editor.getHTML() },
       openLinkEditor: (prefilledText?: string) => openLinkEditor(editor, prefilledText),
+      getSelectionFrom: () => editor.state.selection.from,
+      getSelectionTo: () => editor.state.selection.to,
+      getDOMSelectionRange: () => {
+        const sel = window.getSelection()
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return { from: 0, to: 0 }
+        const range = sel.getRangeAt(0)
+        try {
+          const from = editor.view.posAtDOM(range.startContainer, range.startOffset)
+          const to = editor.view.posAtDOM(range.endContainer, range.endOffset)
+          return { from: Math.min(from, to), to: Math.max(from, to) }
+        } catch {
+          return { from: 0, to: 0 }
+        }
+      },
+      deleteRange: (from: number, to: number) => {
+        const wasEditable = editor.isEditable
+        if (!wasEditable) editor.setEditable(true)
+        editor.chain().focus().setTextSelection({ from, to }).deleteSelection().run()
+        lastHTMLRef.current = editor.getHTML()
+        const result = editor.getHTML()
+        if (!wasEditable) editor.setEditable(false)
+        return result
+      },
     }
     onReadyRef.current?.(handle)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openLinkEditor is stable, only editor instance matters

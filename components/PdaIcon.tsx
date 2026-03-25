@@ -12,7 +12,7 @@ export function PdaIcon({ width = 20, height = 20, className, style }: PdaIconPr
     <svg
       width={width}
       height={height}
-      viewBox="0 0 20 20"
+      viewBox="3 0 14 20"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}

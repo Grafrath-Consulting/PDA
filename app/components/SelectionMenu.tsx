@@ -1,5 +1,6 @@
 'use client'
 
+import { useRef, useState, useLayoutEffect } from 'react'
 import { SelectionAction } from '../types'
 
 // Project linking has been removed — project association is now handled via a
@@ -15,22 +16,34 @@ interface Props {
 }
 
 export function SelectionMenu({ position, selectedText, onClose, onAction, disableSplit }: Props) {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [flipped, setFlipped] = useState(false)
+
+  useLayoutEffect(() => {
+    if (!menuRef.current) return
+    const rect = menuRef.current.getBoundingClientRect()
+    if (rect.bottom > window.innerHeight - 8) {
+      setFlipped(true)
+    }
+  }, [position])
+
   function act(action: SelectionAction) {
     onAction(action)
     onClose()
   }
 
-  // Position below the selection, centered horizontally on it
   const style: React.CSSProperties = {
     position: 'fixed',
-    left: position.x,
-    top: position.y + 6,
+    left: Math.min(position.x, window.innerWidth - 100),
+    top: flipped ? undefined : position.y + 6,
+    bottom: flipped ? (window.innerHeight - position.y + 6) : undefined,
     transform: 'translateX(-50%)',
     zIndex: 50,
   }
 
   return (
     <div
+      ref={menuRef}
       style={style}
       className="bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 min-w-[176px]"
       onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
@@ -51,7 +64,7 @@ export function SelectionMenu({ position, selectedText, onClose, onAction, disab
       <MenuSection>
         {!disableSplit && (
           <Item onClick={() => act({ type: 'split_block' })}>
-            <SplitIcon /> Split to Block
+            <SplitIcon /> Split to New Entry
           </Item>
         )}
       </MenuSection>

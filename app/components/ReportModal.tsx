@@ -3,98 +3,190 @@
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useWorkspace } from '@/context/WorkspaceContext'
+import { getScheme } from '@/constants/workspaceColorSchemes'
 
-interface Person {
+interface ReportTemplate {
   id: string
   name: string
-  email: string | null
+  date_range_type: string
+  date_from: string | null
+  date_to: string | null
+  workspace_ids: string[]
+  include_ai_summary: boolean
+  summary_only: boolean
+  recipient_emails: string[]
+  entry_type_filter: string | null
+  status_filter: string | null
 }
 
-interface Props {
-  userId: string
-  onClose: () => void
+const DATE_RANGES = [
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'last_7', label: 'Last 7 days' },
+  { value: 'last_30', label: 'Last 30 days' },
+  { value: 'last_90', label: 'Last 90 days' },
+  { value: 'custom', label: 'Custom range' },
+] as const
+
+function resolveDateRange(type: string, customFrom?: string | null, customTo?: string | null): { from: string; to: string } {
+  const today = new Date().toISOString().split('T')[0]
+  switch (type) {
+    case 'yesterday': {
+      const d = new Date(); d.setDate(d.getDate() - 1)
+      const y = d.toISOString().split('T')[0]
+      return { from: y, to: y }
+    }
+    case 'last_7': {
+      const d = new Date(); d.setDate(d.getDate() - 6)
+      return { from: d.toISOString().split('T')[0], to: today }
+    }
+    case 'last_30': {
+      const d = new Date(); d.setDate(d.getDate() - 29)
+      return { from: d.toISOString().split('T')[0], to: today }
+    }
+    case 'last_90': {
+      const d = new Date(); d.setDate(d.getDate() - 89)
+      return { from: d.toISOString().split('T')[0], to: today }
+    }
+    case 'custom':
+      return { from: customFrom ?? today, to: customTo ?? today }
+    default: // today
+      return { from: today, to: today }
+  }
 }
+
+type Step = 'menu' | 'config' | 'preview' | 'success'
+
+interface Props { userId: string; onClose: () => void }
 
 export function ReportModal({ userId, onClose }: Props) {
   const { workspaces, activeWorkspaceId } = useWorkspace()
 
-  const [step, setStep] = useState<'setup' | 'preview'>('setup')
-  const [wsId, setWsId] = useState<string | null>(activeWorkspaceId)
-  const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().split('T')[0])
-  const [dateTo, setDateTo] = useState(() => new Date().toISOString().split('T')[0])
+  const [step, setStep] = useState<Step>('menu')
+  const [templates, setTemplates] = useState<ReportTemplate[]>([])
+  const [loadingTemplates, setLoadingTemplates] = useState(true)
 
-  // Recipients
-  const [people, setPeople] = useState<Person[]>([])
-  const [selectedRecipients, setSelectedRecipients] = useState<Set<string>>(new Set())
+  // Config state
+  const [templateId, setTemplateId] = useState<string | null>(null)
+  const [templateName, setTemplateName] = useState('')
+  const [dateRangeType, setDateRangeType] = useState('today')
+  const [customFrom, setCustomFrom] = useState(() => new Date().toISOString().split('T')[0])
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().split('T')[0])
+  const [selectedWorkspaces, setSelectedWorkspaces] = useState<Set<string>>(new Set())
+  const [includeAiSummary, setIncludeAiSummary] = useState(false)
+  const [summaryOnly, setSummaryOnly] = useState(false)
+  const [entryTypeFilter, setEntryTypeFilter] = useState<string | null>(null)
+  const [statusFilter, setStatusFilter] = useState<string | null>(null)
 
-  // Report content
+  // Preview/send state
   const [report, setReport] = useState('')
   const [subject, setSubject] = useState('')
+  const [recipientEmails, setRecipientEmails] = useState<string[]>([])
+  const [newRecipient, setNewRecipient] = useState('')
   const [generating, setGenerating] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Load people
+  // Load templates
   useEffect(() => {
     const supabase = createClient()
-    supabase
-      .from('people')
-      .select('id, name, email')
+    supabase.from('report_templates')
+      .select('*')
       .eq('user_id', userId)
       .order('name')
-      .then(({ data }) => setPeople((data ?? []) as Person[]))
+      .then(({ data }) => {
+        setTemplates((data ?? []) as ReportTemplate[])
+        setLoadingTemplates(false)
+      })
   }, [userId])
 
-  // Load saved recipients for the selected workspace
-  useEffect(() => {
-    loadSavedRecipients()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsId, userId])
-
-  async function loadSavedRecipients() {
-    const supabase = createClient()
-    if (wsId) {
-      const { data } = await supabase.from('workspaces').select('report_recipients').eq('id', wsId).single()
-      if (data?.report_recipients) {
-        setSelectedRecipients(new Set(data.report_recipients as string[]))
-      } else {
-        setSelectedRecipients(new Set())
-      }
-    } else {
-      const { data } = await supabase.from('profiles').select('global_report_recipients').eq('id', userId).single()
-      if (data?.global_report_recipients) {
-        setSelectedRecipients(new Set(data.global_report_recipients as string[]))
-      } else {
-        setSelectedRecipients(new Set())
-      }
-    }
+  function loadTemplate(tpl: ReportTemplate) {
+    setTemplateId(tpl.id)
+    setTemplateName(tpl.name)
+    setDateRangeType(tpl.date_range_type)
+    if (tpl.date_from) setCustomFrom(tpl.date_from)
+    if (tpl.date_to) setCustomTo(tpl.date_to)
+    setSelectedWorkspaces(new Set(tpl.workspace_ids))
+    setIncludeAiSummary(tpl.include_ai_summary)
+    setSummaryOnly(tpl.summary_only)
+    setEntryTypeFilter(tpl.entry_type_filter)
+    setStatusFilter(tpl.status_filter)
+    setRecipientEmails(tpl.recipient_emails)
+    setStep('config')
   }
 
-  function toggleRecipient(personId: string) {
-    setSelectedRecipients(prev => {
-      const next = new Set(prev)
-      if (next.has(personId)) next.delete(personId)
-      else next.add(personId)
-      return next
-    })
+  function startNew() {
+    setTemplateId(null)
+    setTemplateName('')
+    setDateRangeType('today')
+    setCustomFrom(new Date().toISOString().split('T')[0])
+    setCustomTo(new Date().toISOString().split('T')[0])
+    setSelectedWorkspaces(activeWorkspaceId ? new Set([activeWorkspaceId]) : new Set())
+    setIncludeAiSummary(false)
+    setSummaryOnly(false)
+    setEntryTypeFilter(null)
+    setStatusFilter(null)
+    setRecipientEmails([])
+    setStep('config')
+  }
+
+  async function saveTemplate() {
+    const supabase = createClient()
+    const payload = {
+      user_id: userId,
+      name: templateName.trim() || 'Untitled Report',
+      date_range_type: dateRangeType,
+      date_from: dateRangeType === 'custom' ? customFrom : null,
+      date_to: dateRangeType === 'custom' ? customTo : null,
+      workspace_ids: Array.from(selectedWorkspaces),
+      include_ai_summary: includeAiSummary,
+      summary_only: summaryOnly,
+      recipient_emails: recipientEmails,
+      entry_type_filter: entryTypeFilter,
+      status_filter: statusFilter,
+    }
+    if (templateId) {
+      await supabase.from('report_templates').update(payload).eq('id', templateId)
+    } else {
+      const { data } = await supabase.from('report_templates').insert(payload).select('id').single()
+      if (data) setTemplateId(data.id)
+    }
+    // Refresh templates list
+    const { data: all } = await supabase.from('report_templates').select('*').eq('user_id', userId).order('name')
+    setTemplates((all ?? []) as ReportTemplate[])
+  }
+
+  async function deleteTemplate() {
+    if (!templateId || !window.confirm('Delete this template?')) return
+    const supabase = createClient()
+    await supabase.from('report_templates').delete().eq('id', templateId)
+    setTemplates(prev => prev.filter(t => t.id !== templateId))
+    setTemplateId(null)
+    setStep('menu')
   }
 
   async function generateReport() {
     setGenerating(true)
     setError(null)
     try {
+      const { from, to } = resolveDateRange(dateRangeType, customFrom, customTo)
+      const wsIds = Array.from(selectedWorkspaces)
       const res = await fetch('/api/report/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspaceId: wsId, dateFrom, dateTo }),
+        body: JSON.stringify({
+          workspaceIds: wsIds.length > 0 ? wsIds : null,
+          dateFrom: from,
+          dateTo: to,
+          includeAiSummary,
+          summaryOnly,
+          entryTypeFilter,
+          statusFilter,
+        }),
       })
-      if (!res.ok) {
-        setError('Failed to generate report')
-        return
-      }
+      if (!res.ok) { setError('Failed to generate report'); return }
       const data = await res.json()
       setReport(data.report)
       setSubject(data.subject)
@@ -107,16 +199,7 @@ export function ReportModal({ userId, onClose }: Props) {
   }
 
   async function sendReport() {
-    const recipientEmails = Array.from(selectedRecipients)
-      .map(id => people.find(p => p.id === id))
-      .filter((p): p is Person => !!p && !!p.email)
-      .map(p => p.email!)
-
-    if (recipientEmails.length === 0) {
-      setError('No recipients with email addresses selected')
-      return
-    }
-
+    if (recipientEmails.length === 0) { setError('Add at least one recipient email'); return }
     setSending(true)
     setError(null)
     try {
@@ -125,20 +208,12 @@ export function ReportModal({ userId, onClose }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: recipientEmails, subject, body: report }),
       })
-
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        if (data.code === 'GMAIL_NOT_AUTHORIZED' || data.code === 'GMAIL_SCOPE_MISSING') {
-          setError('Gmail access not configured. Please ask your admin to enable the gmail.send OAuth scope in Supabase.')
-        } else {
-          setError(data.error ?? 'Failed to send report')
-        }
+        setError(data.error ?? 'Failed to send report')
         return
       }
-
-      // Save recipients for next time
-      await saveRecipientPreferences()
-      setSuccess(true)
+      setStep('success')
     } catch {
       setError('Failed to send report')
     } finally {
@@ -146,107 +221,159 @@ export function ReportModal({ userId, onClose }: Props) {
     }
   }
 
-  async function saveRecipientPreferences() {
-    const ids = Array.from(selectedRecipients)
-    const supabase = createClient()
-    if (wsId) {
-      await supabase.from('workspaces').update({ report_recipients: ids }).eq('id', wsId)
-    } else {
-      await supabase.from('profiles').update({ global_report_recipients: ids }).eq('id', userId)
-    }
+  function addRecipient() {
+    const email = newRecipient.trim()
+    if (!email || recipientEmails.includes(email)) return
+    setRecipientEmails(prev => [...prev, email])
+    setNewRecipient('')
   }
+
+  function toggleWorkspace(wsId: string) {
+    setSelectedWorkspaces(prev => {
+      const next = new Set(prev)
+      if (next.has(wsId)) next.delete(wsId)
+      else next.add(wsId)
+      return next
+    })
+  }
+
+  const inputClass = 'w-full px-3 py-2 text-sm text-gray-900 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-amber-300'
+  const btnPrimary = 'px-4 py-1.5 text-sm text-white bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-40'
+  const btnSecondary = 'px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors'
 
   return (
     <div className="fixed inset-0 bg-black/20 z-50 flex items-center justify-center p-4" onMouseDown={onClose}>
-      <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-lg flex flex-col max-h-[85vh]"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg flex flex-col max-h-[85vh]" onMouseDown={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <h3 className="text-sm font-semibold text-gray-900">
-            {step === 'setup' ? 'End of Day Report' : 'Preview & Send'}
+            {step === 'menu' && 'Make Report'}
+            {step === 'config' && (templateId ? templateName || 'Edit Report' : 'New Report')}
+            {step === 'preview' && 'Preview Report'}
+            {step === 'success' && 'Report Sent'}
           </h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
           </button>
         </div>
 
-        {/* Success state */}
-        {success && (
-          <div className="px-5 py-10 text-center">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-green-500 mb-3">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-            <p className="text-sm font-medium text-gray-900">Report sent!</p>
-            <p className="text-xs text-gray-400 mt-1">
-              Sent to {Array.from(selectedRecipients).map(id => people.find(p => p.id === id)?.name).filter(Boolean).join(', ')}
-            </p>
-            <button onClick={onClose} className="mt-4 px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Close</button>
+        {/* ── Step: Menu (template selection) ────────────── */}
+        {step === 'menu' && (
+          <div className="px-5 py-4 space-y-2 overflow-y-auto">
+            <button onClick={startNew} className="w-full flex items-center gap-3 px-3 py-3 text-sm text-left text-gray-700 hover:bg-amber-50 rounded-lg transition-colors border border-dashed border-gray-300">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+              New Report
+            </button>
+
+            {loadingTemplates && <div className="h-12 bg-gray-50 rounded-lg animate-pulse" />}
+
+            {!loadingTemplates && templates.length > 0 && (
+              <>
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide pt-2">Templates</p>
+                {templates.map(tpl => (
+                  <button
+                    key={tpl.id}
+                    onClick={() => loadTemplate(tpl)}
+                    className="w-full flex items-center justify-between px-3 py-2.5 text-sm text-left text-gray-700 hover:bg-gray-50 rounded-lg transition-colors border border-gray-200"
+                  >
+                    <div>
+                      <p className="font-medium">{tpl.name}</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">
+                        {DATE_RANGES.find(r => r.value === tpl.date_range_type)?.label ?? tpl.date_range_type}
+                        {tpl.workspace_ids.length > 0 && ` · ${tpl.workspace_ids.length} workspace${tpl.workspace_ids.length > 1 ? 's' : ''}`}
+                        {tpl.include_ai_summary && ' · AI summary'}
+                      </p>
+                    </div>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-300">
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                  </button>
+                ))}
+              </>
+            )}
           </div>
         )}
 
-        {/* Step 1: Setup */}
-        {!success && step === 'setup' && (
-          <div className="px-5 py-4 space-y-4 overflow-y-auto">
-            {/* Workspace selector */}
+        {/* ── Step: Config ───────────────────────────────── */}
+        {step === 'config' && (
+          <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1">
+            {/* Template name */}
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Workspace</label>
-              <select
-                value={wsId ?? ''}
-                onChange={(e) => setWsId(e.target.value || null)}
-                className="w-full px-3 py-2 text-sm text-gray-900 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-amber-300"
-              >
-                <option value="">All Workspaces</option>
-                {workspaces.map(w => <option key={w.id} value={w.id}>{w.emoji ? `${w.emoji} ` : ''}{w.name}</option>)}
-              </select>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Report Name</label>
+              <input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="e.g. Weekly Standup" className={inputClass} />
             </div>
 
             {/* Date range */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Date Range</label>
+              <select value={dateRangeType} onChange={(e) => setDateRangeType(e.target.value)} className={inputClass}>
+                {DATE_RANGES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+              {dateRangeType === 'custom' && (
+                <div className="flex gap-3 mt-2">
+                  <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className={`flex-1 ${inputClass}`} />
+                  <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className={`flex-1 ${inputClass}`} />
+                </div>
+              )}
+            </div>
+
+            {/* Workspaces multi-select */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Workspaces</label>
+              <div className="flex flex-wrap gap-1.5">
+                {workspaces.map(ws => {
+                  const scheme = getScheme(ws.color_scheme)
+                  const sel = selectedWorkspaces.has(ws.id)
+                  return (
+                    <button
+                      key={ws.id}
+                      onClick={() => toggleWorkspace(ws.id)}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium border transition-all ${
+                        sel ? 'border-amber-400 ring-1 ring-amber-300 shadow-sm' : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                      style={{ backgroundColor: sel ? (scheme?.primary ?? '#6B7280') : '#F9FAFB', color: sel ? (scheme?.textOnColor ?? '#FFF') : '#6B7280' }}
+                    >
+                      {ws.emoji && <span className="text-xs">{ws.emoji}</span>}
+                      {ws.name}
+                    </button>
+                  )
+                })}
+                {workspaces.length === 0 && <p className="text-xs text-gray-400">No workspaces</p>}
+              </div>
+              {selectedWorkspaces.size === 0 && <p className="text-[10px] text-gray-400 mt-1">All workspaces included</p>}
+            </div>
+
+            {/* Filters */}
             <div className="flex gap-3">
               <div className="flex-1">
-                <label className="block text-xs font-medium text-gray-500 mb-1">From</label>
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className="w-full px-3 py-2 text-sm text-gray-900 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-amber-300"
-                />
+                <label className="block text-xs font-medium text-gray-500 mb-1">Entry Type</label>
+                <select value={entryTypeFilter ?? ''} onChange={(e) => setEntryTypeFilter(e.target.value || null)} className={inputClass}>
+                  <option value="">All</option>
+                  <option value="task">Tasks only</option>
+                  <option value="info">Notes only</option>
+                </select>
               </div>
               <div className="flex-1">
-                <label className="block text-xs font-medium text-gray-500 mb-1">To</label>
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className="w-full px-3 py-2 text-sm text-gray-900 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-amber-300"
-                />
+                <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+                <select value={statusFilter ?? ''} onChange={(e) => setStatusFilter(e.target.value || null)} className={inputClass}>
+                  <option value="">All</option>
+                  <option value="active">Active</option>
+                  <option value="complete">Complete</option>
+                </select>
               </div>
             </div>
 
-            {/* Recipients */}
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Recipients</label>
-              {people.length === 0 ? (
-                <p className="text-xs text-gray-400">No people added yet. Add contacts in the People section.</p>
-              ) : (
-                <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
-                  {people.map(p => (
-                    <label key={p.id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedRecipients.has(p.id)}
-                        onChange={() => toggleRecipient(p.id)}
-                        className="rounded border-gray-300 text-amber-600 focus:ring-amber-300"
-                      />
-                      <span className="text-sm text-gray-700 flex-1">{p.name}</span>
-                      {p.email
-                        ? <span className="text-xs text-gray-400 truncate max-w-[150px]">{p.email}</span>
-                        : <span className="text-xs text-red-400">no email</span>
-                      }
-                    </label>
-                  ))}
-                </div>
+            {/* AI summary options */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={includeAiSummary} onChange={(e) => { setIncludeAiSummary(e.target.checked); if (!e.target.checked) setSummaryOnly(false) }} className="rounded border-gray-300 text-amber-600 focus:ring-amber-300" />
+                <span className="text-sm text-gray-700">Include AI summary</span>
+              </label>
+              {includeAiSummary && (
+                <label className="flex items-center gap-2 cursor-pointer pl-5">
+                  <input type="checkbox" checked={summaryOnly} onChange={(e) => setSummaryOnly(e.target.checked)} className="rounded border-gray-300 text-amber-600 focus:ring-amber-300" />
+                  <span className="text-sm text-gray-600">Summary only (no detail)</span>
+                </label>
               )}
             </div>
 
@@ -254,17 +381,12 @@ export function ReportModal({ userId, onClose }: Props) {
           </div>
         )}
 
-        {/* Step 2: Preview */}
-        {!success && step === 'preview' && (
+        {/* ── Step: Preview ──────────────────────────────── */}
+        {step === 'preview' && (
           <div className="px-5 py-4 space-y-3 flex-1 flex flex-col overflow-hidden">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
-              <input
-                type="text"
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                className="w-full px-3 py-2 text-sm text-gray-900 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-amber-300"
-              />
+              <input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} className={inputClass} />
             </div>
             <div className="flex-1 min-h-0">
               <label className="block text-xs font-medium text-gray-500 mb-1">Report (editable)</label>
@@ -272,53 +394,92 @@ export function ReportModal({ userId, onClose }: Props) {
                 ref={textareaRef}
                 value={report}
                 onChange={(e) => setReport(e.target.value)}
-                className="w-full h-full min-h-[250px] px-3 py-2 text-xs text-gray-900 font-mono border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-amber-300 resize-none"
+                className="w-full h-full min-h-[200px] px-3 py-2 text-xs text-gray-900 font-mono border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-amber-300 resize-none"
               />
             </div>
-            <p className="text-[10px] text-gray-400">
-              Sending to: {Array.from(selectedRecipients).map(id => {
-                const p = people.find(pp => pp.id === id)
-                return p ? `${p.name} <${p.email ?? 'no email'}>` : ''
-              }).filter(Boolean).join(', ') || 'No recipients'}
-            </p>
+
+            {/* Recipients */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Send to</label>
+              <div className="flex flex-wrap gap-1 mb-1.5">
+                {recipientEmails.map(email => (
+                  <span key={email} className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded-full text-[11px] text-gray-600">
+                    {email}
+                    <button onClick={() => setRecipientEmails(prev => prev.filter(e => e !== email))} className="text-gray-400 hover:text-red-500">
+                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={newRecipient}
+                  onChange={(e) => setNewRecipient(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRecipient() } }}
+                  placeholder="email@example.com"
+                  className={`flex-1 ${inputClass}`}
+                />
+                <button onClick={addRecipient} className="px-3 py-1.5 text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg">Add</button>
+              </div>
+            </div>
+
             {error && <p className="text-xs text-red-600">{error}</p>}
           </div>
         )}
 
-        {/* Footer actions */}
-        {!success && (
+        {/* ── Step: Success ──────────────────────────────── */}
+        {step === 'success' && (
+          <div className="px-5 py-10 text-center">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-green-500 mb-3"><polyline points="20 6 9 17 4 12" /></svg>
+            <p className="text-sm font-medium text-gray-900">Report sent!</p>
+            <p className="text-xs text-gray-400 mt-1">Sent to {recipientEmails.join(', ')}</p>
+            <button onClick={onClose} className="mt-4 px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Close</button>
+          </div>
+        )}
+
+        {/* ── Footer ─────────────────────────────────────── */}
+        {step !== 'success' && (
           <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
-            {step === 'preview' ? (
+            {step === 'menu' && (
               <>
-                <button
-                  onClick={() => { setStep('setup'); setError(null) }}
-                  className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={sendReport}
-                  disabled={sending || selectedRecipients.size === 0}
-                  className="px-4 py-1.5 text-sm text-white bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-40"
-                >
-                  {sending ? 'Sending…' : 'Send Report'}
-                </button>
+                <button onClick={onClose} className={btnSecondary}>Cancel</button>
+                <div />
               </>
-            ) : (
+            )}
+
+            {step === 'config' && (
               <>
-                <button
-                  onClick={onClose}
-                  className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={generateReport}
-                  disabled={generating}
-                  className="px-4 py-1.5 text-sm text-white bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-40"
-                >
-                  {generating ? 'Generating…' : 'Generate Report'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setStep('menu')} className={btnSecondary}>Back</button>
+                  {templateId && (
+                    <button onClick={deleteTemplate} className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition-colors">Delete</button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={saveTemplate} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
+                    {templateId ? 'Update Template' : 'Save as Template'}
+                  </button>
+                  <button onClick={generateReport} disabled={generating} className={btnPrimary}>
+                    {generating ? 'Generating…' : 'Generate'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {step === 'preview' && (
+              <>
+                <button onClick={() => { setStep('config'); setError(null) }} className={btnSecondary}>Back</button>
+                <div className="flex items-center gap-2">
+                  {templateId && (
+                    <button onClick={saveTemplate} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
+                      Update Template
+                    </button>
+                  )}
+                  <button onClick={sendReport} disabled={sending || recipientEmails.length === 0} className={btnPrimary}>
+                    {sending ? 'Sending…' : 'Send Report'}
+                  </button>
+                </div>
               </>
             )}
           </div>

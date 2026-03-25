@@ -171,9 +171,10 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
   }
 
   const openProp = openDropdown ? properties.find(p => p.id === openDropdown) : null
+  const selectableValues = openProp ? openProp.values.filter(v => !v.archived) : []
 
   // +1 for the "None" button
-  const pickerItemCount = openProp ? openProp.values.length + 1 : 0
+  const pickerItemCount = selectableValues.length + 1
   const needsScroll = pickerItemCount > 12
 
   const usePortal = !!anchorRef && typeof document !== 'undefined'
@@ -189,10 +190,10 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
       {/* Property list panel */}
       <div ref={listRef} className="bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-2 min-w-[200px] max-h-[320px] overflow-y-auto">
         <p className="px-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wide">Properties</p>
-        {properties.length === 0 && (
+        {properties.filter(p => !p.archived).length === 0 && (
           <p className="px-3 py-2 text-xs text-gray-400">No properties defined yet.</p>
         )}
-        {properties.map((prop) => {
+        {properties.filter(p => !p.archived).map((prop) => {
           const appliedValues = prop.values.filter(v => appliedValueIds.has(v.id))
           const isOpen = openDropdown === prop.id
 
@@ -252,7 +253,7 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
           >
             None
           </button>
-          {openProp.values.map(v => {
+          {selectableValues.map(v => {
             const c = colorFor(v.color)
             const isSelected = appliedValueIds.has(v.id)
             return (

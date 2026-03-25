@@ -53,3 +53,6 @@ console-trace.txt
 scripts/seed-test-data.js
 scripts/extend-entries.js
 scripts/vary-modified-dates.js
+
+# import data files
+*_import.json

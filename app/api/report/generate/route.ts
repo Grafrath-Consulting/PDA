@@ -1,17 +1,28 @@
 import { createClient } from '@/lib/supabase/server'
+import { getUserApiKey } from '@/lib/get-user-ai-config'
+import { formatDueDate } from '@/lib/date-format'
+import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
 
 function stripHTML(html: string | null): string {
   if (!html) return ''
-  return html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+  return html
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(p|div|li|h[1-6]|tr|blockquote)>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function truncate(text: string, max = 200): string {
   if (text.length <= max) return text
   return text.slice(0, max).trimEnd() + '…'
 }
-
-import { formatDueDate } from '@/lib/date-format'
-import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
 
 function formatDue(date: string | null, type: string | null, dateFmt: DateFormatOption = 'MM/DD/YYYY', timeFmt: TimeFormatOption = '12h'): string {
   if (!date) return ''
@@ -36,9 +47,17 @@ interface BlockRow {
   workspace_id: string | null
 }
 
-interface PersonRow {
-  id: string
-  name: string
+interface PersonRow { id: string; name: string }
+
+interface RequestBody {
+  workspaceId?: string | null // legacy single-workspace
+  workspaceIds?: string[] | null // new multi-workspace
+  dateFrom?: string
+  dateTo?: string
+  includeAiSummary?: boolean
+  summaryOnly?: boolean
+  entryTypeFilter?: string | null
+  statusFilter?: string | null
 }
 
 export async function POST(request: Request) {
@@ -46,187 +65,188 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  let body: { workspaceId?: string | null; dateFrom?: string; dateTo?: string }
-  try {
-    body = await request.json()
-  } catch {
-    return Response.json({ error: 'Invalid JSON' }, { status: 400 })
-  }
+  let body: RequestBody
+  try { body = await request.json() } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }) }
 
   const today = new Date().toISOString().split('T')[0]
   const dateFrom = body.dateFrom || today
   const dateTo = body.dateTo || today
-  const wsId = body.workspaceId ?? null
 
-  // Fetch user's date/time format preferences
-  const { data: profileData } = await supabase
-    .from('profiles')
-    .select('date_format, time_format')
-    .eq('id', user.id)
-    .single()
+  // Support both legacy single workspace and new multi-workspace
+  const wsIds: string[] = body.workspaceIds ?? (body.workspaceId ? [body.workspaceId] : [])
+  const filterByWs = wsIds.length > 0
+
+  const { data: profileData } = await supabase.from('profiles').select('date_format, time_format').eq('id', user.id).single()
   const userDateFmt = (profileData?.date_format ?? 'MM/DD/YYYY') as DateFormatOption
   const userTimeFmt = (profileData?.time_format ?? '12h') as TimeFormatOption
 
-  // Fetch people for owner name resolution
-  const { data: peopleData } = await supabase
-    .from('people')
-    .select('id, name')
-    .eq('user_id', user.id)
+  const { data: peopleData } = await supabase.from('people').select('id, name').eq('user_id', user.id)
   const people = (peopleData ?? []) as PersonRow[]
   const personName = (id: string | null): string => {
     if (!id) return 'Me'
     return people.find(p => p.id === id)?.name ?? 'Me'
   }
 
-  // Fetch workspace name for the header
-  let wsName = 'All Workspaces'
-  if (wsId) {
-    const { data: ws } = await supabase.from('workspaces').select('name').eq('id', wsId).single()
-    if (ws) wsName = ws.name
+  // Resolve workspace names
+  let wsLabel = 'All Workspaces'
+  if (filterByWs) {
+    const { data: wsData } = await supabase.from('workspaces').select('name').in('id', wsIds)
+    wsLabel = (wsData ?? []).map((w: { name: string }) => w.name).join(', ')
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function applyFilters(q: any) {
+    if (filterByWs) q = q.in('workspace_id', wsIds)
+    if (body.entryTypeFilter) q = q.eq('entry_type', body.entryTypeFilter)
+    return q
   }
 
   // Query A — Top open priorities (High priority active tasks)
-  // First find the "Priority" property's "High" value ID for this user
   let priorityTasks: BlockRow[] = []
-  const { data: priorityProp } = await supabase
-    .from('properties')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('name', 'Priority')
-    .maybeSingle()
-
-  if (priorityProp) {
-    const { data: highVal } = await supabase
-      .from('property_values')
-      .select('id')
-      .eq('property_id', priorityProp.id)
-      .eq('label', 'High')
-      .maybeSingle()
-
-    if (highVal) {
-      // Get block IDs that have the High priority value
-      const { data: entries } = await supabase
-        .from('entry_properties')
-        .select('entry_id')
-        .eq('property_value_id', highVal.id)
-
-      const blockIds = (entries ?? []).map(e => (e as { entry_id: string }).entry_id)
-
-      if (blockIds.length > 0) {
-        let q = supabase
-          .from('journal_blocks')
-          .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
-          .eq('user_id', user.id)
-          .eq('entry_type', 'task')
-          .eq('status', 'active')
-          .is('deleted_at', null)
-          .in('id', blockIds)
-          .order('due_date', { ascending: true, nullsFirst: false })
-          .limit(10)
-        if (wsId) q = q.eq('workspace_id', wsId)
-        const { data } = await q
-        priorityTasks = (data ?? []) as BlockRow[]
+  if (!body.summaryOnly) {
+    const { data: priorityProp } = await supabase.from('properties').select('id').eq('user_id', user.id).eq('name', 'Priority').maybeSingle()
+    if (priorityProp) {
+      const { data: highVal } = await supabase.from('property_values').select('id').eq('property_id', priorityProp.id).eq('label', 'High').maybeSingle()
+      if (highVal) {
+        const { data: entries } = await supabase.from('entry_properties').select('entry_id').eq('property_value_id', highVal.id)
+        const blockIds = (entries ?? []).map(e => (e as { entry_id: string }).entry_id)
+        if (blockIds.length > 0) {
+          let q = supabase.from('journal_blocks')
+            .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
+            .eq('user_id', user.id).eq('entry_type', 'task').eq('status', 'active').is('deleted_at', null)
+            .in('id', blockIds).order('due_date', { ascending: true, nullsFirst: false }).limit(10)
+          q = applyFilters(q)
+          const { data } = await q
+          priorityTasks = (data ?? []) as BlockRow[]
+        }
       }
     }
   }
 
-  // Query B — Worked on today (created or updated in the date range)
-  let workedOnQuery = supabase
-    .from('journal_blocks')
-    .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
-    .eq('user_id', user.id)
-    .neq('status', 'archived')
-    .is('deleted_at', null)
-    .or(`created_at.gte.${dateFrom}T00:00:00,updated_at.gte.${dateFrom}T00:00:00`)
-    .lte('created_at', dateTo + 'T23:59:59')
-    .order('created_at', { ascending: false })
-    .limit(30)
-  if (wsId) workedOnQuery = workedOnQuery.eq('workspace_id', wsId)
-  const { data: workedOnData } = await workedOnQuery
-  const workedOn = (workedOnData ?? []) as BlockRow[]
+  // Query B — Worked on in date range
+  let workedOn: BlockRow[] = []
+  if (!body.summaryOnly) {
+    let q = supabase.from('journal_blocks')
+      .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
+      .eq('user_id', user.id).is('deleted_at', null)
+      .or(`created_at.gte.${dateFrom}T00:00:00,updated_at.gte.${dateFrom}T00:00:00`)
+      .lte('created_at', dateTo + 'T23:59:59')
+      .order('created_at', { ascending: false }).limit(30)
+    if (body.statusFilter) q = q.eq('status', body.statusFilter)
+    else q = q.neq('status', 'archived')
+    q = applyFilters(q)
+    const { data } = await q
+    workedOn = (data ?? []) as BlockRow[]
+  }
 
-  // Query C — Completed today
-  let completedQuery = supabase
-    .from('journal_blocks')
-    .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
-    .eq('user_id', user.id)
-    .eq('entry_type', 'task')
-    .eq('status', 'complete')
-    .is('deleted_at', null)
-    .gte('updated_at', dateFrom + 'T00:00:00')
-    .lte('updated_at', dateTo + 'T23:59:59')
-    .order('updated_at', { ascending: false })
-    .limit(20)
-  if (wsId) completedQuery = completedQuery.eq('workspace_id', wsId)
-  const { data: completedData } = await completedQuery
-  const completed = (completedData ?? []) as BlockRow[]
+  // Query C — Completed in date range
+  let completed: BlockRow[] = []
+  if (!body.summaryOnly) {
+    let q = supabase.from('journal_blocks')
+      .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
+      .eq('user_id', user.id).eq('entry_type', 'task').eq('status', 'complete').is('deleted_at', null)
+      .gte('updated_at', dateFrom + 'T00:00:00').lte('updated_at', dateTo + 'T23:59:59')
+      .order('updated_at', { ascending: false }).limit(20)
+    q = applyFilters(q)
+    const { data } = await q
+    completed = (data ?? []) as BlockRow[]
+  }
 
   // Query D — Past due
-  let pastDueQuery = supabase
-    .from('journal_blocks')
-    .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
-    .eq('user_id', user.id)
-    .eq('entry_type', 'task')
-    .eq('status', 'active')
-    .is('deleted_at', null)
-    .lt('due_date', `${today}T00:00:00`)
-    .order('due_date', { ascending: true })
-    .limit(20)
-  if (wsId) pastDueQuery = pastDueQuery.eq('workspace_id', wsId)
-  const { data: pastDueData } = await pastDueQuery
-  const pastDue = (pastDueData ?? []) as BlockRow[]
+  let pastDue: BlockRow[] = []
+  if (!body.summaryOnly) {
+    let q = supabase.from('journal_blocks')
+      .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
+      .eq('user_id', user.id).eq('entry_type', 'task').eq('status', 'active').is('deleted_at', null)
+      .lt('due_date', `${today}T00:00:00`).order('due_date', { ascending: true }).limit(20)
+    q = applyFilters(q)
+    const { data } = await q
+    pastDue = (data ?? []) as BlockRow[]
+  }
 
-  // Format the report
+  // Build text report
   const sections: string[] = []
-
   const dateLabel = dateFrom === dateTo
     ? formatDateHeader(dateFrom)
     : `${formatDateHeader(dateFrom)} – ${formatDateHeader(dateTo)}`
 
-  sections.push(`END OF DAY REPORT — ${dateLabel}`)
-  sections.push(wsName)
+  sections.push(`REPORT — ${dateLabel}`)
+  sections.push(wsLabel)
   sections.push('')
 
-  if (priorityTasks.length > 0) {
-    sections.push('TOP PRIORITIES')
-    for (const t of priorityTasks) {
-      const line = `• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type, userDateFmt, userTimeFmt)}` : ''}`
-      sections.push(line)
+  // AI Summary (if requested)
+  if (body.includeAiSummary) {
+    // Collect all content for summarization
+    const allBlocks = [...priorityTasks, ...workedOn, ...completed, ...pastDue]
+    const uniqueBlocks = Array.from(new Map(allBlocks.map(b => [b.id, b])).values())
+    const contentText = uniqueBlocks.map(b => stripHTML(b.content)).filter(Boolean).join('\n')
+
+    if (contentText.trim()) {
+      try {
+        const apiKey = await getUserApiKey(user.id)
+        if (apiKey) {
+          const Anthropic = (await import('@anthropic-ai/sdk')).default
+          const client = new Anthropic({ apiKey })
+          const msg = await client.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 500,
+            messages: [{
+              role: 'user',
+              content: `Summarize this work activity in 2-4 concise sentences. Focus on key accomplishments, blockers, and priorities:\n\n${contentText.slice(0, 4000)}`,
+            }],
+          })
+          const summary = msg.content[0].type === 'text' ? msg.content[0].text : ''
+          sections.push('SUMMARY')
+          sections.push(summary)
+          sections.push('')
+        }
+      } catch {
+        // AI summary failed silently — continue without it
+      }
     }
-    sections.push('')
   }
 
-  if (workedOn.length > 0) {
-    sections.push('WORKED ON TODAY')
-    for (const w of workedOn) {
-      sections.push(`• ${truncate(stripHTML(w.content))}`)
+  if (!body.summaryOnly) {
+    if (priorityTasks.length > 0) {
+      sections.push('TOP PRIORITIES')
+      for (const t of priorityTasks) {
+        sections.push(`• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type, userDateFmt, userTimeFmt)}` : ''}`)
+      }
+      sections.push('')
     }
-    sections.push('')
-  }
 
-  if (completed.length > 0) {
-    sections.push('COMPLETED TODAY')
-    for (const c of completed) {
-      sections.push(`• ${truncate(stripHTML(c.content))} — Owner: ${personName(c.owner_id)}`)
+    if (workedOn.length > 0) {
+      sections.push('WORKED ON')
+      for (const w of workedOn) {
+        sections.push(`• ${truncate(stripHTML(w.content))}`)
+      }
+      sections.push('')
     }
-    sections.push('')
-  }
 
-  if (pastDue.length > 0) {
-    sections.push('PAST DUE')
-    for (const p of pastDue) {
-      sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type, userDateFmt, userTimeFmt)} — Owner: ${personName(p.owner_id)}`)
+    if (completed.length > 0) {
+      sections.push('COMPLETED')
+      for (const c of completed) {
+        sections.push(`• ${truncate(stripHTML(c.content))} — Owner: ${personName(c.owner_id)}`)
+      }
+      sections.push('')
     }
-    sections.push('')
-  }
 
-  if (priorityTasks.length === 0 && workedOn.length === 0 && completed.length === 0 && pastDue.length === 0) {
-    sections.push('No activity for this period.')
-    sections.push('')
+    if (pastDue.length > 0) {
+      sections.push('PAST DUE')
+      for (const p of pastDue) {
+        sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type, userDateFmt, userTimeFmt)} — Owner: ${personName(p.owner_id)}`)
+      }
+      sections.push('')
+    }
+
+    if (priorityTasks.length === 0 && workedOn.length === 0 && completed.length === 0 && pastDue.length === 0) {
+      sections.push('No activity for this period.')
+      sections.push('')
+    }
   }
 
   const report = sections.join('\n')
-  const subject = `EOD Report — ${dateFrom === dateTo ? dateFrom : `${dateFrom} to ${dateTo}`} — ${wsName}`
+  const subject = `Report — ${dateFrom === dateTo ? dateFrom : `${dateFrom} to ${dateTo}`} — ${wsLabel}`
 
   return Response.json({ report, subject })
 }

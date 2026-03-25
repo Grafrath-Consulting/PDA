@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { AiSettingsPanel } from '@/app/components/AiSettingsPanel'
 import { useDateFormat } from '@/context/DateFormatContext'
 import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
+import { versionString, buildDateString } from '@/lib/version'
 
 interface Props {
   email: string
@@ -91,6 +92,13 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+          {/* App info */}
+          <div className="bg-gray-50 rounded-lg px-4 py-3 text-center">
+            <p className="text-sm font-semibold text-gray-700">PDA</p>
+            <p className="text-xs text-gray-500">{versionString()}</p>
+            <p className="text-[10px] text-gray-400">Built {buildDateString()}</p>
+          </div>
+
           {/* Profile section */}
           <section>
             <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Profile</h3>
