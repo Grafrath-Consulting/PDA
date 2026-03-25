@@ -733,23 +733,6 @@ export function JournalBlock(props: Props) {
   // editor focus + cursor placement is deferred to requestAnimationFrame
   // so React has time to re-render with editable={true} first.
   // Find the nearest block element at a Y coordinate and select its line
-  function selectLineAtY(clickY: number) {
-    const editor = getEditor()
-    if (!editor) return
-    const pm = cardRef.current?.querySelector('.ProseMirror')
-    if (!pm) return
-    const blockEls = Array.from(pm.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'))
-    for (const el of blockEls) {
-      const rect = el.getBoundingClientRect()
-      if (clickY >= rect.top && clickY <= rect.bottom) {
-        // Use focusAtCoords to place cursor in this line, then select via editor
-        const pos = editor.getSelectionFrom()
-        editor.selectLineAt(pos)
-        return
-      }
-    }
-  }
-
   function handleContentMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return // left click only
     // If already focused, clicking inside the card but OUTSIDE the editor
