@@ -30,6 +30,9 @@ interface Props {
   similarityScores?: Record<string, number>
   matchedChunks?: Record<string, string>
   people?: { id: string; name: string }[]
+  hasActiveFilters?: boolean
+  totalUnfilteredCount?: number
+  onClearAllFilters?: () => void
 }
 
 function SortableBlock({
@@ -98,6 +101,9 @@ export function BlockFeed({
   similarityScores,
   matchedChunks,
   people,
+  hasActiveFilters,
+  totalUnfilteredCount,
+  onClearAllFilters,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [activeBlock, setActiveBlock] = useState<Block | null>(null)
@@ -144,11 +150,20 @@ export function BlockFeed({
   }
 
   if (blocks.length === 0) {
-    return (
-      <div className="text-center py-16 text-sm text-gray-400">
-        Nothing here yet. Write something above.
-      </div>
-    )
+    // If filters/search reduced results to zero but there are blocks in the workspace
+    if (hasActiveFilters && (totalUnfilteredCount ?? 0) > 0) {
+      return (
+        <div className="text-center py-16">
+          <p className="text-sm text-gray-400">Nothing to show due to filters.</p>
+          {onClearAllFilters && (
+            <button onClick={onClearAllFilters} className="mt-2 text-sm text-amber-600 hover:text-amber-700 underline">
+              Clear filters
+            </button>
+          )}
+        </div>
+      )
+    }
+    return null
   }
 
   function renderBlock(block: Block) {

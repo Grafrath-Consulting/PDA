@@ -1515,6 +1515,39 @@ export function JournalPage({ userId, email, displayName }: Props) {
               similarityScores={searchMode === 'smart' ? smartSearchScores : undefined}
               matchedChunks={searchMode === 'smart' ? smartSearchChunks : undefined}
               people={peopleList}
+              hasActiveFilters={
+                !!debouncedSearch ||
+                activePropertyFilters.size > 0 ||
+                !!contextFilter ||
+                filterEntryTypes.size < 2 ||
+                !(filterStatuses.size === 1 && filterStatuses.has('active')) ||
+                !!filterDateFrom || !!filterDateTo ||
+                !!filterModifiedFrom || !!filterModifiedTo ||
+                !!filterDueFrom || !!filterDueTo ||
+                !!filterArchivedFrom || !!filterArchivedTo ||
+                !!filterDeletedFrom || !!filterDeletedTo ||
+                !!filterAssignee
+              }
+              totalUnfilteredCount={blocks.length}
+              onClearAllFilters={() => {
+                setSearchText('')
+                setDebouncedSearch('')
+                setActivePropertyFilters(new Set())
+                setContextFilter(null)
+                setFilterEntryTypes(new Set(['info', 'task']))
+                setFilterStatuses(new Set(['active']))
+                setFilterDateFrom('')
+                setFilterDateTo('')
+                setFilterModifiedFrom('')
+                setFilterModifiedTo('')
+                setFilterDueFrom('')
+                setFilterDueTo('')
+                setFilterArchivedFrom('')
+                setFilterArchivedTo('')
+                setFilterDeletedFrom('')
+                setFilterDeletedTo('')
+                setFilterAssignee('')
+              }}
             />
 
           </div>
