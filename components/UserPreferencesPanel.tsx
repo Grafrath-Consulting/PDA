@@ -77,7 +77,7 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
       <div className="fixed inset-0 z-40" onClick={onClose} />
 
       {/* Panel */}
-      <div className="fixed left-0 top-0 bottom-0 w-72 bg-white border-r border-[#E5E0D0] shadow-xl z-50 flex flex-col animate-slide-in-left">
+      <div className="fixed left-0 top-0 bottom-0 w-full max-w-[432px] bg-white border-r border-[#E5E0D0] shadow-xl z-50 flex flex-col animate-slide-in-left">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#E5E0D0]">
           <h2 className="text-sm font-semibold text-gray-900">Settings</h2>
           <button

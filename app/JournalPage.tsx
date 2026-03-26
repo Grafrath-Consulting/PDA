@@ -1497,7 +1497,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
             <BlockFeed
               blocks={searchMode === 'smart' && filteredSmartResults ? filteredSmartResults : sortedBlocks}
-              loading={searchMode === 'smart' ? smartSearchLoading : (switching || (loading && blocks.length === 0))}
+              loading={searchMode === 'smart' ? smartSearchLoading : switching || !initialised}
               hasMore={searchMode === 'smart' && filteredSmartResults ? false : hasMore}
               onLoadMore={loadMore}
               onBlockUpdate={handleBlockUpdate}
