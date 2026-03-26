@@ -33,6 +33,7 @@ interface Props {
   hasActiveFilters?: boolean
   totalUnfilteredCount?: number
   onClearAllFilters?: () => void
+  doneLoading?: boolean
 }
 
 function SortableBlock({
@@ -104,6 +105,7 @@ export function BlockFeed({
   hasActiveFilters,
   totalUnfilteredCount,
   onClearAllFilters,
+  doneLoading,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [activeBlock, setActiveBlock] = useState<Block | null>(null)
@@ -163,12 +165,17 @@ export function BlockFeed({
         </div>
       )
     }
-    // Truly empty workspace
-    return (
-      <div className="text-center py-16 text-sm text-gray-400">
-        Nothing here yet. Write something above.
-      </div>
-    )
+    // Only show "Nothing here yet" if we've confirmed loading is done
+    // (doneLoading is explicitly passed — not just !loading which can be stale)
+    if (doneLoading) {
+      return (
+        <div className="text-center py-16 text-sm text-gray-400">
+          Nothing here yet. Write something above.
+        </div>
+      )
+    }
+    // Still loading or transitioning — show nothing (new entry card is above)
+    return null
   }
 
   function renderBlock(block: Block) {

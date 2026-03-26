@@ -1548,6 +1548,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 setFilterDeletedTo('')
                 setFilterAssignee('')
               }}
+              doneLoading={initialised && !switching && !loading}
             />
 
           </div>
