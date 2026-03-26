@@ -453,6 +453,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     }
     setHasMore(!isSearching && rows.length === PAGE_SIZE)
     setLoading(false)
+    setSwitching(false)
     setInitialised(true)
   }, [userId, loading])
 
@@ -489,6 +490,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
   // Track previous workspace to detect workspace switches
   const prevWorkspaceRef = useRef(activeWorkspaceId)
+  const [switching, setSwitching] = useState(false)
   useEffect(() => {
     if (!initialised) return
     // In smart mode, the smart search API handles everything — skip exact fetch
@@ -496,6 +498,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     // On workspace switch, clear blocks immediately to show loading placeholders
     if (prevWorkspaceRef.current !== activeWorkspaceId) {
       setBlocks([])
+      setSwitching(true)
       prevWorkspaceRef.current = activeWorkspaceId
     }
     setHasMore(true)
@@ -1494,7 +1497,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
             <BlockFeed
               blocks={searchMode === 'smart' && filteredSmartResults ? filteredSmartResults : sortedBlocks}
-              loading={searchMode === 'smart' ? smartSearchLoading : (loading && (blocks.length === 0))}
+              loading={searchMode === 'smart' ? smartSearchLoading : (switching || (loading && blocks.length === 0))}
               hasMore={searchMode === 'smart' && filteredSmartResults ? false : hasMore}
               onLoadMore={loadMore}
               onBlockUpdate={handleBlockUpdate}
