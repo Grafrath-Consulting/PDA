@@ -163,7 +163,12 @@ export function BlockFeed({
         </div>
       )
     }
-    return null
+    // Truly empty workspace
+    return (
+      <div className="text-center py-16 text-sm text-gray-400">
+        Nothing here yet. Write something above.
+      </div>
+    )
   }
 
   function renderBlock(block: Block) {
