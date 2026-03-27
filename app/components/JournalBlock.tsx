@@ -817,6 +817,15 @@ export function JournalBlock(props: Props) {
     deactivatePreviousBlock?.()
     lastSavedHTMLRef.current = liveHTMLRef.current
     setFocused(true)
+    // Quick sync check: fetch latest from DB on activation
+    {
+      const p = propsRef.current as ExistingBlockProps
+      if (p.block) {
+        const supabase = createClient()
+        supabase.from('journal_blocks').select('*').eq('id', p.block.id).single()
+          .then(({ data }) => { if (data && data.updated_at !== p.block!.updated_at) p.onUpdate(data as Block) })
+      }
+    }
     // Register this block's deactivation so the *next* activated block can call it
     deactivatePreviousBlock = () => saveExistingBlock()
     const x = e.clientX, y = e.clientY
