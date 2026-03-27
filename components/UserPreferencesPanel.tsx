@@ -14,12 +14,23 @@ interface Props {
   open: boolean
   onClose: () => void
   onAutosaveChange?: (seconds: number) => void
+  onSyncIntervalChange?: (seconds: number) => void
 }
 
 const INTERVAL_OPTIONS = [
   { value: 15, label: '15 seconds' },
   { value: 30, label: '30 seconds' },
   { value: 60, label: '1 minute' },
+  { value: 300, label: '5 minutes' },
+]
+
+const SYNC_INTERVAL_OPTIONS = [
+  { value: 5, label: '5 seconds' },
+  { value: 10, label: '10 seconds' },
+  { value: 15, label: '15 seconds' },
+  { value: 30, label: '30 seconds' },
+  { value: 60, label: '1 minute' },
+  { value: 120, label: '2 minutes' },
   { value: 300, label: '5 minutes' },
 ]
 
@@ -37,8 +48,9 @@ const TIME_FORMAT_OPTIONS: { value: TimeFormatOption; label: string; example: st
 
 const selectClass = "w-full text-sm text-gray-800 border border-[#E5E0D0] rounded-lg px-3 py-2 bg-white outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-300 transition-colors"
 
-export function UserPreferencesPanel({ email, displayName, userId, open, onClose, onAutosaveChange }: Props) {
+export function UserPreferencesPanel({ email, displayName, userId, open, onClose, onAutosaveChange, onSyncIntervalChange }: Props) {
   const [autosaveInterval, setAutosaveInterval] = useState(30)
+  const [syncInterval, setSyncInterval] = useState(60)
   const [saving, setSaving] = useState(false)
   const { dateFormat, timeFormat, setDateFormat, setTimeFormat } = useDateFormat()
 
@@ -47,12 +59,15 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
     const supabase = createClient()
     supabase
       .from('profiles')
-      .select('autosave_interval_seconds')
+      .select('autosave_interval_seconds, sync_interval_seconds')
       .eq('id', userId)
       .single()
       .then(({ data }) => {
         if (data?.autosave_interval_seconds) {
           setAutosaveInterval(data.autosave_interval_seconds)
+        }
+        if (data?.sync_interval_seconds) {
+          setSyncInterval(data.sync_interval_seconds)
         }
       })
   }, [open, userId])
@@ -67,6 +82,18 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
       .eq('id', userId)
     setSaving(false)
     onAutosaveChange?.(value)
+  }
+
+  async function handleSyncIntervalChange(value: number) {
+    setSyncInterval(value)
+    setSaving(true)
+    const supabase = createClient()
+    await supabase
+      .from('profiles')
+      .update({ sync_interval_seconds: value })
+      .eq('id', userId)
+    setSaving(false)
+    onSyncIntervalChange?.(value)
   }
 
   if (!open) return null
@@ -165,6 +192,24 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
                 </select>
                 <p className="text-xs text-gray-400 mt-1">
                   Auto-saves content silently after this period of inactivity.
+                </p>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Sync interval</label>
+                <select
+                  value={syncInterval}
+                  onChange={(e) => handleSyncIntervalChange(Number(e.target.value))}
+                  disabled={saving}
+                  className={selectClass}
+                >
+                  {SYNC_INTERVAL_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-400 mt-1">
+                  How often to check for changes made on other devices.
                 </p>
               </div>
             </div>

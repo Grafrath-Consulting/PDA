@@ -28,6 +28,8 @@ const SEARCH_PAGE_SIZE = 100
 const PANEL_STORAGE_KEY = 'journal-panel-open'
 const FORMATTING_VISIBLE_KEY = 'tiptap-toolbar-visible'
 const DEFAULT_AUTOSAVE_INTERVAL = 30
+const DEFAULT_SYNC_INTERVAL = 60
+const MIN_SYNC_INTERVAL = 5
 const SORT_MODE_KEY = 'journal-sort-mode'
 const ADVANCED_OPEN_KEY = 'search-advanced-open'
 
@@ -93,6 +95,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [initialised, setInitialised] = useState(false)
   const [panelOpen, setPanelOpen] = useState(true)
   const [autosaveInterval, setAutosaveInterval] = useState(DEFAULT_AUTOSAVE_INTERVAL)
+  const [syncInterval, setSyncInterval] = useState(DEFAULT_SYNC_INTERVAL)
   const [formattingVisible, setFormattingVisible] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>('created_desc')
   const [sortDropdownOpen, setSortDropdownOpen] = useState(false)
@@ -281,12 +284,15 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const supabase = createClient()
     supabase
       .from('profiles')
-      .select('autosave_interval_seconds, journal_sort_mode, ws_select_mode, ws_selected_ids')
+      .select('autosave_interval_seconds, sync_interval_seconds, journal_sort_mode, ws_select_mode, ws_selected_ids')
       .eq('id', userId)
       .single()
       .then(({ data }) => {
         if (data?.autosave_interval_seconds) {
           setAutosaveInterval(data.autosave_interval_seconds)
+        }
+        if (data?.sync_interval_seconds) {
+          setSyncInterval(data.sync_interval_seconds)
         }
         if (data?.journal_sort_mode) {
           setSortMode(data.journal_sort_mode as SortMode)
@@ -505,6 +511,69 @@ export function JournalPage({ userId, email, displayName }: Props) {
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, searchMode, searchNonce])
+
+  // ── Periodic sync polling: fetch blocks updated on other devices ──
+  const lastPollRef = useRef<string>(new Date().toISOString())
+  const syncIntervalRef = useRef(syncInterval)
+  syncIntervalRef.current = syncInterval
+
+  useEffect(() => {
+    if (!initialised) return
+    const timer = setInterval(async () => {
+      const since = lastPollRef.current
+      lastPollRef.current = new Date().toISOString()
+
+      const supabase = createClient()
+      let query = supabase
+        .from('journal_blocks')
+        .select('*')
+        .eq('user_id', userId)
+        .gt('updated_at', since)
+
+      // Scope to current workspace view
+      if (!isGlobalViewRef.current && activeWorkspaceIdRef.current) {
+        query = query.eq('workspace_id', activeWorkspaceIdRef.current)
+      } else if (isGlobalViewRef.current && selectedWsIdsRef.current) {
+        query = query.in('workspace_id', Array.from(selectedWsIdsRef.current))
+      }
+
+      const { data, error } = await query
+      if (error || !data || data.length === 0) return
+      const remote = data as Block[]
+
+      setBlocks(prev => {
+        const existing = new Map(prev.map(b => [b.id, b]))
+        let updated = [...prev]
+
+        for (const r of remote) {
+          const local = existing.get(r.id)
+          if (!local) {
+            // New block from another device — add to feed
+            // Only add active blocks when viewing active status
+            if (r.status === 'active' && !r.deleted_at && filterStatusesRef.current.has('active')) {
+              updated = [r, ...updated]
+            }
+          } else {
+            // Existing block updated remotely — merge metadata + content
+            // Content merge happens in JournalBlock via lastSyncedContentRef
+            updated = updated.map(b => b.id === r.id ? { ...r } : b)
+          }
+        }
+
+        // Remove blocks that were archived/deleted on another device
+        const removedIds = new Set(
+          remote.filter(r => r.status !== 'active' || r.deleted_at).map(r => r.id)
+        )
+        if (removedIds.size > 0 && filterStatusesRef.current.has('active') && !filterStatusesRef.current.has('archived') && !filterStatusesRef.current.has('deleted')) {
+          updated = updated.filter(b => !removedIds.has(b.id))
+        }
+
+        return updated
+      })
+    }, syncIntervalRef.current * 1000)
+
+    return () => clearInterval(timer)
+  }, [initialised, userId, syncInterval])
 
   // Batch-load entry_properties for all visible blocks (including smart search results)
   const visibleBlockIds = (() => {
@@ -1602,6 +1671,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         userId={userId}
         open={prefsOpen}
         onClose={() => setPrefsOpen(false)}
+        onSyncIntervalChange={(s) => setSyncInterval(Math.max(MIN_SYNC_INTERVAL, s))}
       />
 
       <PeopleModal open={peopleModalOpen} onClose={() => { setPeopleModalOpen(false); fetchPeople() }} userId={userId} />

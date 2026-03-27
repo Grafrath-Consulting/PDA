@@ -14,6 +14,7 @@ import { formatTimestamp, formatDatePart } from '@/lib/date-format'
 import { getScheme } from '@/constants/workspaceColorSchemes'
 import { useProperties } from '@/context/PropertiesContext'
 import { PropertyBubbles } from './PropertyBubbles'
+import { threeWayMerge } from '@/lib/three-way-merge'
 import { PropertyEditor } from './PropertyEditor'
 import { AttachmentRow, Attachment } from './AttachmentRow'
 
@@ -499,9 +500,20 @@ function EntryTypeToggle({ isTask, onClick }: { isTask: boolean; onClick: () => 
   )
 }
 
-function archiveIcon() {
-  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></svg>
+function ArchiveButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title="Archive (Alt+Shift+D)"
+      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+      onClick={(e) => { e.stopPropagation(); onClick() }}
+      className="w-6 h-6 flex items-center justify-center rounded-full bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400"
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></svg>
+    </button>
+  )
 }
+
 function convertIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>
 }
@@ -678,9 +690,24 @@ export function JournalBlock(props: Props) {
   useEffect(() => {
     const incoming = props.block?.content ?? null
     if (incoming === lastSyncedContentRef.current) return
+    const base = lastSyncedContentRef.current
     lastSyncedContentRef.current = incoming
-    // Don't overwrite the editor while the user is actively editing
-    if (focusedRef.current) return
+
+    if (focusedRef.current) {
+      // User is editing — three-way merge local edits with remote changes
+      const ours = liveHTMLRef.current
+      const theirs = toEditorHTML(incoming)
+      const baseHTML = toEditorHTML(base)
+      const merged = threeWayMerge(baseHTML, ours, theirs)
+      if (merged !== ours) {
+        editorRef.current?.setContent(merged)
+        liveHTMLRef.current = merged
+        liveTextRef.current = htmlToText(merged)
+      }
+      // Don't update lastSavedHTMLRef — user still has unsaved local changes
+      return
+    }
+
     const html = toEditorHTML(incoming)
     editorRef.current?.setContent(html)
     liveHTMLRef.current = html
@@ -1782,11 +1809,10 @@ export function JournalBlock(props: Props) {
   function setTaskStatus(taskStatus: 'not_started' | 'in_progress' | 'done') {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    const blockStatus = taskStatus === 'done' ? 'complete' as const : 'active' as const
-    // Optimistic update — show immediately, persist in background
-    p.onUpdate({ ...p.block, task_status: taskStatus, status: blockStatus })
+    // Keep status active — task_status drives strikethrough/grey styling, no auto-archive
+    p.onUpdate({ ...p.block, task_status: taskStatus })
     const supabase = createClient()
-    supabase.from('journal_blocks').update({ task_status: taskStatus, status: blockStatus }).eq('id', p.block.id).then(() => {})
+    supabase.from('journal_blocks').update({ task_status: taskStatus }).eq('id', p.block.id).then(() => {})
   }
 
   async function moveToWorkspace(targetWsId: string | null) {
@@ -2019,8 +2045,7 @@ export function JournalBlock(props: Props) {
       key: 'move', label: 'Move to…', icon: moveIcon(),
       onClick: () => setMoveMenuOpen(prev => !prev),
     }] : []),
-    ...(block ? [{ key: 'archive', label: 'Archive', shortcut: '⌥⇧D', shortcutTip: 'Alt + Shift + D', icon: archiveIcon(), onClick: () => { setPopoverOpen(false); archiveBlock() }, separator: true }] : []),
-    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setEditorKey(k => k + 1) } else { deleteBlock() } }, className: 'text-red-500 hover:bg-red-50' },
+    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setEditorKey(k => k + 1) } else { deleteBlock() } }, separator: true, className: 'text-red-500 hover:bg-red-50' },
   ]
 
   // Disable split when selection covers entire block content
@@ -2081,7 +2106,7 @@ export function JournalBlock(props: Props) {
             ? `border-l-[3px] border border-[#E5E0D0] ${focused ? 'shadow-md' : 'hover:border-[#D5D0C0]'}`
             : focused
               ? 'border-l-[3px] border border-[#E5E0D0] shadow-md'
-              : 'border border-[#E5E0D0] pl-[2px] hover:border-[#D5D0C0]'
+              : 'border-l-[3px] border-l-transparent border border-[#E5E0D0] hover:border-[#D5D0C0]'
       } ${isDragOver ? '' : focused ? '' : 'bg-white'} ${isDeleted && !restoredLocally ? 'opacity-60' : ''}`}
       style={{
         ...(focused && !isDragOver
@@ -2274,6 +2299,8 @@ export function JournalBlock(props: Props) {
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
           </button>
+          {/* Archive — only for existing blocks */}
+          {block && <ArchiveButton onClick={() => archiveBlock()} />}
           {/* Actions menu (⋮) — always shown */}
           <button
             ref={triggerRef}
