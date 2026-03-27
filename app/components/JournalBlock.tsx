@@ -638,7 +638,7 @@ export function JournalBlock(props: Props) {
 
   // Track the last props.block.content we synced into the editor,
   // so we can detect external updates and push them in.
-  const lastSyncedContentRef = useRef(props.block?.content ?? null)
+  const lastSyncedContentRef = useRef(props.block?.draft_content ?? props.block?.content ?? null)
 
   // Close popover on outside click
   useEffect(() => {
@@ -687,20 +687,21 @@ export function JournalBlock(props: Props) {
   useEffect(() => clearAutosaveTimer, [])
 
   // ── Sync content from props into the editor when block is updated externally ──
+  // Reacts to both committed content and draft_content (whichever is fresher).
+  const remoteContent = props.block?.draft_content ?? props.block?.content ?? null
   useEffect(() => {
-    const incoming = props.block?.content ?? null
-    if (incoming === lastSyncedContentRef.current) return
+    if (remoteContent === lastSyncedContentRef.current) return
     const base = lastSyncedContentRef.current
-    lastSyncedContentRef.current = incoming
+    lastSyncedContentRef.current = remoteContent
 
     if (focusedRef.current) {
       // User is editing — three-way merge local edits with remote changes
       const ours = liveHTMLRef.current
-      const theirs = toEditorHTML(incoming)
+      const theirs = toEditorHTML(remoteContent)
       const baseHTML = toEditorHTML(base)
       const merged = threeWayMerge(baseHTML, ours, theirs)
       if (merged !== ours) {
-        editorRef.current?.setContent(merged)
+        getEditor()?.setContent(merged)
         liveHTMLRef.current = merged
         liveTextRef.current = htmlToText(merged)
       }
@@ -708,12 +709,12 @@ export function JournalBlock(props: Props) {
       return
     }
 
-    const html = toEditorHTML(incoming)
-    editorRef.current?.setContent(html)
+    const html = toEditorHTML(remoteContent)
+    getEditor()?.setContent(html)
     liveHTMLRef.current = html
     liveTextRef.current = htmlToText(html)
     lastSavedHTMLRef.current = html
-  }, [props.block?.content])
+  }, [remoteContent])
 
   // ── pointerup → open selection menu (existing blocks only) ──────────
   useEffect(() => {
@@ -1403,6 +1404,7 @@ export function JournalBlock(props: Props) {
     const supabase = createClient()
     await supabase.from('journal_blocks').update({ draft_content: html }).eq('id', blockId)
     lastDraftHTMLRef.current = html
+    lastSyncedContentRef.current = html // prevent our own draft from re-triggering sync
   }
 
   // beforeunload: save draft via fetch+keepalive so it survives page close
@@ -1448,9 +1450,9 @@ export function JournalBlock(props: Props) {
       // Draft save: 5 seconds after last keystroke
       clearDraftTimer()
       draftTimerRef.current = setTimeout(() => saveDraft(blockId), 5000)
-      // Commit (history): 60 seconds of inactivity — keep focus + cursor
+      // Commit (content + history): use autosave interval — keep focus + cursor
       clearCommitTimer()
-      commitTimerRef.current = setTimeout(() => saveExistingBlock({ keepFocus: true }), 60000)
+      commitTimerRef.current = setTimeout(() => saveExistingBlock({ keepFocus: true }), autosaveInterval * 1000)
     }
   }
 
