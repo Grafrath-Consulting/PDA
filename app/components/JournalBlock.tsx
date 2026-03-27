@@ -2608,11 +2608,11 @@ export function JournalBlock(props: Props) {
             <button
               title="Add Start Date/Time"
               onClick={() => {
-                const today = `${new Date().toISOString().split('T')[0]}T23:59:59`
+                const today = `${new Date().toISOString().split('T')[0]}T00:00:00`
                 if (pendingDueDate) {
                   const dueDay = pendingDueDate.split('T')[0]
                   const todayDay = new Date().toISOString().split('T')[0]
-                  setPendingStartDate(todayDay > dueDay ? pendingDueDate : today)
+                  setPendingStartDate(todayDay > dueDay ? `${dueDay}T00:00:00` : today)
                 } else {
                   setPendingStartDate('')
                 }
@@ -2626,10 +2626,10 @@ export function JournalBlock(props: Props) {
             let startTimeVal = ''
             if (pendingStartDate) {
               const parts = pendingStartDate.split('T')
-              if (parts[1] && parts[1] !== '23:59:59') startTimeVal = parts[1].slice(0, 5)
+              if (parts[1] && parts[1] !== '00:00:00') startTimeVal = parts[1].slice(0, 5)
             }
             function buildStartTs(date: string, time: string | null): string {
-              if (!time) return `${date}T23:59:59`
+              if (!time) return `${date}T00:00:00`
               return `${date}T${time}:00`
             }
             function setStartWithValidation(ts: string | null) {
@@ -2762,11 +2762,11 @@ export function JournalBlock(props: Props) {
             <button
               title="Add Start Date/Time"
               onClick={() => {
-                const today = `${new Date().toISOString().split('T')[0]}T23:59:59`
+                const today = `${new Date().toISOString().split('T')[0]}T00:00:00`
                 if (block.due_date) {
                   const dueDay = block.due_date.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '').split('T')[0]
                   const todayDay = new Date().toISOString().split('T')[0]
-                  updateTaskField('start_date', todayDay > dueDay ? block.due_date : today)
+                  updateTaskField('start_date', todayDay > dueDay ? `${dueDay}T00:00:00` : today)
                 } else {
                   updateTaskField('start_date', today)
                 }
@@ -2784,10 +2784,10 @@ export function JournalBlock(props: Props) {
               const d = new Date(localStr)
               sdDateVal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
               const hh = d.getHours(), mi = d.getMinutes(), ss = d.getSeconds()
-              if (!(hh === 23 && mi === 59 && ss === 59)) sdTimeVal = `${String(hh).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
+              if (!(hh === 0 && mi === 0 && ss === 0)) sdTimeVal = `${String(hh).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
             }
             function buildStartTs(date: string, time: string | null): string {
-              return time ? `${date}T${time}:00` : `${date}T23:59:59`
+              return time ? `${date}T${time}:00` : `${date}T00:00:00`
             }
             function setStartValidated(ts: string | null) {
               if (ts && block.due_date) {

@@ -452,6 +452,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
     // Assignee filter
     if (filterAssigneeRef.current === 'me') {
       query = query.is('owner_id', null)
+    } else if (filterAssigneeRef.current === 'others') {
+      query = query.not('owner_id', 'is', null)
     } else if (filterAssigneeRef.current) {
       query = query.eq('owner_id', filterAssigneeRef.current)
     }
@@ -1354,6 +1356,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
               >
                 <option value="">Any</option>
                 <option value="me">Me</option>
+                <option value="others">All Others</option>
+                <option disabled>──────────</option>
                 {peopleList.map(p => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
