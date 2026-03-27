@@ -1293,15 +1293,15 @@ export function JournalBlock(props: Props) {
     return saved
   }, [])
 
-  const saveExistingBlock = useCallback(async () => {
+  const saveExistingBlock = useCallback(async (opts?: { keepFocus?: boolean }) => {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
 
-    // Always deactivate visually, even if a save is already in flight
     clearAutosaveTimer()
     clearDraftTimer()
     clearCommitTimer()
-    setFocused(false)
+    // Only deactivate when explicitly leaving the block, not on background save
+    if (!opts?.keepFocus) setFocused(false)
 
     if (savingRef.current) return
 
@@ -1448,9 +1448,9 @@ export function JournalBlock(props: Props) {
       // Draft save: 5 seconds after last keystroke
       clearDraftTimer()
       draftTimerRef.current = setTimeout(() => saveDraft(blockId), 5000)
-      // Commit (history): 60 seconds of inactivity
+      // Commit (history): 60 seconds of inactivity — keep focus + cursor
       clearCommitTimer()
-      commitTimerRef.current = setTimeout(() => saveExistingBlock(), 60000)
+      commitTimerRef.current = setTimeout(() => saveExistingBlock({ keepFocus: true }), 60000)
     }
   }
 
