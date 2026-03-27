@@ -11,6 +11,7 @@ interface TaskItem {
   owner_id: string | null
   due_date: string | null
   due_date_type: 'deadline' | 'target' | null
+  start_date: string | null
   workspace_id: string | null
   updated_at: string
 }
@@ -98,7 +99,7 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose }: Props) 
     // Tasks Due: past due + due today
     let dueQuery = supabase
       .from('journal_blocks')
-      .select('id, content, owner_id, due_date, due_date_type, workspace_id, updated_at')
+      .select('id, content, owner_id, due_date, due_date_type, start_date, workspace_id, updated_at')
       .eq('user_id', userId)
       .eq('entry_type', 'task')
       .lte('due_date', today)
@@ -112,7 +113,7 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose }: Props) 
     const futureEnd = futureRange === 0 ? undefined : addDays(futureRange)
     let futureQuery = supabase
       .from('journal_blocks')
-      .select('id, content, owner_id, due_date, due_date_type, workspace_id, updated_at')
+      .select('id, content, owner_id, due_date, due_date_type, start_date, workspace_id, updated_at')
       .eq('user_id', userId)
       .eq('entry_type', 'task')
       .gt('due_date', today)
@@ -217,6 +218,11 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose }: Props) 
             {!showDueLabel && (
               <span className={`text-[10px] ${isDeadline ? 'font-semibold text-red-500' : 'text-gray-400'}`}>
                 {isDeadline ? 'Deadline' : 'Target'}
+              </span>
+            )}
+            {task.start_date && (
+              <span className="text-[10px] text-blue-400">
+                Starts {formatDueDate(task.start_date)}
               </span>
             )}
           </div>

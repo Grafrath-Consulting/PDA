@@ -66,6 +66,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [filterModifiedTo, setFilterModifiedTo] = useState('')
   const [filterDueFrom, setFilterDueFrom] = useState('')
   const [filterDueTo, setFilterDueTo] = useState('')
+  const [filterStartFrom, setFilterStartFrom] = useState('')
+  const [filterStartTo, setFilterStartTo] = useState('')
   const [filterArchivedFrom, setFilterArchivedFrom] = useState('')
   const [filterArchivedTo, setFilterArchivedTo] = useState('')
   const [filterDeletedFrom, setFilterDeletedFrom] = useState('')
@@ -126,6 +128,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
   filterDueFromRef.current = filterDueFrom
   const filterDueToRef = useRef(filterDueTo)
   filterDueToRef.current = filterDueTo
+  const filterStartFromRef = useRef(filterStartFrom)
+  filterStartFromRef.current = filterStartFrom
+  const filterStartToRef = useRef(filterStartTo)
+  filterStartToRef.current = filterStartTo
   const filterArchivedFromRef = useRef(filterArchivedFrom)
   filterArchivedFromRef.current = filterArchivedFrom
   const filterArchivedToRef = useRef(filterArchivedTo)
@@ -198,7 +204,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   }
 
   const hasActiveSearch = searchText.length > 0
-  const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo || !!filterArchivedFrom || !!filterArchivedTo || !!filterDeletedFrom || !!filterDeletedTo || !!filterAssignee
+  const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo || !!filterStartFrom || !!filterStartTo || !!filterArchivedFrom || !!filterArchivedTo || !!filterDeletedFrom || !!filterDeletedTo || !!filterAssignee
 
   // Smart search (combined exact + semantic + AI parsing)
   useEffect(() => {
@@ -421,6 +427,13 @@ export function JournalPage({ userId, email, displayName }: Props) {
     if (filterDueToRef.current) {
       query = query.lte('due_date', filterDueToRef.current + 'T23:59:59')
     }
+    // Start date range
+    if (filterStartFromRef.current) {
+      query = query.gte('start_date', filterStartFromRef.current + 'T00:00:00')
+    }
+    if (filterStartToRef.current) {
+      query = query.lte('start_date', filterStartToRef.current + 'T23:59:59')
+    }
     // Archived/Done date range — filter on archived_at OR completed_at
     if (filterArchivedFromRef.current) {
       query = query.or(`archived_at.gte.${filterArchivedFromRef.current}T00:00:00,completed_at.gte.${filterArchivedFromRef.current}T00:00:00`)
@@ -510,7 +523,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, searchMode, searchNonce])
+  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, searchMode, searchNonce])
 
   // ── Periodic sync polling: fetch blocks updated on other devices ──
   const lastPollRef = useRef<string>(new Date().toISOString())
@@ -1351,6 +1364,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
               { label: 'Created', fromId: 'filter-date-from', toId: 'filter-date-to', fromVal: filterDateFrom, toVal: filterDateTo, setFrom: setFilterDateFrom, setTo: setFilterDateTo, showWhen: null },
               { label: 'Modified', fromId: 'filter-mod-from', toId: 'filter-mod-to', fromVal: filterModifiedFrom, toVal: filterModifiedTo, setFrom: setFilterModifiedFrom, setTo: setFilterModifiedTo, showWhen: null },
               { label: 'Due', fromId: 'filter-due-from', toId: 'filter-due-to', fromVal: filterDueFrom, toVal: filterDueTo, setFrom: setFilterDueFrom, setTo: setFilterDueTo, showWhen: null },
+              { label: 'Start', fromId: 'filter-start-from', toId: 'filter-start-to', fromVal: filterStartFrom, toVal: filterStartTo, setFrom: setFilterStartFrom, setTo: setFilterStartTo, showWhen: null },
               { label: 'Archived / Done', fromId: 'filter-arch-from', toId: 'filter-arch-to', fromVal: filterArchivedFrom, toVal: filterArchivedTo, setFrom: setFilterArchivedFrom, setTo: setFilterArchivedTo, showWhen: 'archived' as const },
               { label: 'Deleted', fromId: 'filter-del-from', toId: 'filter-del-to', fromVal: filterDeletedFrom, toVal: filterDeletedTo, setFrom: setFilterDeletedFrom, setTo: setFilterDeletedTo, showWhen: 'deleted' as const },
             ] as const).filter(({ showWhen }) => !showWhen || filterStatuses.has(showWhen)).map(({ label, fromId, toId, fromVal, toVal, setFrom, setTo }) => {
@@ -1452,7 +1466,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
               </button>
             </div>
             {hasNonDefaultFilters && (
-              <button onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null) }}
+              <button onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterStartFrom(''); setFilterStartTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null) }}
                 className="text-[11px] text-gray-400 hover:text-gray-600 underline">
                 Clear
               </button>
@@ -1480,7 +1494,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
             <div className="flex items-center gap-2 text-[11px] text-amber-700 mt-2 pt-2 border-t border-[#EDE9DB]">
               <span>{count} hidden filter{count !== 1 ? 's' : ''} applied</span>
               <button
-                onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null) }}
+                onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterStartFrom(''); setFilterStartTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null) }}
                 className="text-amber-600 hover:text-amber-800 underline"
               >
                 Clear all filters
@@ -1593,6 +1607,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 !!filterDateFrom || !!filterDateTo ||
                 !!filterModifiedFrom || !!filterModifiedTo ||
                 !!filterDueFrom || !!filterDueTo ||
+                !!filterStartFrom || !!filterStartTo ||
                 !!filterArchivedFrom || !!filterArchivedTo ||
                 !!filterDeletedFrom || !!filterDeletedTo ||
                 !!filterAssignee
@@ -1611,6 +1626,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 setFilterModifiedTo('')
                 setFilterDueFrom('')
                 setFilterDueTo('')
+                setFilterStartFrom('')
+                setFilterStartTo('')
                 setFilterArchivedFrom('')
                 setFilterArchivedTo('')
                 setFilterDeletedFrom('')

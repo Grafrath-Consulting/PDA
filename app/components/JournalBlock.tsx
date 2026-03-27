@@ -448,7 +448,7 @@ function AssigneeSelect({ value, people, userId, onChange, onPersonAdded }: {
   )
 }
 
-function EntryTypeToggle({ isTask, onClick }: { isTask: boolean; onClick: () => void }) {
+function EntryTypeToggle({ isTask, onClick, isDueToday, isPastDue }: { isTask: boolean; onClick: () => void; isDueToday?: boolean; isPastDue?: boolean }) {
   const btnRef = useRef<HTMLButtonElement>(null)
   const [hover, setHover] = useState(false)
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null)
@@ -463,7 +463,11 @@ function EntryTypeToggle({ isTask, onClick }: { isTask: boolean; onClick: () => 
     <>
       <button
         ref={btnRef}
-        className="pointer-events-auto text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+        className={`pointer-events-auto transition-colors cursor-pointer ${
+          isTask && isPastDue ? 'text-red-500 hover:text-red-600'
+          : isTask && isDueToday ? 'text-yellow-500 hover:text-yellow-600'
+          : 'text-gray-400 hover:text-gray-600'
+        }`}
         title={isTask ? 'Task — click to convert' : 'Info — click to convert'}
         onClick={onClick}
         onMouseEnter={() => setHover(true)}
@@ -614,8 +618,9 @@ export function JournalBlock(props: Props) {
   const [pendingOwnerId, setPendingOwnerId] = useState<string | null>(null)
   const [pendingDueDate, setPendingDueDate] = useState<string | null>(null)
   const [pendingDueDateType, setPendingDueDateType] = useState<'deadline' | 'target' | null>(null)
-  const pendingTaskFieldsRef = useRef({ taskStatus: 'not_started' as 'not_started' | 'in_progress' | 'done', ownerId: null as string | null, dueDate: null as string | null, dueDateType: null as 'deadline' | 'target' | null })
-  pendingTaskFieldsRef.current = { taskStatus: pendingTaskStatus, ownerId: pendingOwnerId, dueDate: pendingDueDate, dueDateType: pendingDueDateType }
+  const [pendingStartDate, setPendingStartDate] = useState<string | null>(null)
+  const pendingTaskFieldsRef = useRef({ taskStatus: 'not_started' as 'not_started' | 'in_progress' | 'done', ownerId: null as string | null, dueDate: null as string | null, dueDateType: null as 'deadline' | 'target' | null, startDate: null as string | null })
+  pendingTaskFieldsRef.current = { taskStatus: pendingTaskStatus, ownerId: pendingOwnerId, dueDate: pendingDueDate, dueDateType: pendingDueDateType, startDate: pendingStartDate }
   const workspaceRef = useRef(activeWorkspace)
   workspaceRef.current = activeWorkspace
   const workspacesRef = useRef(workspaces)
@@ -1037,6 +1042,7 @@ export function JournalBlock(props: Props) {
           owner_id: block.owner_id,
           due_date: block.due_date,
           due_date_type: block.due_date_type,
+          start_date: block.start_date,
           task_status: block.task_status,
           content: selHTML || selText,
           status: 'active',
@@ -1203,6 +1209,7 @@ export function JournalBlock(props: Props) {
       owner_id: pendingTaskFieldsRef.current.ownerId,
       due_date: pendingTaskFieldsRef.current.dueDate,
       due_date_type: pendingTaskFieldsRef.current.dueDateType,
+      start_date: pendingTaskFieldsRef.current.startDate,
     } : {}
 
     if (autosavedBlockIdRef.current) {
@@ -1283,7 +1290,7 @@ export function JournalBlock(props: Props) {
     liveTextRef.current = ''
     setPendingPropertyIds(new Set())
     setPendingFiles([])
-    setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null)
+    setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null)
     setFocused(false)
     setEditorKey(k => k + 1)
     if (saved) {
@@ -1482,7 +1489,7 @@ export function JournalBlock(props: Props) {
 
     liveHTMLRef.current = ''
     liveTextRef.current = ''
-    setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null)
+    setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null)
     setFocused(false)
     setEditorKey(k => k + 1)
     p.onSaved(data as Block)
@@ -1624,7 +1631,7 @@ export function JournalBlock(props: Props) {
       clearAutosaveTimer()
       setPendingPropertyIds(new Set())
       setPendingFiles([])
-      setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null)
+      setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null)
       setEditorKey(k => k + 1)
       return
     }
@@ -2056,7 +2063,7 @@ export function JournalBlock(props: Props) {
       key: 'move', label: 'Move to…', icon: moveIcon(),
       onClick: () => setMoveMenuOpen(prev => !prev),
     }] : []),
-    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setEditorKey(k => k + 1) } else { deleteBlock() } }, separator: true, className: 'text-red-500 hover:bg-red-50' },
+    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null); setEditorKey(k => k + 1) } else { deleteBlock() } }, separator: true, className: 'text-red-500 hover:bg-red-50' },
   ]
 
   // Disable split when selection covers entire block content
@@ -2104,6 +2111,20 @@ export function JournalBlock(props: Props) {
     : pendingPropertyIds
   const hasAppliedProps = appliedProps.size > 0
 
+  // Due date visual indicators
+  const todayStr = new Date().toISOString().split('T')[0]
+  const dueDateDay = block?.due_date ? block.due_date.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '').split('T')[0] : null
+  const isDueToday = dueDateDay === todayStr
+  const isPastDue = !!dueDateDay && dueDateDay < todayStr
+
+  // Future start date → dim the card
+  const hasFutureStart = (() => {
+    const sd = block?.start_date
+    if (!sd) return false
+    const start = new Date(sd.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, ''))
+    return start > new Date()
+  })()
+
   return (
     <div
       id={block ? `block-${block.id}` : undefined}
@@ -2118,7 +2139,7 @@ export function JournalBlock(props: Props) {
             : focused
               ? 'border-l-[3px] border border-[#E5E0D0] shadow-md'
               : 'border-l-[3px] border-l-transparent border border-[#E5E0D0] hover:border-[#D5D0C0]'
-      } ${isDragOver ? '' : focused ? '' : 'bg-white'} ${isDeleted && !restoredLocally ? 'opacity-60' : ''}`}
+      } ${isDragOver ? '' : focused ? '' : 'bg-white'} ${isDeleted && !restoredLocally ? 'opacity-60' : hasFutureStart && !focused ? 'opacity-50' : ''}`}
       style={{
         ...(focused && !isDragOver
             ? { backgroundColor: activeScheme?.activeMuted ?? '#FEF3C7' }
@@ -2164,6 +2185,8 @@ export function JournalBlock(props: Props) {
         {/* Entry type indicator — click to switch */}
         <EntryTypeToggle
           isTask={isTask}
+          isDueToday={isDueToday}
+          isPastDue={isPastDue}
           onClick={() => {
             if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') }
             else { toggleEntryType() }
@@ -2574,38 +2597,131 @@ export function JournalBlock(props: Props) {
             onPersonAdded={handlePersonAdded}
           />
           <span className="w-px h-4 bg-gray-200" />
-          <div className="flex items-center gap-1">
-            <input
-              type="date"
-              value={pendingDueDate ? pendingDueDate.split('T')[0] : ''}
-              onChange={(e) => {
-                if (!e.target.value) { setPendingDueDate(null); setPendingDueDateType(null) }
-                else { setPendingDueDate(`${e.target.value}T23:59:59`); if (!pendingDueDateType) setPendingDueDateType('target') }
-              }}
-              className="text-xs bg-transparent border-none outline-none cursor-pointer text-gray-600 py-0.5"
-            />
-            {pendingDueDate && (
-              <>
-                <div className="flex items-center bg-gray-100 rounded-md p-0.5">
+          {(() => {
+            const pendingDateVal = pendingDueDate ? pendingDueDate.split('T')[0] : ''
+            let pendingTimeVal = ''
+            if (pendingDueDate) {
+              const parts = pendingDueDate.split('T')
+              if (parts[1] && parts[1] !== '23:59:59') {
+                pendingTimeVal = parts[1].slice(0, 5)
+              }
+            }
+            function buildPendingTimestamp(date: string, time: string | null): string {
+              if (!time) return `${date}T23:59:59`
+              return `${date}T${time}:00`
+            }
+            const newDatePickerId = 'datepicker-new-entry'
+            return (
+              <div className="flex items-center gap-1">
+                <div className="relative flex-shrink-0">
                   <button
-                    onClick={() => setPendingDueDateType('deadline')}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'deadline' ? 'bg-red-100 text-red-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById(newDatePickerId) as HTMLInputElement | null
+                      if (el) { el.showPicker?.() }
+                    }}
+                    className="cursor-pointer text-gray-400 hover:text-gray-600"
                   >
-                    Deadline
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
                   </button>
-                  <button
-                    onClick={() => setPendingDueDateType('target')}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'target' || !pendingDueDateType ? 'bg-amber-100 text-amber-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    Target
-                  </button>
+                  <input
+                    id={newDatePickerId}
+                    type="date"
+                    value={pendingDateVal}
+                    onChange={(e) => {
+                      if (!e.target.value) { setPendingDueDate(null); setPendingDueDateType(null) }
+                      else { setPendingDueDate(buildPendingTimestamp(e.target.value, pendingTimeVal || null)); if (!pendingDueDateType) setPendingDueDateType('target') }
+                    }}
+                    className="absolute inset-0 opacity-0 w-full h-full pointer-events-none"
+                    tabIndex={-1}
+                  />
                 </div>
-                <button onClick={() => { setPendingDueDate(null); setPendingDueDateType(null) }} className="text-gray-300 hover:text-gray-500">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                <span
+                  className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none"
+                  onClick={() => {
+                    const el = document.getElementById(newDatePickerId) as HTMLInputElement | null
+                    if (el) { el.showPicker?.() }
+                  }}
+                >
+                  {pendingDateVal
+                    ? formatDatePart(new Date(pendingDateVal + 'T00:00:00'), dateFormat)
+                    : <span className="text-gray-300">mm/dd/yyyy</span>
+                  }
+                </span>
+                {pendingDateVal && (
+                  <>
+                    <TimePickerDropdown
+                      value={pendingTimeVal}
+                      onChange={(t) => { setPendingDueDate(buildPendingTimestamp(pendingDateVal, t || null)) }}
+                      timeFormat={timeFormat}
+                    />
+                    <div className="flex items-center bg-gray-100 rounded-md p-0.5 ml-2">
+                      <button
+                        onClick={() => setPendingDueDateType('deadline')}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'deadline' ? 'bg-red-100 text-red-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                      >Deadline</button>
+                      <button
+                        onClick={() => setPendingDueDateType('target')}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'target' || !pendingDueDateType ? 'bg-amber-100 text-amber-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                      >Target</button>
+                    </div>
+                    <button
+                      onClick={() => { setPendingDueDate(null); setPendingDueDateType(null) }}
+                      title="Clear date"
+                      className="p-0.5 text-gray-300 hover:text-red-400 transition-colors"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    </button>
+                  </>
+                )}
+              </div>
+            )
+          })()}
+          <span className="w-px h-4 bg-gray-200" />
+          {pendingStartDate === null ? (
+            <button
+              title="Add Start Date/Time"
+              onClick={() => setPendingStartDate('')}
+              className="w-5 h-5 flex items-center justify-center rounded-full text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+            </button>
+          ) : (() => {
+            const startDateVal = pendingStartDate ? pendingStartDate.split('T')[0] : ''
+            let startTimeVal = ''
+            if (pendingStartDate) {
+              const parts = pendingStartDate.split('T')
+              if (parts[1] && parts[1] !== '23:59:59') startTimeVal = parts[1].slice(0, 5)
+            }
+            function buildStartTs(date: string, time: string | null): string {
+              if (!time) return `${date}T23:59:59`
+              return `${date}T${time}:00`
+            }
+            const startPickerId = 'datepicker-new-start'
+            return (
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-gray-400 font-medium">Start</span>
+                <div className="relative flex-shrink-0">
+                  <button type="button" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                  </button>
+                  <input id={startPickerId} type="date" value={startDateVal} onChange={(e) => {
+                    if (!e.target.value) { setPendingStartDate(null); return }
+                    setPendingStartDate(buildStartTs(e.target.value, startTimeVal || null))
+                  }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
+                </div>
+                <span className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }}>
+                  {startDateVal ? formatDatePart(new Date(startDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
+                </span>
+                {startDateVal && (
+                  <TimePickerDropdown value={startTimeVal} onChange={(t) => { setPendingStartDate(buildStartTs(startDateVal, t || null)) }} timeFormat={timeFormat} />
+                )}
+                <button onClick={() => setPendingStartDate(null)} title="Remove start date" className="p-0.5 text-gray-300 hover:text-red-400 transition-colors">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
                 </button>
-              </>
-            )}
-          </div>
+              </div>
+            )
+          })()}
         </div>
       )}
 
@@ -2761,6 +2877,54 @@ export function JournalBlock(props: Props) {
                     </button>
                   </>
                 )}
+              </div>
+            )
+          })()}
+          <span className="w-px h-4 bg-gray-200" />
+          {block.start_date === null || block.start_date === undefined ? (
+            <button
+              title="Add Start Date/Time"
+              onClick={() => updateTaskField('start_date', `${new Date().toISOString().split('T')[0]}T23:59:59`)}
+              className="w-5 h-5 flex items-center justify-center rounded-full text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+            </button>
+          ) : (() => {
+            const sdStr = block.start_date
+            let sdDateVal = ''
+            let sdTimeVal = ''
+            if (sdStr) {
+              const localStr = sdStr.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '')
+              const d = new Date(localStr)
+              sdDateVal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+              const hh = d.getHours(), mi = d.getMinutes(), ss = d.getSeconds()
+              if (!(hh === 23 && mi === 59 && ss === 59)) sdTimeVal = `${String(hh).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
+            }
+            function buildStartTs(date: string, time: string | null): string {
+              return time ? `${date}T${time}:00` : `${date}T23:59:59`
+            }
+            const startPickerId = `datepicker-start-${block.id}`
+            return (
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-gray-400 font-medium">Start</span>
+                <div className="relative flex-shrink-0">
+                  <button type="button" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                  </button>
+                  <input id={startPickerId} type="date" value={sdDateVal} onChange={(e) => {
+                    if (!e.target.value) { updateTaskField('start_date', null); return }
+                    updateTaskField('start_date', buildStartTs(e.target.value, sdTimeVal || null))
+                  }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
+                </div>
+                <span className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }}>
+                  {sdDateVal ? formatDatePart(new Date(sdDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
+                </span>
+                {sdDateVal && (
+                  <TimePickerDropdown value={sdTimeVal} onChange={(t) => { updateTaskField('start_date', buildStartTs(sdDateVal, t || null)) }} timeFormat={timeFormat} />
+                )}
+                <button onClick={() => updateTaskField('start_date', null)} title="Remove start date" className="p-0.5 text-gray-300 hover:text-red-400 transition-colors">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </button>
               </div>
             )
           })()}
