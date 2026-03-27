@@ -1363,8 +1363,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
             {([
               { label: 'Created', fromId: 'filter-date-from', toId: 'filter-date-to', fromVal: filterDateFrom, toVal: filterDateTo, setFrom: setFilterDateFrom, setTo: setFilterDateTo, showWhen: null },
               { label: 'Modified', fromId: 'filter-mod-from', toId: 'filter-mod-to', fromVal: filterModifiedFrom, toVal: filterModifiedTo, setFrom: setFilterModifiedFrom, setTo: setFilterModifiedTo, showWhen: null },
-              { label: 'Due', fromId: 'filter-due-from', toId: 'filter-due-to', fromVal: filterDueFrom, toVal: filterDueTo, setFrom: setFilterDueFrom, setTo: setFilterDueTo, showWhen: null },
               { label: 'Start', fromId: 'filter-start-from', toId: 'filter-start-to', fromVal: filterStartFrom, toVal: filterStartTo, setFrom: setFilterStartFrom, setTo: setFilterStartTo, showWhen: null },
+              { label: 'Due', fromId: 'filter-due-from', toId: 'filter-due-to', fromVal: filterDueFrom, toVal: filterDueTo, setFrom: setFilterDueFrom, setTo: setFilterDueTo, showWhen: null },
               { label: 'Archived / Done', fromId: 'filter-arch-from', toId: 'filter-arch-to', fromVal: filterArchivedFrom, toVal: filterArchivedTo, setFrom: setFilterArchivedFrom, setTo: setFilterArchivedTo, showWhen: 'archived' as const },
               { label: 'Deleted', fromId: 'filter-del-from', toId: 'filter-del-to', fromVal: filterDeletedFrom, toVal: filterDeletedTo, setFrom: setFilterDeletedFrom, setTo: setFilterDeletedTo, showWhen: 'deleted' as const },
             ] as const).filter(({ showWhen }) => !showWhen || filterStatuses.has(showWhen)).map(({ label, fromId, toId, fromVal, toVal, setFrom, setTo }) => {

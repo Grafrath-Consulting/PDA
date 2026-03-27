@@ -347,7 +347,7 @@ function AssigneeSelect({ value, people, userId, onChange, onPersonAdded }: {
   }
 
   return (
-    <div ref={ref} className="relative flex items-center gap-1">
+    <div ref={ref} className="relative flex items-center gap-1" title="Assignee">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
       <button
         onClick={() => { setOpen(!open); setAdding(false); setSearch('') }}
@@ -577,6 +577,13 @@ export function JournalBlock(props: Props) {
   const menuStateRef = useRef<MenuState | null>(null)
   menuStateRef.current = menuState
   const [popoverOpen, setPopoverOpen] = useState(false)
+  const [dateWarning, setDateWarning] = useState<string | null>(null)
+  const dateWarningTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function showDateWarning(msg: string) {
+    if (dateWarningTimer.current) clearTimeout(dateWarningTimer.current)
+    setDateWarning(msg)
+    dateWarningTimer.current = setTimeout(() => setDateWarning(null), 3000)
+  }
   const [focused, setFocused] = useState(false)
   const [editorKey, setEditorKey] = useState(0)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -2597,91 +2604,19 @@ export function JournalBlock(props: Props) {
             onPersonAdded={handlePersonAdded}
           />
           <span className="w-px h-4 bg-gray-200" />
-          {(() => {
-            const pendingDateVal = pendingDueDate ? pendingDueDate.split('T')[0] : ''
-            let pendingTimeVal = ''
-            if (pendingDueDate) {
-              const parts = pendingDueDate.split('T')
-              if (parts[1] && parts[1] !== '23:59:59') {
-                pendingTimeVal = parts[1].slice(0, 5)
-              }
-            }
-            function buildPendingTimestamp(date: string, time: string | null): string {
-              if (!time) return `${date}T23:59:59`
-              return `${date}T${time}:00`
-            }
-            const newDatePickerId = 'datepicker-new-entry'
-            return (
-              <div className="flex items-center gap-1">
-                <div className="relative flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const el = document.getElementById(newDatePickerId) as HTMLInputElement | null
-                      if (el) { el.showPicker?.() }
-                    }}
-                    className="cursor-pointer text-gray-400 hover:text-gray-600"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
-                  </button>
-                  <input
-                    id={newDatePickerId}
-                    type="date"
-                    value={pendingDateVal}
-                    onChange={(e) => {
-                      if (!e.target.value) { setPendingDueDate(null); setPendingDueDateType(null) }
-                      else { setPendingDueDate(buildPendingTimestamp(e.target.value, pendingTimeVal || null)); if (!pendingDueDateType) setPendingDueDateType('target') }
-                    }}
-                    className="absolute inset-0 opacity-0 w-full h-full pointer-events-none"
-                    tabIndex={-1}
-                  />
-                </div>
-                <span
-                  className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none"
-                  onClick={() => {
-                    const el = document.getElementById(newDatePickerId) as HTMLInputElement | null
-                    if (el) { el.showPicker?.() }
-                  }}
-                >
-                  {pendingDateVal
-                    ? formatDatePart(new Date(pendingDateVal + 'T00:00:00'), dateFormat)
-                    : <span className="text-gray-300">mm/dd/yyyy</span>
-                  }
-                </span>
-                {pendingDateVal && (
-                  <>
-                    <TimePickerDropdown
-                      value={pendingTimeVal}
-                      onChange={(t) => { setPendingDueDate(buildPendingTimestamp(pendingDateVal, t || null)) }}
-                      timeFormat={timeFormat}
-                    />
-                    <div className="flex items-center bg-gray-100 rounded-md p-0.5 ml-2">
-                      <button
-                        onClick={() => setPendingDueDateType('deadline')}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'deadline' ? 'bg-red-100 text-red-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                      >Deadline</button>
-                      <button
-                        onClick={() => setPendingDueDateType('target')}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'target' || !pendingDueDateType ? 'bg-amber-100 text-amber-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                      >Target</button>
-                    </div>
-                    <button
-                      onClick={() => { setPendingDueDate(null); setPendingDueDateType(null) }}
-                      title="Clear date"
-                      className="p-0.5 text-gray-300 hover:text-red-400 transition-colors"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                    </button>
-                  </>
-                )}
-              </div>
-            )
-          })()}
-          <span className="w-px h-4 bg-gray-200" />
           {pendingStartDate === null ? (
             <button
               title="Add Start Date/Time"
-              onClick={() => setPendingStartDate('')}
+              onClick={() => {
+                const today = `${new Date().toISOString().split('T')[0]}T23:59:59`
+                if (pendingDueDate) {
+                  const dueDay = pendingDueDate.split('T')[0]
+                  const todayDay = new Date().toISOString().split('T')[0]
+                  setPendingStartDate(todayDay > dueDay ? pendingDueDate : today)
+                } else {
+                  setPendingStartDate('')
+                }
+              }}
               className="w-5 h-5 flex items-center justify-center rounded-full text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
             >
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
@@ -2697,24 +2632,32 @@ export function JournalBlock(props: Props) {
               if (!time) return `${date}T23:59:59`
               return `${date}T${time}:00`
             }
+            function setStartWithValidation(ts: string | null) {
+              if (ts && pendingDueDate) {
+                const startDay = ts.split('T')[0]
+                const dueDay = pendingDueDate.split('T')[0]
+                if (startDay > dueDay) { showDateWarning('Start date cannot be after due date'); return }
+              }
+              setPendingStartDate(ts)
+            }
             const startPickerId = 'datepicker-new-start'
             return (
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-gray-400 font-medium">Start</span>
                 <div className="relative flex-shrink-0">
-                  <button type="button" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
+                  <button type="button" title="Start Date" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
                   </button>
                   <input id={startPickerId} type="date" value={startDateVal} onChange={(e) => {
                     if (!e.target.value) { setPendingStartDate(null); return }
-                    setPendingStartDate(buildStartTs(e.target.value, startTimeVal || null))
+                    setStartWithValidation(buildStartTs(e.target.value, startTimeVal || null))
                   }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
                 </div>
-                <span className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }}>
+                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }}>
                   {startDateVal ? formatDatePart(new Date(startDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
                 </span>
                 {startDateVal && (
-                  <TimePickerDropdown value={startTimeVal} onChange={(t) => { setPendingStartDate(buildStartTs(startDateVal, t || null)) }} timeFormat={timeFormat} />
+                  <TimePickerDropdown value={startTimeVal} onChange={(t) => { setStartWithValidation(buildStartTs(startDateVal, t || null)) }} timeFormat={timeFormat} />
                 )}
                 <button onClick={() => setPendingStartDate(null)} title="Remove start date" className="p-0.5 text-gray-300 hover:text-red-400 transition-colors">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
@@ -2722,6 +2665,58 @@ export function JournalBlock(props: Props) {
               </div>
             )
           })()}
+          <span className="w-px h-4 bg-gray-200" />
+          {(() => {
+            const pendingDateVal = pendingDueDate ? pendingDueDate.split('T')[0] : ''
+            let pendingTimeVal = ''
+            if (pendingDueDate) {
+              const parts = pendingDueDate.split('T')
+              if (parts[1] && parts[1] !== '23:59:59') pendingTimeVal = parts[1].slice(0, 5)
+            }
+            function buildPendingTimestamp(date: string, time: string | null): string {
+              if (!time) return `${date}T23:59:59`
+              return `${date}T${time}:00`
+            }
+            function setDueWithValidation(ts: string | null) {
+              if (ts && pendingStartDate) {
+                const startDay = pendingStartDate.split('T')[0]
+                const dueDay = ts.split('T')[0]
+                if (dueDay < startDay) { showDateWarning('Due date cannot be before start date'); return }
+              }
+              setPendingDueDate(ts)
+              if (!ts) setPendingDueDateType(null)
+            }
+            const newDatePickerId = 'datepicker-new-entry'
+            return (
+              <div className="flex items-center gap-1">
+                <div className="relative flex-shrink-0">
+                  <button type="button" title="Due Date" onClick={() => { (document.getElementById(newDatePickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                  </button>
+                  <input id={newDatePickerId} type="date" value={pendingDateVal} onChange={(e) => {
+                    if (!e.target.value) { setDueWithValidation(null) }
+                    else { setDueWithValidation(buildPendingTimestamp(e.target.value, pendingTimeVal || null)); if (!pendingDueDateType) setPendingDueDateType('target') }
+                  }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
+                </div>
+                <span title="Due Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(newDatePickerId) as HTMLInputElement)?.showPicker?.() }}>
+                  {pendingDateVal ? formatDatePart(new Date(pendingDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
+                </span>
+                {pendingDateVal && (
+                  <>
+                    <TimePickerDropdown value={pendingTimeVal} onChange={(t) => { setDueWithValidation(buildPendingTimestamp(pendingDateVal, t || null)) }} timeFormat={timeFormat} />
+                    <div className="flex items-center bg-gray-100 rounded-md p-0.5 ml-2">
+                      <button onClick={() => setPendingDueDateType('deadline')} className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'deadline' ? 'bg-red-100 text-red-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>Deadline</button>
+                      <button onClick={() => setPendingDueDateType('target')} className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${pendingDueDateType === 'target' || !pendingDueDateType ? 'bg-amber-100 text-amber-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>Target</button>
+                    </div>
+                    <button onClick={() => { setDueWithValidation(null) }} title="Clear date" className="p-0.5 text-gray-300 hover:text-red-400 transition-colors">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    </button>
+                  </>
+                )}
+              </div>
+            )
+          })()}
+          {dateWarning && <span className="text-[10px] text-red-500 basis-full pl-1">{dateWarning}</span>}
         </div>
       )}
 
@@ -2763,6 +2758,71 @@ export function JournalBlock(props: Props) {
             onPersonAdded={handlePersonAdded}
           />
           <span className="w-px h-4 bg-gray-200" />
+          {block.start_date === null || block.start_date === undefined ? (
+            <button
+              title="Add Start Date/Time"
+              onClick={() => {
+                const today = `${new Date().toISOString().split('T')[0]}T23:59:59`
+                if (block.due_date) {
+                  const dueDay = block.due_date.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '').split('T')[0]
+                  const todayDay = new Date().toISOString().split('T')[0]
+                  updateTaskField('start_date', todayDay > dueDay ? block.due_date : today)
+                } else {
+                  updateTaskField('start_date', today)
+                }
+              }}
+              className="w-5 h-5 flex items-center justify-center rounded-full text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+            </button>
+          ) : (() => {
+            const sdStr = block.start_date
+            let sdDateVal = ''
+            let sdTimeVal = ''
+            if (sdStr) {
+              const localStr = sdStr.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '')
+              const d = new Date(localStr)
+              sdDateVal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+              const hh = d.getHours(), mi = d.getMinutes(), ss = d.getSeconds()
+              if (!(hh === 23 && mi === 59 && ss === 59)) sdTimeVal = `${String(hh).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
+            }
+            function buildStartTs(date: string, time: string | null): string {
+              return time ? `${date}T${time}:00` : `${date}T23:59:59`
+            }
+            function setStartValidated(ts: string | null) {
+              if (ts && block.due_date) {
+                const startDay = ts.split('T')[0]
+                const dueDay = block.due_date.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '').split('T')[0]
+                if (startDay > dueDay) { showDateWarning('Start date cannot be after due date'); return }
+              }
+              updateTaskField('start_date', ts)
+            }
+            const startPickerId = `datepicker-start-${block.id}`
+            return (
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-gray-400 font-medium">Start</span>
+                <div className="relative flex-shrink-0">
+                  <button type="button" title="Start Date" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                  </button>
+                  <input id={startPickerId} type="date" value={sdDateVal} onChange={(e) => {
+                    if (!e.target.value) { updateTaskField('start_date', null); return }
+                    setStartValidated(buildStartTs(e.target.value, sdTimeVal || null))
+                  }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
+                </div>
+                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }}>
+                  {sdDateVal ? formatDatePart(new Date(sdDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
+                </span>
+                {sdDateVal && (
+                  <TimePickerDropdown value={sdTimeVal} onChange={(t) => { setStartValidated(buildStartTs(sdDateVal, t || null)) }} timeFormat={timeFormat} />
+                )}
+                <button onClick={() => updateTaskField('start_date', null)} title="Remove start date" className="p-0.5 text-gray-300 hover:text-red-400 transition-colors">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </button>
+              </div>
+            )
+          })()}
+          <span className="w-px h-4 bg-gray-200" />
           {(() => {
             // Parse timestamptz into date and time parts (using local time)
             const dueDateStr = block.due_date
@@ -2796,6 +2856,11 @@ export function JournalBlock(props: Props) {
                 updateTaskField('due_date_type', null)
                 return
               }
+              // Prevent due date before start_date
+              if (block.start_date) {
+                const startDay = block.start_date.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '').split('T')[0]
+                if (newDate < startDay) { showDateWarning('Due date cannot be before start date'); return }
+              }
               const ts = buildTimestamp(newDate, timeVal || null)
               updateTaskField('due_date', ts)
             }
@@ -2818,6 +2883,7 @@ export function JournalBlock(props: Props) {
                 <div className="relative flex-shrink-0">
                   <button
                     type="button"
+                    title="Due Date"
                     onClick={() => {
                       const el = document.getElementById(datePickerId) as HTMLInputElement | null
                       if (el) { el.showPicker?.() }
@@ -2836,6 +2902,7 @@ export function JournalBlock(props: Props) {
                   />
                 </div>
                 <span
+                  title="Due Date"
                   className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none"
                   onClick={() => {
                     const el = document.getElementById(datePickerId) as HTMLInputElement | null
@@ -2880,54 +2947,7 @@ export function JournalBlock(props: Props) {
               </div>
             )
           })()}
-          <span className="w-px h-4 bg-gray-200" />
-          {block.start_date === null || block.start_date === undefined ? (
-            <button
-              title="Add Start Date/Time"
-              onClick={() => updateTaskField('start_date', `${new Date().toISOString().split('T')[0]}T23:59:59`)}
-              className="w-5 h-5 flex items-center justify-center rounded-full text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
-            </button>
-          ) : (() => {
-            const sdStr = block.start_date
-            let sdDateVal = ''
-            let sdTimeVal = ''
-            if (sdStr) {
-              const localStr = sdStr.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '')
-              const d = new Date(localStr)
-              sdDateVal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-              const hh = d.getHours(), mi = d.getMinutes(), ss = d.getSeconds()
-              if (!(hh === 23 && mi === 59 && ss === 59)) sdTimeVal = `${String(hh).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
-            }
-            function buildStartTs(date: string, time: string | null): string {
-              return time ? `${date}T${time}:00` : `${date}T23:59:59`
-            }
-            const startPickerId = `datepicker-start-${block.id}`
-            return (
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-gray-400 font-medium">Start</span>
-                <div className="relative flex-shrink-0">
-                  <button type="button" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
-                  </button>
-                  <input id={startPickerId} type="date" value={sdDateVal} onChange={(e) => {
-                    if (!e.target.value) { updateTaskField('start_date', null); return }
-                    updateTaskField('start_date', buildStartTs(e.target.value, sdTimeVal || null))
-                  }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
-                </div>
-                <span className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }}>
-                  {sdDateVal ? formatDatePart(new Date(sdDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
-                </span>
-                {sdDateVal && (
-                  <TimePickerDropdown value={sdTimeVal} onChange={(t) => { updateTaskField('start_date', buildStartTs(sdDateVal, t || null)) }} timeFormat={timeFormat} />
-                )}
-                <button onClick={() => updateTaskField('start_date', null)} title="Remove start date" className="p-0.5 text-gray-300 hover:text-red-400 transition-colors">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                </button>
-              </div>
-            )
-          })()}
+          {dateWarning && <span className="text-[10px] text-red-500 basis-full pl-1">{dateWarning}</span>}
         </div>
       )}
 
