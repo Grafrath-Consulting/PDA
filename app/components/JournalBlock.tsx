@@ -448,7 +448,7 @@ function AssigneeSelect({ value, people, userId, onChange, onPersonAdded }: {
   )
 }
 
-function EntryTypeToggle({ isTask, onClick, isDueToday, isPastDue }: { isTask: boolean; onClick: () => void; isDueToday?: boolean; isPastDue?: boolean }) {
+function EntryTypeToggle({ isTask, onClick, isDueToday, isPastDue, isDone }: { isTask: boolean; onClick: () => void; isDueToday?: boolean; isPastDue?: boolean; isDone?: boolean }) {
   const btnRef = useRef<HTMLButtonElement>(null)
   const [hover, setHover] = useState(false)
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null)
@@ -464,7 +464,8 @@ function EntryTypeToggle({ isTask, onClick, isDueToday, isPastDue }: { isTask: b
       <button
         ref={btnRef}
         className={`pointer-events-auto transition-colors cursor-pointer ${
-          isTask && isPastDue ? 'text-red-500 hover:text-red-600'
+          isTask && isDone ? 'text-green-500 hover:text-green-600'
+          : isTask && isPastDue ? 'text-red-500 hover:text-red-600'
           : isTask && isDueToday ? 'text-yellow-500 hover:text-yellow-600'
           : 'text-gray-400 hover:text-gray-600'
         }`}
@@ -2194,6 +2195,7 @@ export function JournalBlock(props: Props) {
           isTask={isTask}
           isDueToday={isDueToday}
           isPastDue={isPastDue}
+          isDone={block?.task_status === 'done'}
           onClick={() => {
             if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') }
             else { toggleEntryType() }
