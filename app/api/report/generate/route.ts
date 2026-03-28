@@ -1,7 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
+import { createClient as createServiceClient } from '@supabase/supabase-js'
 import { getUserApiKey } from '@/lib/get-user-ai-config'
 import { formatDueDate } from '@/lib/date-format'
 import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
+import { REPORT_SUMMARY_DEFAULT_PROMPT } from '@/lib/ai-prompts'
 
 function stripHTML(html: string | null): string {
   if (!html) return ''
@@ -56,6 +58,7 @@ interface RequestBody {
   dateTo?: string
   includeAiSummary?: boolean
   summaryOnly?: boolean
+  templateName?: string
   entryTypeFilter?: string | null
   statusFilter?: string | null
 }
@@ -88,10 +91,23 @@ export async function POST(request: Request) {
   }
 
   // Resolve workspace names
+  const { data: allWsData } = await supabase.from('workspaces').select('id, name').eq('user_id', user.id)
+  const wsNameMap = new Map((allWsData ?? []).map((w: { id: string; name: string }) => [w.id, w.name]))
+  const wsName = (id: string | null): string => (id ? wsNameMap.get(id) : null) ?? 'Unassigned'
   let wsLabel = 'All Workspaces'
   if (filterByWs) {
-    const { data: wsData } = await supabase.from('workspaces').select('name').in('id', wsIds)
-    wsLabel = (wsData ?? []).map((w: { name: string }) => w.name).join(', ')
+    wsLabel = wsIds.map(id => wsNameMap.get(id) ?? id).join(', ')
+  }
+
+  // Group blocks by workspace, preserving order within each group
+  function groupByWorkspace(blocks: BlockRow[]): Map<string, BlockRow[]> {
+    const groups = new Map<string, BlockRow[]>()
+    for (const b of blocks) {
+      const name = wsName(b.workspace_id)
+      if (!groups.has(name)) groups.set(name, [])
+      groups.get(name)!.push(b)
+    }
+    return groups
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -103,7 +119,7 @@ export async function POST(request: Request) {
 
   // Query A — Top open priorities (High priority active tasks)
   let priorityTasks: BlockRow[] = []
-  if (!body.summaryOnly) {
+  if (!body.summaryOnly || body.includeAiSummary) {
     const { data: priorityProp } = await supabase.from('properties').select('id').eq('user_id', user.id).eq('name', 'Priority').maybeSingle()
     if (priorityProp) {
       const { data: highVal } = await supabase.from('property_values').select('id').eq('property_id', priorityProp.id).eq('label', 'High').maybeSingle()
@@ -123,9 +139,9 @@ export async function POST(request: Request) {
     }
   }
 
-  // Query B — Worked on in date range
+  // Query B — Worked on in date range (also needed for AI summary)
   let workedOn: BlockRow[] = []
-  if (!body.summaryOnly) {
+  if (!body.summaryOnly || body.includeAiSummary) {
     let q = supabase.from('journal_blocks')
       .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
       .eq('user_id', user.id).is('deleted_at', null)
@@ -141,7 +157,7 @@ export async function POST(request: Request) {
 
   // Query C — Completed in date range
   let completed: BlockRow[] = []
-  if (!body.summaryOnly) {
+  if (!body.summaryOnly || body.includeAiSummary) {
     let q = supabase.from('journal_blocks')
       .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
       .eq('user_id', user.id).eq('entry_type', 'task').eq('status', 'complete').is('deleted_at', null)
@@ -154,7 +170,7 @@ export async function POST(request: Request) {
 
   // Query D — Past due
   let pastDue: BlockRow[] = []
-  if (!body.summaryOnly) {
+  if (!body.summaryOnly || body.includeAiSummary) {
     let q = supabase.from('journal_blocks')
       .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
       .eq('user_id', user.id).eq('entry_type', 'task').eq('status', 'active').is('deleted_at', null)
@@ -170,7 +186,8 @@ export async function POST(request: Request) {
     ? formatDateHeader(dateFrom)
     : `${formatDateHeader(dateFrom)} – ${formatDateHeader(dateTo)}`
 
-  sections.push(`REPORT — ${dateLabel}`)
+  const reportTitle = body.templateName?.trim() || 'Report'
+  sections.push(`${reportTitle} — ${dateLabel}`)
   sections.push(wsLabel)
   sections.push('')
 
@@ -185,6 +202,16 @@ export async function POST(request: Request) {
       try {
         const apiKey = await getUserApiKey(user.id)
         if (apiKey) {
+          // Fetch user's custom report summary prompt (if any)
+          const svc = createServiceClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SECRET_KEY!)
+          const { data: promptOverride } = await svc
+            .from('user_prompt_templates')
+            .select('prompt_text')
+            .eq('user_id', user.id)
+            .eq('prompt_key', 'report_summary')
+            .maybeSingle()
+          const reportPrompt = promptOverride?.prompt_text ?? REPORT_SUMMARY_DEFAULT_PROMPT
+
           const Anthropic = (await import('@anthropic-ai/sdk')).default
           const client = new Anthropic({ apiKey })
           const msg = await client.messages.create({
@@ -192,7 +219,7 @@ export async function POST(request: Request) {
             max_tokens: 500,
             messages: [{
               role: 'user',
-              content: `Summarize this work activity in 2-4 concise sentences. Focus on key accomplishments, blockers, and priorities:\n\n${contentText.slice(0, 4000)}`,
+              content: `${reportPrompt}\n\n${contentText.slice(0, 4000)}`,
             }],
           })
           const summary = msg.content[0].type === 'text' ? msg.content[0].text : ''
@@ -207,34 +234,52 @@ export async function POST(request: Request) {
   }
 
   if (!body.summaryOnly) {
+    if (body.includeAiSummary) {
+      sections.push('————————————————————————————————')
+      sections.push('')
+      sections.push('DETAIL')
+      sections.push('')
+    }
     if (priorityTasks.length > 0) {
       sections.push('TOP PRIORITIES')
-      for (const t of priorityTasks) {
-        sections.push(`• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type, userDateFmt, userTimeFmt)}` : ''}`)
+      for (const [ws, items] of groupByWorkspace(priorityTasks)) {
+        sections.push(`[${ws}]`)
+        for (const t of items) {
+          sections.push(`• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type, userDateFmt, userTimeFmt)}` : ''}`)
+        }
       }
       sections.push('')
     }
 
     if (workedOn.length > 0) {
       sections.push('WORKED ON')
-      for (const w of workedOn) {
-        sections.push(`• ${truncate(stripHTML(w.content))}`)
+      for (const [ws, items] of groupByWorkspace(workedOn)) {
+        sections.push(`[${ws}]`)
+        for (const w of items) {
+          sections.push(`• ${truncate(stripHTML(w.content))}`)
+        }
       }
       sections.push('')
     }
 
     if (completed.length > 0) {
       sections.push('COMPLETED')
-      for (const c of completed) {
-        sections.push(`• ${truncate(stripHTML(c.content))} — Owner: ${personName(c.owner_id)}`)
+      for (const [ws, items] of groupByWorkspace(completed)) {
+        sections.push(`[${ws}]`)
+        for (const c of items) {
+          sections.push(`• ${truncate(stripHTML(c.content))} — Owner: ${personName(c.owner_id)}`)
+        }
       }
       sections.push('')
     }
 
     if (pastDue.length > 0) {
       sections.push('PAST DUE')
-      for (const p of pastDue) {
-        sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type, userDateFmt, userTimeFmt)} — Owner: ${personName(p.owner_id)}`)
+      for (const [ws, items] of groupByWorkspace(pastDue)) {
+        sections.push(`[${ws}]`)
+        for (const p of items) {
+          sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type, userDateFmt, userTimeFmt)} — Owner: ${personName(p.owner_id)}`)
+        }
       }
       sections.push('')
     }
@@ -246,7 +291,7 @@ export async function POST(request: Request) {
   }
 
   const report = sections.join('\n')
-  const subject = `Report — ${dateFrom === dateTo ? dateFrom : `${dateFrom} to ${dateTo}`} — ${wsLabel}`
+  const subject = `${reportTitle} — ${dateFrom === dateTo ? dateFrom : `${dateFrom} to ${dateTo}`}`
 
   return Response.json({ report, subject })
 }

@@ -55,7 +55,7 @@ function resolveDateRange(type: string, customFrom?: string | null, customTo?: s
   }
 }
 
-type Step = 'menu' | 'config' | 'preview' | 'success'
+type Step = 'menu' | 'config' | 'preview'
 
 interface Props { userId: string; onClose: () => void }
 
@@ -78,13 +78,11 @@ export function ReportModal({ userId, onClose }: Props) {
   const [entryTypeFilter, setEntryTypeFilter] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
 
-  // Preview/send state
+  // Preview state
   const [report, setReport] = useState('')
   const [subject, setSubject] = useState('')
-  const [recipientEmails, setRecipientEmails] = useState<string[]>([])
-  const [newRecipient, setNewRecipient] = useState('')
   const [generating, setGenerating] = useState(false)
-  const [sending, setSending] = useState(false)
+  const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -113,7 +111,6 @@ export function ReportModal({ userId, onClose }: Props) {
     setSummaryOnly(tpl.summary_only)
     setEntryTypeFilter(tpl.entry_type_filter)
     setStatusFilter(tpl.status_filter)
-    setRecipientEmails(tpl.recipient_emails)
     setStep('config')
   }
 
@@ -128,7 +125,6 @@ export function ReportModal({ userId, onClose }: Props) {
     setSummaryOnly(false)
     setEntryTypeFilter(null)
     setStatusFilter(null)
-    setRecipientEmails([])
     setStep('config')
   }
 
@@ -143,7 +139,7 @@ export function ReportModal({ userId, onClose }: Props) {
       workspace_ids: Array.from(selectedWorkspaces),
       include_ai_summary: includeAiSummary,
       summary_only: summaryOnly,
-      recipient_emails: recipientEmails,
+      recipient_emails: [],
       entry_type_filter: entryTypeFilter,
       status_filter: statusFilter,
     }
@@ -184,6 +180,7 @@ export function ReportModal({ userId, onClose }: Props) {
           summaryOnly,
           entryTypeFilter,
           statusFilter,
+          templateName,
         }),
       })
       if (!res.ok) { setError('Failed to generate report'); return }
@@ -198,34 +195,22 @@ export function ReportModal({ userId, onClose }: Props) {
     }
   }
 
-  async function sendReport() {
-    if (recipientEmails.length === 0) { setError('Add at least one recipient email'); return }
-    setSending(true)
-    setError(null)
-    try {
-      const res = await fetch('/api/report/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: recipientEmails, subject, body: report }),
-      })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        setError(data.error ?? 'Failed to send report')
-        return
-      }
-      setStep('success')
-    } catch {
-      setError('Failed to send report')
-    } finally {
-      setSending(false)
-    }
+  async function copyToClipboard() {
+    const text = subject ? `${subject}\n\n${report}` : report
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
-  function addRecipient() {
-    const email = newRecipient.trim()
-    if (!email || recipientEmails.includes(email)) return
-    setRecipientEmails(prev => [...prev, email])
-    setNewRecipient('')
+  function downloadReport() {
+    const text = subject ? `${subject}\n\n${report}` : report
+    const blob = new Blob([text], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${(templateName || 'Report').replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toISOString().split('T')[0]}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   function toggleWorkspace(wsId: string) {
@@ -250,7 +235,6 @@ export function ReportModal({ userId, onClose }: Props) {
             {step === 'menu' && 'Make Report'}
             {step === 'config' && (templateId ? templateName || 'Edit Report' : 'New Report')}
             {step === 'preview' && 'Preview Report'}
-            {step === 'success' && 'Report Sent'}
           </h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
@@ -363,18 +347,35 @@ export function ReportModal({ userId, onClose }: Props) {
               </div>
             </div>
 
-            {/* AI summary options */}
+            {/* Report content options */}
             <div className="space-y-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Include</label>
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={includeAiSummary} onChange={(e) => { setIncludeAiSummary(e.target.checked); if (!e.target.checked) setSummaryOnly(false) }} className="rounded border-gray-300 text-amber-600 focus:ring-amber-300" />
-                <span className="text-sm text-gray-700">Include AI summary</span>
+                <input
+                  type="checkbox"
+                  checked={includeAiSummary}
+                  onChange={(e) => {
+                    // Don't allow unchecking if it's the only one checked
+                    if (!e.target.checked && summaryOnly) return
+                    setIncludeAiSummary(e.target.checked)
+                  }}
+                  className="rounded border-gray-300 text-amber-600 focus:ring-amber-300"
+                />
+                <span className="text-sm text-gray-700">AI Summary</span>
               </label>
-              {includeAiSummary && (
-                <label className="flex items-center gap-2 cursor-pointer pl-5">
-                  <input type="checkbox" checked={summaryOnly} onChange={(e) => setSummaryOnly(e.target.checked)} className="rounded border-gray-300 text-amber-600 focus:ring-amber-300" />
-                  <span className="text-sm text-gray-600">Summary only (no detail)</span>
-                </label>
-              )}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!summaryOnly}
+                  onChange={(e) => {
+                    // Don't allow unchecking if it's the only one checked
+                    if (!e.target.checked && !includeAiSummary) return
+                    setSummaryOnly(!e.target.checked)
+                  }}
+                  className="rounded border-gray-300 text-amber-600 focus:ring-amber-300"
+                />
+                <span className="text-sm text-gray-700">Detailed Entries</span>
+              </label>
             </div>
 
             {error && <p className="text-xs text-red-600">{error}</p>}
@@ -398,48 +399,12 @@ export function ReportModal({ userId, onClose }: Props) {
               />
             </div>
 
-            {/* Recipients */}
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Send to</label>
-              <div className="flex flex-wrap gap-1 mb-1.5">
-                {recipientEmails.map(email => (
-                  <span key={email} className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded-full text-[11px] text-gray-600">
-                    {email}
-                    <button onClick={() => setRecipientEmails(prev => prev.filter(e => e !== email))} className="text-gray-400 hover:text-red-500">
-                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                    </button>
-                  </span>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="email"
-                  value={newRecipient}
-                  onChange={(e) => setNewRecipient(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRecipient() } }}
-                  placeholder="email@example.com"
-                  className={`flex-1 ${inputClass}`}
-                />
-                <button onClick={addRecipient} className="px-3 py-1.5 text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg">Add</button>
-              </div>
-            </div>
-
             {error && <p className="text-xs text-red-600">{error}</p>}
           </div>
         )}
 
-        {/* ── Step: Success ──────────────────────────────── */}
-        {step === 'success' && (
-          <div className="px-5 py-10 text-center">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-green-500 mb-3"><polyline points="20 6 9 17 4 12" /></svg>
-            <p className="text-sm font-medium text-gray-900">Report sent!</p>
-            <p className="text-xs text-gray-400 mt-1">Sent to {recipientEmails.join(', ')}</p>
-            <button onClick={onClose} className="mt-4 px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Close</button>
-          </div>
-        )}
-
         {/* ── Footer ─────────────────────────────────────── */}
-        {step !== 'success' && (
+        {(
           <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
             {step === 'menu' && (
               <>
@@ -471,13 +436,11 @@ export function ReportModal({ userId, onClose }: Props) {
               <>
                 <button onClick={() => { setStep('config'); setError(null) }} className={btnSecondary}>Back</button>
                 <div className="flex items-center gap-2">
-                  {templateId && (
-                    <button onClick={saveTemplate} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
-                      Update Template
-                    </button>
-                  )}
-                  <button onClick={sendReport} disabled={sending || recipientEmails.length === 0} className={btnPrimary}>
-                    {sending ? 'Sending…' : 'Send Report'}
+                  <button onClick={downloadReport} className={btnSecondary}>
+                    Download
+                  </button>
+                  <button onClick={copyToClipboard} className={btnPrimary}>
+                    {copied ? 'Copied!' : 'Copy to Clipboard'}
                   </button>
                 </div>
               </>

@@ -214,6 +214,20 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
               </div>
             </div>
           </section>
+
+          {/* Sign out */}
+          <section>
+            <button
+              onClick={async () => {
+                const supabase = createClient()
+                await supabase.auth.signOut()
+                window.location.href = '/login'
+              }}
+              className="w-full text-sm text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg py-2 transition-colors"
+            >
+              Sign Out
+            </button>
+          </section>
         </div>
       </div>
     </>
