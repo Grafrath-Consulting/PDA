@@ -2792,7 +2792,7 @@ export function JournalBlock(props: Props) {
               return time ? `${date}T${time}:00` : `${date}T00:00:00`
             }
             function setStartValidated(ts: string | null) {
-              if (ts && block.due_date) {
+              if (ts && block?.due_date) {
                 const startDay = ts.split('T')[0]
                 const dueDay = block.due_date.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '').split('T')[0]
                 if (startDay > dueDay) { showDateWarning('Start date cannot be after due date'); return }
@@ -2859,7 +2859,7 @@ export function JournalBlock(props: Props) {
                 return
               }
               // Prevent due date before start_date
-              if (block.start_date) {
+              if (block?.start_date) {
                 const startDay = block.start_date.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '').split('T')[0]
                 if (newDate < startDay) { showDateWarning('Due date cannot be before start date'); return }
               }

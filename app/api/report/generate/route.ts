@@ -100,14 +100,15 @@ export async function POST(request: Request) {
   }
 
   // Group blocks by workspace, preserving order within each group
-  function groupByWorkspace(blocks: BlockRow[]): Map<string, BlockRow[]> {
-    const groups = new Map<string, BlockRow[]>()
+  function groupByWorkspace(blocks: BlockRow[]): { name: string; items: BlockRow[] }[] {
+    const map: Record<string, BlockRow[]> = {}
+    const order: string[] = []
     for (const b of blocks) {
       const name = wsName(b.workspace_id)
-      if (!groups.has(name)) groups.set(name, [])
-      groups.get(name)!.push(b)
+      if (!map[name]) { map[name] = []; order.push(name) }
+      map[name].push(b)
     }
-    return groups
+    return order.map(name => ({ name, items: map[name] }))
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -242,7 +243,7 @@ export async function POST(request: Request) {
     }
     if (priorityTasks.length > 0) {
       sections.push('TOP PRIORITIES')
-      for (const [ws, items] of groupByWorkspace(priorityTasks)) {
+      for (const { name: ws, items } of groupByWorkspace(priorityTasks)) {
         sections.push(`[${ws}]`)
         for (const t of items) {
           sections.push(`• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type, userDateFmt, userTimeFmt)}` : ''}`)
@@ -253,7 +254,7 @@ export async function POST(request: Request) {
 
     if (workedOn.length > 0) {
       sections.push('WORKED ON')
-      for (const [ws, items] of groupByWorkspace(workedOn)) {
+      for (const { name: ws, items } of groupByWorkspace(workedOn)) {
         sections.push(`[${ws}]`)
         for (const w of items) {
           sections.push(`• ${truncate(stripHTML(w.content))}`)
@@ -264,7 +265,7 @@ export async function POST(request: Request) {
 
     if (completed.length > 0) {
       sections.push('COMPLETED')
-      for (const [ws, items] of groupByWorkspace(completed)) {
+      for (const { name: ws, items } of groupByWorkspace(completed)) {
         sections.push(`[${ws}]`)
         for (const c of items) {
           sections.push(`• ${truncate(stripHTML(c.content))} — Owner: ${personName(c.owner_id)}`)
@@ -275,7 +276,7 @@ export async function POST(request: Request) {
 
     if (pastDue.length > 0) {
       sections.push('PAST DUE')
-      for (const [ws, items] of groupByWorkspace(pastDue)) {
+      for (const { name: ws, items } of groupByWorkspace(pastDue)) {
         sections.push(`[${ws}]`)
         for (const p of items) {
           sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type, userDateFmt, userTimeFmt)} — Owner: ${personName(p.owner_id)}`)
