@@ -559,14 +559,15 @@ export function JournalPage({ userId, email, displayName }: Props) {
       setBlocks(prev => {
         const existing = new Map(prev.map(b => [b.id, b]))
         let updated = [...prev]
+        const addedIds = new Set<string>()
 
         for (const r of remote) {
           const local = existing.get(r.id)
           if (!local) {
-            // New block from another device — add to feed
-            // Only add active blocks when viewing active status
-            if (r.status === 'active' && !r.deleted_at && filterStatusesRef.current.has('active')) {
+            // New block from another device — add to feed (deduplicate within this batch)
+            if (r.status === 'active' && !r.deleted_at && filterStatusesRef.current.has('active') && !addedIds.has(r.id)) {
               updated = [r, ...updated]
+              addedIds.add(r.id)
             }
           } else {
             // Existing block updated remotely — merge metadata + content
@@ -637,7 +638,13 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const minOrder = blocks.reduce((m, b) => Math.min(m, b.sort_order, 0), 0)
     const newOrder = minOrder - 1
     const withOrder = { ...block, sort_order: newOrder }
-    setBlocks(prev => [withOrder, ...prev])
+    setBlocks(prev => {
+      // Avoid duplicate if sync poll already added this block
+      if (prev.some(b => b.id === block.id)) {
+        return prev.map(b => b.id === block.id ? withOrder : b)
+      }
+      return [withOrder, ...prev]
+    })
     // Always persist sort_order so it's never null
     const supabase = createClient()
     supabase.from('journal_blocks')

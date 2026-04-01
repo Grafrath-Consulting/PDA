@@ -185,6 +185,20 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose }: Props) 
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   }
 
+  function formatStartDate(startDate: string | null): string {
+    if (!startDate) return ''
+    const d = new Date(startDate)
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const sd = new Date(d)
+    sd.setHours(0, 0, 0, 0)
+    const diff = Math.round((sd.getTime() - today.getTime()) / 86400000)
+    if (diff < 0) return `Started ${Math.abs(diff)}d ago`
+    if (diff === 0) return 'Starts today'
+    if (diff === 1) return 'Starts tomorrow'
+    return `Starts ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+  }
+
   function renderTask(task: TaskItem, showDueLabel = true) {
     const color = wsColor(task.workspace_id)
     const owner = personName(task.owner_id)
@@ -224,7 +238,7 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose }: Props) 
             )}
             {task.start_date && (
               <span className="text-[10px] text-blue-400">
-                Starts {formatDueDate(task.start_date)}
+                {formatStartDate(task.start_date)}
               </span>
             )}
           </div>
