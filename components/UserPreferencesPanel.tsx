@@ -15,6 +15,8 @@ interface Props {
   onClose: () => void
   onAutosaveChange?: (seconds: number) => void
   onSyncIntervalChange?: (seconds: number) => void
+  feedCollapseLines?: number
+  onFeedCollapseLinesChange?: (lines: number) => void
 }
 
 const INTERVAL_OPTIONS = [
@@ -48,11 +50,25 @@ const TIME_FORMAT_OPTIONS: { value: TimeFormatOption; label: string; example: st
 
 const selectClass = "w-full text-sm text-gray-800 border border-[#E5E0D0] rounded-lg px-3 py-2 bg-white outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-300 transition-colors"
 
-export function UserPreferencesPanel({ email, displayName, userId, open, onClose, onAutosaveChange, onSyncIntervalChange }: Props) {
+const COLLAPSE_LINE_OPTIONS = [
+  { value: 5, label: '5 lines' },
+  { value: 8, label: '8 lines' },
+  { value: 10, label: '10 lines' },
+  { value: 15, label: '15 lines' },
+  { value: 20, label: '20 lines' },
+  { value: 30, label: '30 lines' },
+]
+
+export function UserPreferencesPanel({ email, displayName, userId, open, onClose, onAutosaveChange, onSyncIntervalChange, feedCollapseLines: feedCollapseLinesFromProps, onFeedCollapseLinesChange }: Props) {
   const [autosaveInterval, setAutosaveInterval] = useState(30)
   const [syncInterval, setSyncInterval] = useState(60)
+  const [collapseLines, setCollapseLines] = useState(feedCollapseLinesFromProps ?? 10)
   const [saving, setSaving] = useState(false)
   const { dateFormat, timeFormat, setDateFormat, setTimeFormat } = useDateFormat()
+
+  useEffect(() => {
+    if (feedCollapseLinesFromProps != null) setCollapseLines(feedCollapseLinesFromProps)
+  }, [feedCollapseLinesFromProps])
 
   useEffect(() => {
     if (!open) return
@@ -94,6 +110,18 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
       .eq('id', userId)
     setSaving(false)
     onSyncIntervalChange?.(value)
+  }
+
+  async function handleCollapseLinesChange(value: number) {
+    setCollapseLines(value)
+    setSaving(true)
+    const supabase = createClient()
+    await supabase
+      .from('profiles')
+      .update({ feed_collapse_lines: value })
+      .eq('id', userId)
+    setSaving(false)
+    onFeedCollapseLinesChange?.(value)
   }
 
   if (!open) return null
@@ -210,6 +238,24 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
                 </select>
                 <p className="text-xs text-gray-400 mt-1">
                   How often to check for changes made on other devices.
+                </p>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Card collapse threshold</label>
+                <select
+                  value={collapseLines}
+                  onChange={(e) => handleCollapseLinesChange(Number(e.target.value))}
+                  disabled={saving}
+                  className={selectClass}
+                >
+                  {COLLAPSE_LINE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-400 mt-1">
+                  Cards longer than this are collapsed in the feed when collapse mode is active.
                 </p>
               </div>
             </div>

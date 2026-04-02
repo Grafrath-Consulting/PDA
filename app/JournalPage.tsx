@@ -32,6 +32,7 @@ const DEFAULT_SYNC_INTERVAL = 60
 const MIN_SYNC_INTERVAL = 5
 const SORT_MODE_KEY = 'journal-sort-mode'
 const ADVANCED_OPEN_KEY = 'search-advanced-open'
+const FEED_COLLAPSED_KEY = 'feed-collapsed'
 
 type SortMode = 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc' | 'due_date' | 'manual'
 
@@ -142,6 +143,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
   filterDeletedToRef.current = filterDeletedTo
   const filterAssigneeRef = useRef(filterAssignee)
   filterAssigneeRef.current = filterAssignee
+  const [feedCollapsed, setFeedCollapsed] = useState(true)
+  const [feedCollapseLines, setFeedCollapseLines] = useState(10)
   const [prefsOpen, setPrefsOpen] = useState(false)
   const [peopleModalOpen, setPeopleModalOpen] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -158,6 +161,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
     if (sort === 'manual' || sort === 'created_desc') setSortMode(sort)
     const adv = localStorage.getItem(ADVANCED_OPEN_KEY)
     if (adv !== null) setAdvancedOpen(adv === 'true')
+    const fc = localStorage.getItem(FEED_COLLAPSED_KEY)
+    if (fc !== null) setFeedCollapsed(fc === 'true')
   }, [])
 
   // Fetch people list for @mention support
@@ -290,7 +295,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const supabase = createClient()
     supabase
       .from('profiles')
-      .select('autosave_interval_seconds, sync_interval_seconds, journal_sort_mode, ws_select_mode, ws_selected_ids')
+      .select('autosave_interval_seconds, sync_interval_seconds, journal_sort_mode, ws_select_mode, ws_selected_ids, feed_collapse_lines')
       .eq('id', userId)
       .single()
       .then(({ data }) => {
@@ -311,6 +316,9 @@ export function JournalPage({ userId, email, displayName }: Props) {
             setSelectedWsIds(new Set(ids))
             rememberedWsIdsRef.current = new Set(ids)
           }
+        }
+        if (data?.feed_collapse_lines != null) {
+          setFeedCollapseLines(data.feed_collapse_lines)
         }
       })
   }, [userId])
@@ -1226,6 +1234,32 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 </div>
               )}
             </div>
+            {/* Expand/Collapse feed toggle */}
+            <button
+              onClick={() => {
+                const next = !feedCollapsed
+                setFeedCollapsed(next)
+                localStorage.setItem(FEED_COLLAPSED_KEY, String(next))
+              }}
+              title={feedCollapsed ? 'Click to expand cards' : 'Click to collapse cards'}
+              className={`flex-shrink-0 p-1 rounded-lg transition-colors ${feedCollapsed ? 'text-gray-400 hover:text-gray-600' : 'text-amber-700'}`}
+            >
+              {feedCollapsed ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 14 10 14 10 20" />
+                  <polyline points="20 10 14 10 14 4" />
+                  <line x1="14" y1="10" x2="21" y2="3" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="15 3 21 3 21 9" />
+                  <polyline points="9 21 3 21 3 15" />
+                  <line x1="21" y1="3" x2="14" y2="10" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              )}
+            </button>
             {/* Manage Properties button — before property pills */}
             <button
               onClick={() => setPropsManagerOpen(true)}
@@ -1609,6 +1643,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
               similarityScores={searchMode === 'smart' ? smartSearchScores : undefined}
               matchedChunks={searchMode === 'smart' ? smartSearchChunks : undefined}
               people={peopleList}
+              feedCollapsed={feedCollapsed}
+              collapseLines={feedCollapseLines}
               hasActiveFilters={
                 !!debouncedSearch ||
                 activePropertyFilters.size > 0 ||
@@ -1700,6 +1736,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
         open={prefsOpen}
         onClose={() => setPrefsOpen(false)}
         onSyncIntervalChange={(s) => setSyncInterval(Math.max(MIN_SYNC_INTERVAL, s))}
+        feedCollapseLines={feedCollapseLines}
+        onFeedCollapseLinesChange={(lines) => setFeedCollapseLines(lines)}
       />
 
       <PeopleModal open={peopleModalOpen} onClose={() => { setPeopleModalOpen(false); fetchPeople() }} userId={userId} />

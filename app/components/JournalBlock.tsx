@@ -128,6 +128,8 @@ interface BaseProps {
   formattingVisible: boolean
   onToggleFormatting: () => void
   people?: { id: string; name: string }[]
+  feedCollapsed?: boolean
+  collapseLines?: number
 }
 
 interface NewEntryProps extends BaseProps {
@@ -546,8 +548,11 @@ function trashIcon() {
 let deactivatePreviousBlock: (() => void) | null = null
 
 export function JournalBlock(props: Props) {
-  const { autosaveInterval = 30, formattingVisible, onToggleFormatting } = props
+  const { autosaveInterval = 30, formattingVisible, onToggleFormatting, feedCollapsed, collapseLines = 10 } = props
   const isNewEntry = !props.block
+  const [cardExpanded, setCardExpanded] = useState(false)
+  // Reset per-card expansion when global collapse is re-enabled
+  useEffect(() => { if (feedCollapsed) setCardExpanded(false) }, [feedCollapsed])
   const currentUserId = isNewEntry ? (props as NewEntryProps).userId : props.block!.user_id
   const { activeWorkspace, activeScheme, activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
   const { propertiesForWorkspace } = useProperties()
@@ -612,6 +617,8 @@ export function JournalBlock(props: Props) {
   const editorHandleRef = useRef<TipTapEditorHandle | null>(null)
   const getEditor = () => editorRef.current ?? editorHandleRef.current
   const cardRef = useRef<HTMLDivElement>(null)
+  const contentMeasureRef = useRef<HTMLDivElement>(null)
+  const [isContentTall, setIsContentTall] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const addPropertyBtnRef = useRef<HTMLButtonElement>(null)
@@ -2034,6 +2041,33 @@ export function JournalBlock(props: Props) {
   const contentHTML = block ? toEditorHTML(block.content) : ''
   const showToolbar = focused && formattingVisible
 
+  // Measure content height for collapse/expand using ResizeObserver
+  // so we detect height after TipTap renders its content asynchronously
+  const lineHeightPx = 24
+  const collapseMaxHeight = collapseLines * lineHeightPx
+  useEffect(() => {
+    if (isNewEntry) return
+    const el = contentMeasureRef.current
+    if (!el) return
+    function measure() {
+      const prev = el!.style.maxHeight
+      const prevOverflow = el!.style.overflow
+      el!.style.maxHeight = 'none'
+      el!.style.overflow = 'visible'
+      const natural = el!.scrollHeight
+      el!.style.maxHeight = prev
+      el!.style.overflow = prevOverflow
+      setIsContentTall(natural > collapseMaxHeight + lineHeightPx)
+    }
+    measure()
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [collapseMaxHeight, isNewEntry])
+
+  // Whether this card is currently visually collapsed
+  const shouldCollapse = !isNewEntry && !focused && isContentTall && feedCollapsed && !cardExpanded
+
   const isTask = isNewEntry ? pendingEntryType === 'task' : block?.entry_type === 'task'
   const isComplete = block?.task_status === 'done'
 
@@ -2406,7 +2440,9 @@ export function JournalBlock(props: Props) {
 
       {/* ── CONTENT ── */}
       <div
+        ref={contentMeasureRef}
         className={`relative px-4 pb-0 ${showToolbar ? 'pt-1' : 'pt-2'}`}
+        style={shouldCollapse ? { maxHeight: `${collapseMaxHeight}px`, overflow: 'hidden' } : undefined}
         onKeyDown={handleEditorKeyDown}
         onFocus={() => {
           if (isNewEntry) {
@@ -2418,6 +2454,13 @@ export function JournalBlock(props: Props) {
         onBlur={handleBlur}
         onContextMenu={handleContextMenu}
       >
+        {/* Fade overlay when collapsed */}
+        {shouldCollapse && (
+          <div
+            className="absolute bottom-0 left-0 right-0 h-16 z-[1] pointer-events-none"
+            style={{ background: 'linear-gradient(transparent, white)' }}
+          />
+        )}
         <div className={`${summarizing ? 'opacity-30 pointer-events-none' : ''} ${isComplete && !focused ? 'opacity-50 line-through decoration-gray-400' : ''}`}>
           <TipTapEditor
             key={isNewEntry ? editorKey : undefined}
@@ -2507,7 +2550,32 @@ export function JournalBlock(props: Props) {
           </div>,
           document.body
         )}
+        {/* "Show less" overlay centered in card when expanded & tall */}
+        {!isNewEntry && !focused && isContentTall && !shouldCollapse && (
+          <div className="flex justify-center py-1">
+            <button
+              onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+              onClick={(e) => { e.stopPropagation(); setCardExpanded(false) }}
+              className="text-xs text-amber-600 hover:text-amber-700 hover:underline cursor-pointer"
+            >
+              Show less
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* ── EXPAND / COLLAPSE LINK ── */}
+      {!isNewEntry && !focused && isContentTall && shouldCollapse && (
+        <div className="flex justify-center pb-1 pt-0">
+          <button
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onClick={(e) => { e.stopPropagation(); setCardExpanded(true) }}
+            className="text-xs text-amber-600 hover:text-amber-700 hover:underline cursor-pointer"
+          >
+            Show more
+          </button>
+        </div>
+      )}
 
       {/* ── ATTACHMENTS + UPLOADING INDICATOR ── */}
       {(block && attachments.length > 0) || (isNewEntry && pendingFiles.length > 0) || uploading ? (

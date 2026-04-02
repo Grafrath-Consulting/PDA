@@ -30,6 +30,8 @@ interface Props {
   similarityScores?: Record<string, number>
   matchedChunks?: Record<string, string>
   people?: { id: string; name: string }[]
+  feedCollapsed?: boolean
+  collapseLines?: number
   hasActiveFilters?: boolean
   totalUnfilteredCount?: number
   onClearAllFilters?: () => void
@@ -102,6 +104,8 @@ export function BlockFeed({
   similarityScores,
   matchedChunks,
   people,
+  feedCollapsed,
+  collapseLines,
   hasActiveFilters,
   totalUnfilteredCount,
   onClearAllFilters,
@@ -198,6 +202,8 @@ export function BlockFeed({
         searchHighlight={blockHighlight}
         matchedChunk={matchedChunks?.[block.id]}
         people={people}
+        feedCollapsed={feedCollapsed}
+        collapseLines={collapseLines}
       />
     )
   }
