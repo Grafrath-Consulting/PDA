@@ -65,7 +65,7 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
     setAllProperties(
       (props as Omit<Property, 'values'>[]).map(p => ({
         ...p,
-        values: valuesByProp.get(p.id) ?? [],
+        values: (valuesByProp.get(p.id) ?? []).sort((a, b) => a.label.localeCompare(b.label)),
       }))
     )
   }, [userId])
