@@ -2640,7 +2640,7 @@ export function JournalBlock(props: Props) {
       {isNewEntry && isTask && (
         <div
           className="flex items-center gap-3 px-4 py-1.5 border-t border-gray-100 flex-wrap"
-          onMouseDown={(e) => { e.stopPropagation() }}
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
         >
           <div className="flex items-center gap-0.5">
             {([
@@ -2794,7 +2794,7 @@ export function JournalBlock(props: Props) {
       {block && isTask && (
         <div
           className="flex items-center gap-3 px-4 py-1.5 border-t border-gray-100 flex-wrap"
-          onMouseDown={(e) => { e.stopPropagation() }}
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
         >
           <div className="flex items-center gap-0.5">
             {([
