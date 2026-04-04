@@ -33,6 +33,9 @@ const MIN_SYNC_INTERVAL = 5
 const SORT_MODE_KEY = 'journal-sort-mode'
 const ADVANCED_OPEN_KEY = 'search-advanced-open'
 const FEED_COLLAPSED_KEY = 'feed-collapsed'
+const FILTERS_KEY = 'journal-filters'
+
+const VALID_SORT_MODES: SortMode[] = ['created_desc', 'created_asc', 'modified_desc', 'modified_asc', 'due_date', 'manual']
 
 type SortMode = 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc' | 'due_date' | 'manual'
 
@@ -158,11 +161,37 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const fmt = localStorage.getItem(FORMATTING_VISIBLE_KEY)
     if (fmt === 'true') setFormattingVisible(true)
     const sort = localStorage.getItem(SORT_MODE_KEY)
-    if (sort === 'manual' || sort === 'created_desc') setSortMode(sort)
+    if (sort && VALID_SORT_MODES.includes(sort as SortMode)) setSortMode(sort as SortMode)
     const adv = localStorage.getItem(ADVANCED_OPEN_KEY)
     if (adv !== null) setAdvancedOpen(adv === 'true')
     const fc = localStorage.getItem(FEED_COLLAPSED_KEY)
     if (fc !== null) setFeedCollapsed(fc === 'true')
+    // Restore saved filters
+    try {
+      const raw = localStorage.getItem(FILTERS_KEY)
+      if (raw) {
+        const f = JSON.parse(raw)
+        if (f.entryTypes?.length) setFilterEntryTypes(new Set(f.entryTypes))
+        if (f.statuses?.length) setFilterStatuses(new Set(f.statuses))
+        if (f.dateFrom) setFilterDateFrom(f.dateFrom)
+        if (f.dateTo) setFilterDateTo(f.dateTo)
+        if (f.modifiedFrom) setFilterModifiedFrom(f.modifiedFrom)
+        if (f.modifiedTo) setFilterModifiedTo(f.modifiedTo)
+        if (f.dueFrom) setFilterDueFrom(f.dueFrom)
+        if (f.dueTo) setFilterDueTo(f.dueTo)
+        if (f.startFrom) setFilterStartFrom(f.startFrom)
+        if (f.startTo) setFilterStartTo(f.startTo)
+        if (f.archivedFrom) setFilterArchivedFrom(f.archivedFrom)
+        if (f.archivedTo) setFilterArchivedTo(f.archivedTo)
+        if (f.deletedFrom) setFilterDeletedFrom(f.deletedFrom)
+        if (f.deletedTo) setFilterDeletedTo(f.deletedTo)
+        if (f.assignee) setFilterAssignee(f.assignee)
+        if (f.contextFilter) setContextFilter(f.contextFilter)
+        if (f.propertyFilters?.length) setActivePropertyFilters(new Set(f.propertyFilters))
+        if (f.searchMode) setSearchMode(f.searchMode)
+      }
+    } catch {}
+
   }, [])
 
   // Fetch people list for @mention support
@@ -207,6 +236,37 @@ export function JournalPage({ userId, email, displayName }: Props) {
       return next
     })
   }
+
+  // Persist filter selections to localStorage
+  const filtersInitialised = useRef(false)
+  useEffect(() => {
+    // Skip the initial render (loading from localStorage)
+    if (!filtersInitialised.current) { filtersInitialised.current = true; return }
+    const f: Record<string, unknown> = {}
+    if (filterEntryTypes.size < 2) f.entryTypes = Array.from(filterEntryTypes)
+    if (filterStatuses.size !== 1 || !filterStatuses.has('active')) f.statuses = Array.from(filterStatuses)
+    if (filterDateFrom) f.dateFrom = filterDateFrom
+    if (filterDateTo) f.dateTo = filterDateTo
+    if (filterModifiedFrom) f.modifiedFrom = filterModifiedFrom
+    if (filterModifiedTo) f.modifiedTo = filterModifiedTo
+    if (filterDueFrom) f.dueFrom = filterDueFrom
+    if (filterDueTo) f.dueTo = filterDueTo
+    if (filterStartFrom) f.startFrom = filterStartFrom
+    if (filterStartTo) f.startTo = filterStartTo
+    if (filterArchivedFrom) f.archivedFrom = filterArchivedFrom
+    if (filterArchivedTo) f.archivedTo = filterArchivedTo
+    if (filterDeletedFrom) f.deletedFrom = filterDeletedFrom
+    if (filterDeletedTo) f.deletedTo = filterDeletedTo
+    if (filterAssignee) f.assignee = filterAssignee
+    if (contextFilter) f.contextFilter = contextFilter
+    if (activePropertyFilters.size > 0) f.propertyFilters = Array.from(activePropertyFilters)
+    if (searchMode !== 'smart') f.searchMode = searchMode
+    if (Object.keys(f).length > 0) {
+      localStorage.setItem(FILTERS_KEY, JSON.stringify(f))
+    } else {
+      localStorage.removeItem(FILTERS_KEY)
+    }
+  }, [filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, contextFilter, activePropertyFilters, searchMode])
 
   const hasActiveSearch = searchText.length > 0
   const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo || !!filterStartFrom || !!filterStartTo || !!filterArchivedFrom || !!filterArchivedTo || !!filterDeletedFrom || !!filterDeletedTo || !!filterAssignee
@@ -1680,6 +1740,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 setFilterDeletedFrom('')
                 setFilterDeletedTo('')
                 setFilterAssignee('')
+                localStorage.removeItem(FILTERS_KEY)
               }}
               doneLoading={initialised && !switching && !loading}
             />
