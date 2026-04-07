@@ -2397,7 +2397,7 @@ export function JournalBlock(props: Props) {
         <div
           ref={popoverRef}
           className="absolute top-9 right-2 z-20 bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 min-w-[172px]"
-          onMouseDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
           onClick={(e) => e.stopPropagation()}
         >
           {popoverItems.map((item) => (

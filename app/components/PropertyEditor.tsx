@@ -184,7 +184,7 @@ export function PropertyEditor({ blockId, appliedValueIds, properties, onChanged
       ref={ref}
       className={usePortal ? '' : 'absolute left-full top-0 ml-2 z-40'}
       style={usePortal && pos ? { position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999 } : undefined}
-      onMouseDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
       onClick={(e) => e.stopPropagation()}
     >
       {/* Property list panel */}
