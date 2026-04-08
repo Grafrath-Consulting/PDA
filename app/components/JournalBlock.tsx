@@ -359,7 +359,7 @@ function AssigneeSelect({ value, people, userId, onChange, onPersonAdded }: {
         <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-gray-400"><polyline points="6 9 12 15 18 9" /></svg>
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl min-w-[200px] z-50 flex flex-col max-h-[280px]">
+        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl min-w-[200px] z-50 flex flex-col max-h-[280px]" onMouseDown={(e) => e.stopPropagation()}>
           {!adding ? (
             <>
               {/* Search input */}
@@ -2641,6 +2641,11 @@ export function JournalBlock(props: Props) {
         <div
           className="flex items-center gap-3 px-4 py-1.5 border-t border-gray-100 flex-wrap"
           onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onBlur={handleBlur}
+          onKeyDown={(e) => {
+            if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSave() }
+            if (e.key === 'Escape') { e.preventDefault(); handleSave() }
+          }}
         >
           <div className="flex items-center gap-0.5">
             {([
@@ -2795,6 +2800,11 @@ export function JournalBlock(props: Props) {
         <div
           className="flex items-center gap-3 px-4 py-1.5 border-t border-gray-100 flex-wrap"
           onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onBlur={handleBlur}
+          onKeyDown={(e) => {
+            if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveExistingBlock() }
+            if (e.key === 'Escape') { e.preventDefault(); deactivate() }
+          }}
         >
           <div className="flex items-center gap-0.5">
             {([
