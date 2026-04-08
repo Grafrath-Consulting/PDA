@@ -70,7 +70,13 @@ body {
 
 .tiptap-wrapper .tiptap p { margin: 0.25em 0; }
 .tiptap-wrapper .tiptap ul { list-style: disc; padding-left: 1.5em; margin: 0.25em 0; }
+.tiptap-wrapper .tiptap ul ul { list-style: circle; }
+.tiptap-wrapper .tiptap ul ul ul { list-style: square; }
+.tiptap-wrapper .tiptap ul ul ul ul { list-style: '– '; }
 .tiptap-wrapper .tiptap ol { list-style: decimal; padding-left: 1.5em; margin: 0.25em 0; }
+.tiptap-wrapper .tiptap ol ol { list-style: lower-alpha; }
+.tiptap-wrapper .tiptap ol ol ol { list-style: lower-roman; }
+.tiptap-wrapper .tiptap ol ol ol ol { list-style: upper-alpha; }
 .tiptap-wrapper .tiptap blockquote {
   border-left: 3px solid #E5E0D0;
   padding-left: 0.75em;
@@ -120,7 +126,13 @@ body {
 .ProseMirror p:empty,
 .ProseMirror p:has(> br:only-child) { min-height: 1.5rem; }
 .tiptap-content ul { list-style: disc; padding-left: 1.5em; margin: 0.25em 0; }
+.tiptap-content ul ul { list-style: circle; }
+.tiptap-content ul ul ul { list-style: square; }
+.tiptap-content ul ul ul ul { list-style: '– '; }
 .tiptap-content ol { list-style: decimal; padding-left: 1.5em; margin: 0.25em 0; }
+.tiptap-content ol ol { list-style: lower-alpha; }
+.tiptap-content ol ol ol { list-style: lower-roman; }
+.tiptap-content ol ol ol ol { list-style: upper-alpha; }
 .tiptap-content blockquote {
   border-left: 3px solid #E5E0D0;
   padding-left: 0.75em;
