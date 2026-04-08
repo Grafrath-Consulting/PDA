@@ -47,7 +47,7 @@ interface Props {
 
 export function JournalPage({ userId, email, displayName }: Props) {
   const { activeWorkspace, activeWorkspaceId, activeScheme, isGlobalView, hydrated, workspaces, setActiveWorkspace, refreshWorkspaces, reorderWorkspaces } = useWorkspace()
-  const { propertiesForWorkspace, allProperties } = useProperties()
+  const { propertiesForWorkspace, allProperties, refetch: refetchProperties } = useProperties()
   const { dateFormat } = useDateFormat()
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
@@ -1782,7 +1782,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
             setEditingWorkspace(null)
           }}
           onDeleted={async (_deletedId, targetId) => {
-            await refreshWorkspaces()
+            await Promise.all([refreshWorkspaces(), refetchProperties()])
             setActiveWorkspace(targetId)
             setCreateModalOpen(false)
             setEditingWorkspace(null)
@@ -2113,12 +2113,24 @@ function CreateWorkspaceModal({
       .eq('workspace_id', editingWorkspace.id)
     if (moveBlocksErr) { console.error(moveBlocksErr); setDeleting(false); return }
 
-    // Move workspace-scoped properties to target workspace
-    const { error: movePropsErr } = await supabase
+    // Move workspace-scoped properties, renaming on collision
+    const { data: srcProps } = await supabase
       .from('properties')
-      .update({ workspace_id: deleteTargetId })
+      .select('id, name')
       .eq('workspace_id', editingWorkspace.id)
-    if (movePropsErr) { console.error(movePropsErr); setDeleting(false); return }
+    const { data: destProps } = await supabase
+      .from('properties')
+      .select('id, name, workspace_id')
+      .or(`workspace_id.eq.${deleteTargetId},workspace_id.is.null`)
+    const destNames = new Set((destProps ?? []).map(p => p.name.toLowerCase()))
+    for (const prop of (srcProps ?? [])) {
+      const updates: Record<string, string> = { workspace_id: deleteTargetId }
+      if (destNames.has(prop.name.toLowerCase())) {
+        updates.name = `${prop.name} (From ${editingWorkspace.name})`
+      }
+      const { error } = await supabase.from('properties').update(updates).eq('id', prop.id)
+      if (error) { console.error(error); setDeleting(false); return }
+    }
 
     // If this was the default workspace, make the target the default
     if (editingWorkspace.is_default) {
@@ -2224,8 +2236,8 @@ function CreateWorkspaceModal({
           </label>
         </div>
 
-        {/* Delete workspace */}
-        {isEditing && otherWorkspaces.length > 0 && !showDeleteConfirm && (
+        {/* Delete workspace link */}
+        {isEditing && otherWorkspaces.length > 0 && (
           <div className="px-5 pb-1">
             <button
               onClick={() => { setDeleteTargetId(otherWorkspaces[0]?.id ?? null); setShowDeleteConfirm(true) }}
@@ -2233,55 +2245,6 @@ function CreateWorkspaceModal({
             >
               Delete this workspace...
             </button>
-          </div>
-        )}
-
-        {isEditing && showDeleteConfirm && (
-          <div className="mx-5 mb-2 p-3 border border-red-200 bg-red-50 rounded-lg space-y-3">
-            <div className="flex items-start gap-2">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
-                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                <line x1="12" y1="9" x2="12" y2="13" />
-                <line x1="12" y1="17" x2="12.01" y2="17" />
-              </svg>
-              <div>
-                <p className="text-sm font-medium text-red-800">Delete &ldquo;{editingWorkspace?.name}&rdquo;?</p>
-                <p className="text-xs text-red-600 mt-1">
-                  This cannot be undone. All entries and custom properties will be moved to the workspace you choose below.
-                </p>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-red-700 mb-1">Move everything to:</label>
-              <select
-                value={deleteTargetId ?? ''}
-                onChange={(e) => setDeleteTargetId(e.target.value)}
-                className="w-full px-3 py-1.5 text-sm text-gray-900 border border-red-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-red-300"
-              >
-                {otherWorkspaces.map(w => (
-                  <option key={w.id} value={w.id}>
-                    {w.emoji ? `${w.emoji} ` : ''}{w.name}{w.is_default ? ' (Default)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => setShowDeleteConfirm(false)}
-                className="px-3 py-1 text-xs text-gray-600 hover:bg-red-100 rounded transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={!deleteTargetId || deleting}
-                className="px-3 py-1 text-xs text-white bg-red-600 hover:bg-red-700 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {deleting ? 'Deleting...' : 'Delete Workspace'}
-              </button>
-            </div>
           </div>
         )}
 
@@ -2321,6 +2284,60 @@ function CreateWorkspaceModal({
                 autoFocus={true}
               />
             </Suspense>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {showDeleteConfirm && editingWorkspace && createPortal(
+        <div className="fixed inset-0 bg-black/40 z-[100000] flex items-center justify-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowDeleteConfirm(false) }}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="px-5 pt-5 pb-3 flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Delete &ldquo;{editingWorkspace.name}&rdquo;?</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  This cannot be undone. All entries and custom properties will be moved to the workspace you choose below.
+                </p>
+              </div>
+            </div>
+
+            <div className="px-5 pb-4">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Move everything to:</label>
+              <select
+                value={deleteTargetId ?? ''}
+                onChange={(e) => setDeleteTargetId(e.target.value)}
+                className="w-full px-3 py-1.5 text-sm text-gray-900 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-red-300"
+              >
+                {otherWorkspaces.map(w => (
+                  <option key={w.id} value={w.id}>
+                    {w.emoji ? `${w.emoji} ` : ''}{w.name}{w.is_default ? ' (Default)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={!deleteTargetId || deleting}
+                className="px-4 py-1.5 text-sm text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {deleting ? 'Deleting...' : 'Delete Workspace'}
+              </button>
+            </div>
           </div>
         </div>,
         document.body
