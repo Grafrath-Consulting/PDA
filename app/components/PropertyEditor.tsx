@@ -4,29 +4,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createClient } from '@/lib/supabase/client'
 import { Property } from '@/context/PropertiesContext'
+import { getPropertyColor } from '@/constants/propertyColors'
 
-const COLOR_MAP: Record<string, { bg: string; text: string }> = {
-  red:     { bg: '#FEE2E2', text: '#991B1B' },
-  amber:   { bg: '#FEF3C7', text: '#92400E' },
-  green:   { bg: '#D1FAE5', text: '#065F46' },
-  blue:    { bg: '#DBEAFE', text: '#1E40AF' },
-  indigo:  { bg: '#E0E7FF', text: '#3730A3' },
-  violet:  { bg: '#EDE9FE', text: '#5B21B6' },
-  pink:    { bg: '#FCE7F3', text: '#9D174D' },
-  gray:    { bg: '#F3F4F6', text: '#374151' },
-  rose:    { bg: '#FFE4E6', text: '#9F1239' },
-  orange:  { bg: '#FFEDD5', text: '#9A3412' },
-  teal:    { bg: '#CCFBF1', text: '#115E59' },
-  cyan:    { bg: '#CFFAFE', text: '#155E75' },
-  sky:     { bg: '#E0F2FE', text: '#075985' },
-  fuchsia: { bg: '#FAE8FF', text: '#86198F' },
-  lime:    { bg: '#ECFCCB', text: '#3F6212' },
-  slate:   { bg: '#F1F5F9', text: '#334155' },
-}
-const DEFAULT_COLOR = { bg: '#F3F4F6', text: '#374151' }
 function colorFor(color: string | null) {
-  if (!color) return DEFAULT_COLOR
-  return COLOR_MAP[color] ?? DEFAULT_COLOR
+  return getPropertyColor(color)
 }
 
 interface Props {

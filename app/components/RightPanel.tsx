@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useWorkspace } from '@/context/WorkspaceContext'
+import { useProperties } from '@/context/PropertiesContext'
 import { getScheme } from '@/constants/workspaceColorSchemes'
 
 interface TaskItem {
@@ -80,10 +81,14 @@ interface Props {
   refreshKey?: number
   onTaskClick?: (blockId: string) => void
   onClose?: () => void
+  activePropertyFilters?: Set<string>
 }
 
-export function RightPanel({ userId, refreshKey, onTaskClick, onClose }: Props) {
+export function RightPanel({ userId, refreshKey, onTaskClick, onClose, activePropertyFilters }: Props) {
   const { activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
+  const { allProperties, propertiesForWorkspace } = useProperties()
+  // Stable key for property filters to avoid re-fetching on every render
+  const propertyFiltersKey = activePropertyFilters ? Array.from(activePropertyFilters).sort().join(',') : ''
   const [dueTasks, setDueTasks] = useState<TaskItem[]>([])
   const [futureTasks, setFutureTasks] = useState<TaskItem[]>([])
   const [activity, setActivity] = useState<ActivityItem[]>([])
@@ -138,11 +143,76 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose }: Props) 
     if (!isGlobalView && activeWorkspaceId) activityQuery = activityQuery.eq('workspace_id', activeWorkspaceId)
 
     const [dueRes, futureRes, activityRes] = await Promise.all([dueQuery, futureQuery, activityQuery])
-    setDueTasks((dueRes.data ?? []) as TaskItem[])
-    setFutureTasks((futureRes.data ?? []) as TaskItem[])
-    setActivity((activityRes.data ?? []) as ActivityItem[])
+    const allDue = (dueRes.data ?? []) as TaskItem[]
+    const allFuture = (futureRes.data ?? []) as TaskItem[]
+    const allActivity = (activityRes.data ?? []) as ActivityItem[]
+
+    // If property filters are active, load entry_properties and filter
+    if (activePropertyFilters && activePropertyFilters.size > 0) {
+      const allIds = [
+        ...allDue.map(t => t.id),
+        ...allFuture.map(t => t.id),
+        ...allActivity.map(a => a.id),
+      ]
+      const uniqueIds = Array.from(new Set(allIds))
+      if (uniqueIds.length > 0) {
+        const { data: epRows } = await supabase
+          .from('entry_properties')
+          .select('entry_id, property_value_id')
+          .in('entry_id', uniqueIds)
+        const propsMap = new Map<string, Set<string>>()
+        for (const row of (epRows ?? []) as { entry_id: string; property_value_id: string }[]) {
+          const s = propsMap.get(row.entry_id) ?? new Set()
+          s.add(row.property_value_id)
+          propsMap.set(row.entry_id, s)
+        }
+        const matchesFilter = (blockId: string, wsId: string | null) => {
+          const applied = propsMap.get(blockId)
+          const props = isGlobalView ? allProperties : propertiesForWorkspace(activeWorkspaceId)
+          const byProperty = new Map<string, { valueIds: string[]; includeNone: boolean; allValueIds: string[]; workspaceId: string | null }>()
+          activePropertyFilters.forEach(vid => {
+            if (vid.startsWith('none::')) {
+              const propId = vid.slice(6)
+              const prop = props.find(p => p.id === propId)
+              if (prop) {
+                const existing = byProperty.get(propId)
+                if (existing) { existing.includeNone = true }
+                else { byProperty.set(propId, { valueIds: [], includeNone: true, allValueIds: prop.values.map(v => v.id), workspaceId: prop.workspace_id }) }
+              }
+              return
+            }
+            for (const prop of props) {
+              if (prop.values.some(v => v.id === vid)) {
+                const existing = byProperty.get(prop.id)
+                if (existing) existing.valueIds.push(vid)
+                else byProperty.set(prop.id, { valueIds: [vid], includeNone: false, allValueIds: prop.values.map(v => v.id), workspaceId: prop.workspace_id })
+                break
+              }
+            }
+          })
+          return Array.from(byProperty.values()).every(({ valueIds, includeNone, allValueIds, workspaceId }) => {
+            if (workspaceId !== null && wsId !== workspaceId) return true
+            const hasNone = !applied || !allValueIds.some(v => applied.has(v))
+            if (includeNone && hasNone) return true
+            if (valueIds.length === 0) return false
+            if (!applied) return false
+            return valueIds.some(v => applied.has(v))
+          })
+        }
+        setDueTasks(allDue.filter(t => matchesFilter(t.id, t.workspace_id)))
+        setFutureTasks(allFuture.filter(t => matchesFilter(t.id, t.workspace_id)))
+        setActivity(allActivity.filter(a => matchesFilter(a.id, a.workspace_id)))
+        setLoading(false)
+        return
+      }
+    }
+
+    setDueTasks(allDue)
+    setFutureTasks(allFuture)
+    setActivity(allActivity)
     setLoading(false)
-  }, [userId, activeWorkspaceId, isGlobalView, futureRange])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, activeWorkspaceId, isGlobalView, futureRange, propertyFiltersKey])
 
   useEffect(() => { fetchAll() }, [fetchAll, refreshKey])
 

@@ -819,15 +819,26 @@ export function JournalPage({ userId, email, displayName }: Props) {
     ? (() => {
         const allProps = isGlobalView ? allProperties : propertiesForWorkspace(activeWorkspaceId)
         // Group selected filter value IDs by their parent property, including workspace scope
-        const byProperty = new Map<string, { valueIds: string[]; workspaceId: string | null }>()
+        const byProperty = new Map<string, { valueIds: string[]; includeNone: boolean; allValueIds: string[]; workspaceId: string | null }>()
         Array.from(activePropertyFilters).forEach(valueId => {
+          // Handle "none::<propertyId>" pseudo-filters
+          if (valueId.startsWith('none::')) {
+            const propId = valueId.slice(6)
+            const prop = allProps.find(p => p.id === propId)
+            if (prop) {
+              const existing = byProperty.get(propId)
+              if (existing) { existing.includeNone = true }
+              else { byProperty.set(propId, { valueIds: [], includeNone: true, allValueIds: prop.values.map(v => v.id), workspaceId: prop.workspace_id }) }
+            }
+            return
+          }
           for (const prop of allProps) {
             if (prop.values.some(v => v.id === valueId)) {
               const existing = byProperty.get(prop.id)
               if (existing) {
                 existing.valueIds.push(valueId)
               } else {
-                byProperty.set(prop.id, { valueIds: [valueId], workspaceId: prop.workspace_id })
+                byProperty.set(prop.id, { valueIds: [valueId], includeNone: false, allValueIds: prop.values.map(v => v.id), workspaceId: prop.workspace_id })
               }
               break
             }
@@ -836,11 +847,15 @@ export function JournalPage({ userId, email, displayName }: Props) {
         return blocks.filter(b => {
           const applied = blockProperties.get(b.id)
           const groups = Array.from(byProperty.values())
-          return groups.every(({ valueIds, workspaceId }) => {
+          return groups.every(({ valueIds, includeNone, allValueIds, workspaceId }) => {
             // If this is a workspace-scoped property and the block is from a different workspace,
             // this filter doesn't apply — the block passes through
             if (workspaceId !== null && b.workspace_id !== workspaceId) return true
+            // Check if block has none of this property's values
+            const hasNone = !applied || !allValueIds.some(vid => applied.has(vid))
+            if (includeNone && hasNone) return true
             // Block must have at least one of the selected values for this property
+            if (valueIds.length === 0) return false
             if (!applied) return false
             return valueIds.some(vid => applied.has(vid))
           })
@@ -924,13 +939,23 @@ export function JournalPage({ userId, email, displayName }: Props) {
     // Property filters: OR within property, AND across properties, workspace-scoped
     if (activePropertyFilters.size > 0) {
       const allProps = isGlobalView ? allProperties : propertiesForWorkspace(activeWorkspaceId)
-      const byProperty = new Map<string, { valueIds: string[]; workspaceId: string | null }>()
+      const byProperty = new Map<string, { valueIds: string[]; includeNone: boolean; allValueIds: string[]; workspaceId: string | null }>()
       Array.from(activePropertyFilters).forEach(valueId => {
+        if (valueId.startsWith('none::')) {
+          const propId = valueId.slice(6)
+          const prop = allProps.find(p => p.id === propId)
+          if (prop) {
+            const existing = byProperty.get(propId)
+            if (existing) { existing.includeNone = true }
+            else { byProperty.set(propId, { valueIds: [], includeNone: true, allValueIds: prop.values.map(v => v.id), workspaceId: prop.workspace_id }) }
+          }
+          return
+        }
         for (const prop of allProps) {
           if (prop.values.some(v => v.id === valueId)) {
             const existing = byProperty.get(prop.id)
             if (existing) { existing.valueIds.push(valueId) }
-            else { byProperty.set(prop.id, { valueIds: [valueId], workspaceId: prop.workspace_id }) }
+            else { byProperty.set(prop.id, { valueIds: [valueId], includeNone: false, allValueIds: prop.values.map(v => v.id), workspaceId: prop.workspace_id }) }
             break
           }
         }
@@ -938,8 +963,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
       results = results.filter(b => {
         const applied = blockProperties.get(b.id)
         const groups = Array.from(byProperty.values())
-        return groups.every(({ valueIds, workspaceId }) => {
+        return groups.every(({ valueIds, includeNone, allValueIds, workspaceId }) => {
           if (workspaceId !== null && b.workspace_id !== workspaceId) return true
+          const hasNone = !applied || !allValueIds.some(vid => applied.has(vid))
+          if (includeNone && hasNone) return true
+          if (valueIds.length === 0) return false
           if (!applied) return false
           return valueIds.some(vid => applied.has(vid))
         })
@@ -1754,6 +1782,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
             userId={userId}
             refreshKey={blocks.length}
             onClose={() => setPanelOpen(false)}
+            activePropertyFilters={activePropertyFilters}
             onTaskClick={(blockId) => {
               const el = document.getElementById(`block-${blockId}`)
               if (el) {

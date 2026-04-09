@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useProperties, Property, PropertyValue } from '@/context/PropertiesContext'
 import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
 import { getScheme } from '@/constants/workspaceColorSchemes'
+import propertyColors, { PROPERTY_COLOR_KEYS, getPropertyColor } from '@/constants/propertyColors'
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   DragEndEvent, DragStartEvent, DragOverlay,
@@ -12,16 +13,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
-const VALUE_COLORS = [
-  'red', 'amber', 'green', 'blue', 'indigo', 'violet', 'pink', 'gray',
-  'rose', 'orange', 'teal', 'cyan', 'sky', 'fuchsia', 'lime', 'slate',
-]
-const COLOR_SWATCHES: Record<string, string> = {
-  red: '#EF4444', amber: '#F59E0B', green: '#10B981', blue: '#3B82F6',
-  indigo: '#6366F1', violet: '#8B5CF6', pink: '#EC4899', gray: '#6B7280',
-  rose: '#F43F5E', orange: '#F97316', teal: '#14B8A6', cyan: '#06B6D4',
-  sky: '#0EA5E9', fuchsia: '#D946EF', lime: '#84CC16', slate: '#64748B',
-}
+const VALUE_COLORS = PROPERTY_COLOR_KEYS
 
 function randomColor(usedColors?: (string | null)[]): string {
   if (usedColors && usedColors.length > 0) {
@@ -365,7 +357,7 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
             <button
               onClick={() => setShowNewColorPicker(!showNewColorPicker)}
               className="w-5 h-5 rounded-full flex-shrink-0 border border-gray-300"
-              style={{ backgroundColor: newValueColor ? COLOR_SWATCHES[newValueColor] : '#D1D5DB' }}
+              style={{ backgroundColor: newValueColor ? getPropertyColor(newValueColor).swatch : '#D1D5DB' }}
               title="Pick color"
             />
             {showNewColorPicker && (
@@ -381,7 +373,7 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
                     key={c}
                     onClick={() => { setNewValueColor(c); setShowNewColorPicker(false) }}
                     className={`w-5 h-5 rounded-full ${newValueColor === c ? 'ring-2 ring-offset-1 ring-gray-400' : ''}`}
-                    style={{ backgroundColor: COLOR_SWATCHES[c] }}
+                    style={{ backgroundColor: getPropertyColor(c).swatch }}
                   />
                 ))}
               </div>
@@ -476,7 +468,7 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
     onChanged()
   }
 
-  const swatch = value.color ? COLOR_SWATCHES[value.color] : '#D1D5DB'
+  const swatch = value.color ? getPropertyColor(value.color).swatch : '#D1D5DB'
 
   return (
     <div ref={chipRef} className={`relative group inline-flex items-center gap-1 bg-gray-50 border rounded px-1.5 py-0.5 ${
@@ -528,7 +520,7 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
               key={c}
               onClick={() => setColor(c)}
               className={`w-5 h-5 rounded-full ${value.color === c ? 'ring-2 ring-offset-1 ring-gray-400' : ''}`}
-              style={{ backgroundColor: COLOR_SWATCHES[c] }}
+              style={{ backgroundColor: getPropertyColor(c).swatch }}
             />
           ))}
         </div>

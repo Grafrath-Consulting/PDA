@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Property, useProperties } from '@/context/PropertiesContext'
+import { getPropertyColor } from '@/constants/propertyColors'
 
 interface Props {
   properties: Property[]
@@ -10,15 +11,6 @@ interface Props {
   onClearFilters: () => void
   showPinToggle?: boolean
   onTogglePin?: (propertyId: string, pinned: boolean) => void
-}
-
-/** Map color keys to pill background colors */
-const PILL_COLORS: Record<string, string> = {
-  red: '#FEE2E2', amber: '#FEF3C7', green: '#D1FAE5',
-  blue: '#DBEAFE', indigo: '#E0E7FF', violet: '#EDE9FE',
-  pink: '#FCE7F3', gray: '#F3F4F6',
-  rose: '#FFE4E6', orange: '#FFEDD5', teal: '#CCFBF1', cyan: '#CFFAFE',
-  sky: '#E0F2FE', fuchsia: '#FAE8FF', lime: '#ECFCCB', slate: '#F1F5F9',
 }
 
 export function PropertyFilterBar({ properties, activeFilters, onToggleFilter, onClearFilters, showPinToggle, onTogglePin }: Props) {
@@ -63,9 +55,30 @@ export function PropertyFilterBar({ properties, activeFilters, onToggleFilter, o
             </button>
           )}
           <span className={`text-[10px] font-medium mr-0.5 ${prop.archived ? 'text-gray-300 italic' : 'text-gray-400'}`}>{prop.name}</span>
+          {(() => {
+            const noneId = `none::${prop.id}`
+            const noneActive = activeFilters.has(noneId)
+            return (
+              <button
+                key={noneId}
+                onClick={() => onToggleFilter(noneId)}
+                className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-all ${
+                  noneActive
+                    ? 'border-amber-400 ring-1 ring-amber-300 shadow-sm'
+                    : 'border-dashed border-gray-300 hover:border-gray-400'
+                }`}
+                style={{
+                  backgroundColor: noneActive ? '#FFFBEB' : '#FFFFFF',
+                  color: noneActive ? '#78350F' : '#9CA3AF',
+                }}
+              >
+                None
+              </button>
+            )
+          })()}
           {prop.values.map((val) => {
             const isActive = activeFilters.has(val.id)
-            const bg = val.color ? PILL_COLORS[val.color] : undefined
+            const pc = getPropertyColor(val.color)
             return (
               <button
                 key={val.id}
@@ -78,8 +91,8 @@ export function PropertyFilterBar({ properties, activeFilters, onToggleFilter, o
                       : 'border-gray-200 hover:border-gray-300'
                 }`}
                 style={{
-                  backgroundColor: isActive ? (bg ?? '#FEF3C7') : (bg ?? '#F9FAFB'),
-                  color: isActive ? '#78350F' : '#6B7280',
+                  backgroundColor: isActive ? pc.bg : pc.bg,
+                  color: isActive ? pc.text : '#6B7280',
                 }}
               >
                 {val.label}

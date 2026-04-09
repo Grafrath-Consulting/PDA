@@ -12,6 +12,7 @@ import { useWorkspace } from '@/context/WorkspaceContext'
 import { useDateFormat } from '@/context/DateFormatContext'
 import { formatTimestamp, formatDatePart } from '@/lib/date-format'
 import { getScheme } from '@/constants/workspaceColorSchemes'
+import { getPropertyColor } from '@/constants/propertyColors'
 import { useProperties } from '@/context/PropertiesContext'
 import { PropertyBubbles } from './PropertyBubbles'
 import { threeWayMerge } from '@/lib/three-way-merge'
@@ -631,6 +632,7 @@ export function JournalBlock(props: Props) {
 
   const savingRef = useRef(false)
   const suppressBlurRef = useRef(false)
+  const datePickerOpenRef = useRef(false)
   const autosavedBlockIdRef = useRef<string | null>(null)
   const [pendingEntryType, setPendingEntryType] = useState<'info' | 'task'>('info')
   const pendingEntryTypeRef = useRef<'info' | 'task'>('info')
@@ -689,6 +691,13 @@ export function JournalBlock(props: Props) {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [pillMenuOpen])
+
+  function openDatePicker(inputId: string) {
+    const el = document.getElementById(inputId) as HTMLInputElement | null
+    if (!el) return
+    datePickerOpenRef.current = true
+    el.showPicker?.()
+  }
 
   function clearAutosaveTimer() {
     if (autosaveTimerRef.current) {
@@ -1385,7 +1394,7 @@ export function JournalBlock(props: Props) {
     // Find filter values not already applied to the pending entry
     const pending = pendingPropertyIdsRef.current
     const missing = new Set<string>()
-    filters.forEach(vid => { if (!pending.has(vid)) missing.add(vid) })
+    filters.forEach(vid => { if (!vid.startsWith('none::') && !pending.has(vid)) missing.add(vid) })
     if (missing.size === 0) return saveNewEntry()
     // Show prompt and wait for user decision
     clearAutosaveTimer()
@@ -1735,6 +1744,8 @@ export function JournalBlock(props: Props) {
   function handleBlur(e: React.FocusEvent) {
     // Suppress blur when insert_link is transitioning the block to editable
     if (suppressBlurRef.current) return
+    // Suppress blur when the native date picker is open (focus leaves the DOM)
+    if (datePickerOpenRef.current) return
     // If focus moved to another element inside the card, stay active
     if (cardRef.current?.contains(e.relatedTarget as Node)) return
     // If the property editor popup is open (portaled to body), stay active
@@ -2757,15 +2768,15 @@ export function JournalBlock(props: Props) {
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-gray-400 font-medium">Start</span>
                 <div className="relative flex-shrink-0">
-                  <button type="button" title="Start Date" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
+                  <button type="button" title="Start Date" onClick={() => { openDatePicker(startPickerId) }} className="cursor-pointer text-gray-400 hover:text-gray-600">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
                   </button>
-                  <input id={startPickerId} type="date" value={startDateVal} onChange={(e) => {
+                  <input id={startPickerId} type="date" value={startDateVal} onBlur={() => { datePickerOpenRef.current = false }} onChange={(e) => {
                     if (!e.target.value) { setPendingStartDate(null); return }
                     setStartWithValidation(buildStartTs(e.target.value, startTimeVal || null))
                   }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
                 </div>
-                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }}>
+                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { openDatePicker(startPickerId) }}>
                   {startDateVal ? formatDatePart(new Date(startDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
                 </span>
                 {startDateVal && (
@@ -2802,15 +2813,15 @@ export function JournalBlock(props: Props) {
             return (
               <div className="flex items-center gap-1">
                 <div className="relative flex-shrink-0">
-                  <button type="button" title="Due Date" onClick={() => { (document.getElementById(newDatePickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
+                  <button type="button" title="Due Date" onClick={() => { openDatePicker(newDatePickerId) }} className="cursor-pointer text-gray-400 hover:text-gray-600">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
                   </button>
-                  <input id={newDatePickerId} type="date" value={pendingDateVal} onChange={(e) => {
+                  <input id={newDatePickerId} type="date" value={pendingDateVal} onBlur={() => { datePickerOpenRef.current = false }} onChange={(e) => {
                     if (!e.target.value) { setDueWithValidation(null) }
                     else { setDueWithValidation(buildPendingTimestamp(e.target.value, pendingTimeVal || null)); if (!pendingDueDateType) setPendingDueDateType('target') }
                   }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
                 </div>
-                <span title="Due Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(newDatePickerId) as HTMLInputElement)?.showPicker?.() }}>
+                <span title="Due Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { openDatePicker(newDatePickerId) }}>
                   {pendingDateVal ? formatDatePart(new Date(pendingDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
                 </span>
                 {pendingDateVal && (
@@ -2919,15 +2930,15 @@ export function JournalBlock(props: Props) {
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-gray-400 font-medium">Start</span>
                 <div className="relative flex-shrink-0">
-                  <button type="button" title="Start Date" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }} className="cursor-pointer text-gray-400 hover:text-gray-600">
+                  <button type="button" title="Start Date" onClick={() => { openDatePicker(startPickerId) }} className="cursor-pointer text-gray-400 hover:text-gray-600">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
                   </button>
-                  <input id={startPickerId} type="date" value={sdDateVal} onChange={(e) => {
+                  <input id={startPickerId} type="date" value={sdDateVal} onBlur={() => { datePickerOpenRef.current = false }} onChange={(e) => {
                     if (!e.target.value) { updateTaskField('start_date', null); return }
                     setStartValidated(buildStartTs(e.target.value, sdTimeVal || null))
                   }} className="absolute inset-0 opacity-0 w-full h-full pointer-events-none" tabIndex={-1} />
                 </div>
-                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { (document.getElementById(startPickerId) as HTMLInputElement)?.showPicker?.() }}>
+                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { openDatePicker(startPickerId) }}>
                   {sdDateVal ? formatDatePart(new Date(sdDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
                 </span>
                 {sdDateVal && (
@@ -3001,10 +3012,7 @@ export function JournalBlock(props: Props) {
                   <button
                     type="button"
                     title="Due Date"
-                    onClick={() => {
-                      const el = document.getElementById(datePickerId) as HTMLInputElement | null
-                      if (el) { el.showPicker?.() }
-                    }}
+                    onClick={() => openDatePicker(datePickerId)}
                     className="cursor-pointer text-gray-400 hover:text-gray-600"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
@@ -3013,6 +3021,7 @@ export function JournalBlock(props: Props) {
                     id={datePickerId}
                     type="date"
                     value={dateVal}
+                    onBlur={() => { datePickerOpenRef.current = false }}
                     onChange={(e) => onDateChange(e.target.value)}
                     className="absolute inset-0 opacity-0 w-full h-full pointer-events-none"
                     tabIndex={-1}
@@ -3021,10 +3030,7 @@ export function JournalBlock(props: Props) {
                 <span
                   title="Due Date"
                   className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none"
-                  onClick={() => {
-                    const el = document.getElementById(datePickerId) as HTMLInputElement | null
-                    if (el) { el.showPicker?.() }
-                  }}
+                  onClick={() => openDatePicker(datePickerId)}
                 >
                   {dateVal
                     ? formatDatePart(new Date(dateVal + 'T00:00:00'), dateFormat)
@@ -3184,7 +3190,7 @@ export function JournalBlock(props: Props) {
                       {g.values.map(v => (
                         <label key={v.id} className="flex items-center gap-2 py-0.5 cursor-pointer">
                           <input type="checkbox" checked={checked.has(v.id)} onChange={() => toggle(v.id)} className="rounded border-gray-300 text-amber-600 focus:ring-amber-300" />
-                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: v.color ?? '#9ca3af' }} />
+                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: getPropertyColor(v.color).swatch }} />
                           <span className="text-xs text-gray-700">{v.label}</span>
                         </label>
                       ))}
