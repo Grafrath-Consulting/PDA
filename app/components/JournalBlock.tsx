@@ -140,6 +140,7 @@ interface NewEntryProps extends BaseProps {
   onUpdate?: never
   onRemove?: never
   onSplitBlock?: never
+  activePropertyFilters?: Set<string>
 }
 
 interface ExistingBlockProps extends BaseProps {
@@ -611,6 +612,11 @@ export function JournalBlock(props: Props) {
   pendingPropertyIdsRef.current = pendingPropertyIds
   const pendingFilesRef = useRef(pendingFiles)
   pendingFilesRef.current = pendingFiles
+
+  // Property filter prompt state (new entries only)
+  const [filterPromptOpen, setFilterPromptOpen] = useState(false)
+  const [filterPromptValues, setFilterPromptValues] = useState<Set<string>>(new Set())
+  const filterPromptResolveRef = useRef<((selectedIds: Set<string>) => void) | null>(null)
 
   const editorRef = useRef<TipTapEditorHandle>(null)
   // Fallback handle from onReady callback — next/dynamic doesn't always forward refs
@@ -1369,7 +1375,36 @@ export function JournalBlock(props: Props) {
     fetch('/api/ai/embed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blockId: block.id }) }).catch(() => {})
   }, [])
 
-  const handleSave = isNewEntry ? saveNewEntry : saveExistingBlock
+  // Wrapper that prompts user to apply active property filters before saving a new entry
+  const saveNewEntryWithFilterPrompt = useCallback(async () => {
+    if (!isNewEntry) return saveNewEntry()
+    const text = liveTextRef.current.trim()
+    if (!text) return saveNewEntry()
+    const filters = (propsRef.current as NewEntryProps).activePropertyFilters
+    if (!filters || filters.size === 0) return saveNewEntry()
+    // Find filter values not already applied to the pending entry
+    const pending = pendingPropertyIdsRef.current
+    const missing = new Set<string>()
+    filters.forEach(vid => { if (!pending.has(vid)) missing.add(vid) })
+    if (missing.size === 0) return saveNewEntry()
+    // Show prompt and wait for user decision
+    clearAutosaveTimer()
+    setFilterPromptValues(missing)
+    setFilterPromptOpen(true)
+    const selected = await new Promise<Set<string>>(resolve => {
+      filterPromptResolveRef.current = resolve
+    })
+    // Merge selected values into pending properties before saving
+    if (selected.size > 0) {
+      const merged = new Set(pendingPropertyIdsRef.current)
+      selected.forEach(vid => merged.add(vid))
+      setPendingPropertyIds(merged)
+      pendingPropertyIdsRef.current = merged
+    }
+    return saveNewEntry()
+  }, [isNewEntry, saveNewEntry])
+
+  const handleSave = isNewEntry ? saveNewEntryWithFilterPrompt : saveExistingBlock
 
   // ── Autosave (new entries) & Draft save (existing blocks) ───────────
   const autosaveRef = useRef(() => {})
@@ -1412,7 +1447,7 @@ export function JournalBlock(props: Props) {
       lastSavedHTMLRef.current = html
     } finally {
       savingRef.current = false
-      if (pendingSaveRef.current || (!focusedRef.current && liveTextRef.current.trim())) {
+      if (!filterPromptResolveRef.current && (pendingSaveRef.current || (!focusedRef.current && liveTextRef.current.trim()))) {
         saveNewEntry()
       }
     }
@@ -1704,6 +1739,8 @@ export function JournalBlock(props: Props) {
     if (cardRef.current?.contains(e.relatedTarget as Node)) return
     // If the property editor popup is open (portaled to body), stay active
     if (propertyEditorOpenRef.current) return
+    // If the property filter prompt is open (portaled to body), stay active
+    if (filterPromptResolveRef.current) return
     // If focus moved to an emoji picker (portaled to body, possibly in shadow DOM), stay active
     const related = e.relatedTarget as HTMLElement | null
     if (related?.closest?.('em-emoji-picker') || related?.tagName === 'EM-EMOJI-PICKER') return
@@ -1723,7 +1760,7 @@ export function JournalBlock(props: Props) {
           if (!text && !hasPending) { setFocused(false); return }
           setFocused(false)
           if (!text) return // unfocus but keep pending data
-          saveNewEntry()
+          saveNewEntryWithFilterPrompt()
         } else if (focusedRef.current) {
           // Extra guard: if this block was just activated in the same rAF
           // batch (e.g. padding click on an inactive block), focusedRef is
@@ -1743,7 +1780,7 @@ export function JournalBlock(props: Props) {
       if (!text && !hasPending) { setFocused(false); return }
       setFocused(false)
       if (!text) return // unfocus but keep pending data
-      saveNewEntry()
+      saveNewEntryWithFilterPrompt()
     } else if (focused) {
       deactivatePreviousBlock = null // already deactivating, prevent double-save
       saveExistingBlock()
@@ -3103,6 +3140,70 @@ export function JournalBlock(props: Props) {
             disableSplit={splitWouldEmpty}
           />
         </div>
+      )}
+
+      {filterPromptOpen && isNewEntry && createPortal(
+        (() => {
+          const allProps = propertiesForWorkspace(propertyWorkspaceId)
+          // Group filter values by property
+          const groups: { propName: string; values: { id: string; label: string; color: string | null }[] }[] = []
+          const grouped = new Map<string, { propName: string; values: { id: string; label: string; color: string | null }[] }>()
+          filterPromptValues.forEach(vid => {
+            for (const prop of allProps) {
+              const val = prop.values.find(v => v.id === vid)
+              if (val) {
+                let g = grouped.get(prop.id)
+                if (!g) { g = { propName: prop.name, values: [] }; grouped.set(prop.id, g); groups.push(g) }
+                g.values.push({ id: val.id, label: val.label, color: val.color })
+                break
+              }
+            }
+          })
+          const [checked, setChecked] = [filterPromptValues, setFilterPromptValues]
+          const toggle = (vid: string) => {
+            setChecked(prev => { const n = new Set(prev); if (n.has(vid)) n.delete(vid); else n.add(vid); return n })
+          }
+          const resolve = (ids: Set<string>) => {
+            setFilterPromptOpen(false)
+            filterPromptResolveRef.current?.(ids)
+            filterPromptResolveRef.current = null
+          }
+          return (
+            <div className="fixed inset-0 bg-black/30 z-[100000] flex items-center justify-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) resolve(new Set()) }}>
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm" onMouseDown={(e) => e.stopPropagation()}>
+                <div className="px-5 pt-5 pb-2">
+                  <p className="text-sm font-semibold text-gray-900">Apply property filters?</p>
+                  <p className="text-xs text-gray-400 italic mt-1">
+                    You have property filters active. Without these properties, this entry won&apos;t appear in your current view.
+                  </p>
+                </div>
+                <div className="px-5 pb-3 space-y-2">
+                  {groups.map(g => (
+                    <div key={g.propName}>
+                      <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">{g.propName}</p>
+                      {g.values.map(v => (
+                        <label key={v.id} className="flex items-center gap-2 py-0.5 cursor-pointer">
+                          <input type="checkbox" checked={checked.has(v.id)} onChange={() => toggle(v.id)} className="rounded border-gray-300 text-amber-600 focus:ring-amber-300" />
+                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: v.color ?? '#9ca3af' }} />
+                          <span className="text-xs text-gray-700">{v.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">
+                  <button onClick={() => resolve(new Set())} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
+                    Skip
+                  </button>
+                  <button onClick={() => resolve(checked)} className="px-3 py-1.5 text-xs text-white bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors">
+                    {checked.size === filterPromptValues.size ? 'Apply All' : checked.size > 0 ? `Apply Selected (${checked.size})` : 'Skip'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        })(),
+        document.body
       )}
 
       {showHistory && block && (
