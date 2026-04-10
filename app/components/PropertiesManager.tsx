@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useProperties, Property, PropertyValue } from '@/context/PropertiesContext'
 import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
 import { getScheme } from '@/constants/workspaceColorSchemes'
-import propertyColors, { PROPERTY_COLOR_KEYS, getPropertyColor } from '@/constants/propertyColors'
+import { PROPERTY_COLOR_KEYS, getPropertyColor } from '@/constants/propertyColors'
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   DragEndEvent, DragStartEvent, DragOverlay,
