@@ -15,6 +15,14 @@ import { CSS } from '@dnd-kit/utilities'
 
 const VALUE_COLORS = PROPERTY_COLOR_KEYS
 
+/** Diagonal-split circle showing swatch + pill background */
+function splitSwatchStyle(colorKey: string): React.CSSProperties {
+  const c = getPropertyColor(colorKey)
+  return {
+    background: `linear-gradient(135deg, ${c.swatch} 50%, ${c.bg} 50%)`,
+  }
+}
+
 function randomColor(usedColors?: (string | null)[]): string {
   if (usedColors && usedColors.length > 0) {
     const used = new Set(usedColors.filter(Boolean))
@@ -357,7 +365,7 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
             <button
               onClick={() => setShowNewColorPicker(!showNewColorPicker)}
               className="w-5 h-5 rounded-full flex-shrink-0 border border-gray-300"
-              style={{ backgroundColor: newValueColor ? getPropertyColor(newValueColor).swatch : '#D1D5DB' }}
+              style={newValueColor ? splitSwatchStyle(newValueColor) : { backgroundColor: '#D1D5DB' }}
               title="Pick color"
             />
             {showNewColorPicker && (
@@ -373,7 +381,7 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
                     key={c}
                     onClick={() => { setNewValueColor(c); setShowNewColorPicker(false) }}
                     className={`w-5 h-5 rounded-full ${newValueColor === c ? 'ring-2 ring-offset-1 ring-gray-400' : ''}`}
-                    style={{ backgroundColor: getPropertyColor(c).swatch }}
+                    style={splitSwatchStyle(c)}
                   />
                 ))}
               </div>
@@ -468,8 +476,6 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
     onChanged()
   }
 
-  const swatch = value.color ? getPropertyColor(value.color).swatch : '#D1D5DB'
-
   return (
     <div ref={chipRef} className={`relative group inline-flex items-center gap-1 bg-gray-50 border rounded px-1.5 py-0.5 ${
       value.archived ? 'border-dashed border-gray-300 opacity-60' : 'border-gray-200'
@@ -477,7 +483,7 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
       <button
         onClick={() => setShowColorPicker(!showColorPicker)}
         className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-        style={{ backgroundColor: swatch }}
+        style={value.color ? splitSwatchStyle(value.color) : { backgroundColor: '#D1D5DB' }}
       />
       {editing ? (
         <input
@@ -520,7 +526,7 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
               key={c}
               onClick={() => setColor(c)}
               className={`w-5 h-5 rounded-full ${value.color === c ? 'ring-2 ring-offset-1 ring-gray-400' : ''}`}
-              style={{ backgroundColor: getPropertyColor(c).swatch }}
+              style={splitSwatchStyle(c)}
             />
           ))}
         </div>
