@@ -20,8 +20,13 @@ import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
 import { useProperties } from '@/context/PropertiesContext'
 import { useDateFormat } from '@/context/DateFormatContext'
 import { formatDatePart } from '@/lib/date-format'
-import workspaceColorSchemes from '@/constants/workspaceColorSchemes'
+import workspaceColorSchemes, { type WorkspaceColorScheme } from '@/constants/workspaceColorSchemes'
 import { PdaIcon } from '@/components/PdaIcon'
+
+/** Diagonal-split circle showing swatch + pillBg */
+function splitSchemeStyle(s: WorkspaceColorScheme): React.CSSProperties {
+  return { background: `linear-gradient(135deg, ${s.swatch} 50%, ${s.pillBg} 50%)` }
+}
 
 const PAGE_SIZE = 20
 const SEARCH_PAGE_SIZE = 100
@@ -1993,7 +1998,7 @@ function WorkspaceSwitcherDropdown({
               ) : scheme && (
                 <span
                   className="w-3 h-3 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: scheme.primary }}
+                  style={splitSchemeStyle(scheme)}
                 />
               )}
             </button>
@@ -2245,7 +2250,7 @@ function CreateWorkspaceModal({
                   className={`w-7 h-7 rounded-full transition-all ${
                     colorScheme === s.key ? 'ring-2 ring-offset-2 ring-gray-400 scale-110' : 'hover:scale-105'
                   }`}
-                  style={{ backgroundColor: s.primary }}
+                  style={splitSchemeStyle(s)}
                 />
               ))}
             </div>
