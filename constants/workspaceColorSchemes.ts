@@ -40,7 +40,7 @@ const workspaceColorSchemes: WorkspaceColorScheme[] = [
 
   // ── Neutrals ──────────────────────────────────────────────
   { key: 'charcoal',     label: 'Charcoal',     primary: '#374151', muted: '#F9FAFB', activeMuted: '#F3F4F6', textOnColor: '#FFFFFF', selectionColor: '#D1D5DB' },
-  { key: 'goldenrod',    label: 'Goldenrod',    primary: '#B8860B', muted: '#FFFDF5', activeMuted: '#FEF9E7', textOnColor: '#FFFFFF', selectionColor: '#F0D56C' },
+  { key: 'goldenrod',    label: 'Goldenrod',    primary: '#EDC618', muted: '#FFFEF6', activeMuted: '#FFF9E0', textOnColor: '#3D3200', selectionColor: '#F5DC6A' },
   { key: 'walnut',       label: 'Walnut',       primary: '#6B3F1E', muted: '#FDF6F0', activeMuted: '#F8EDE3', textOnColor: '#FFFFFF', selectionColor: '#D4A97A' },
   { key: 'taupe',        label: 'Taupe',        primary: '#78716C', muted: '#FAFAF8', activeMuted: '#F5F5F4', textOnColor: '#FFFFFF', selectionColor: '#E7E5E4' },
   { key: 'cream',        label: 'Cream',        primary: '#E8E0D0', muted: '#FAF8F4', activeMuted: '#F5F0E8', textOnColor: '#44403C', selectionColor: '#D6D3D1' },
