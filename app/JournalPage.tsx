@@ -1788,8 +1788,31 @@ export function JournalPage({ userId, email, displayName }: Props) {
             refreshKey={blocks.length}
             onClose={() => setPanelOpen(false)}
             activePropertyFilters={activePropertyFilters}
-            onTaskClick={(blockId) => {
-              const el = document.getElementById(`block-${blockId}`)
+            onTaskClick={async (blockId) => {
+              let el = document.getElementById(`block-${blockId}`)
+              if (!el) {
+                // Block not yet loaded — fetch it and inject into the list
+                const supabase = createClient()
+                const { data } = await supabase
+                  .from('journal_blocks')
+                  .select('*')
+                  .eq('id', blockId)
+                  .single()
+                if (data) {
+                  setBlocks((prev) => {
+                    if (prev.some(b => b.id === blockId)) return prev
+                    // Insert in chronological order (descending by created_at)
+                    const idx = prev.findIndex(b => b.created_at < data.created_at)
+                    if (idx === -1) return [...prev, data as Block]
+                    const next = [...prev]
+                    next.splice(idx, 0, data as Block)
+                    return next
+                  })
+                  // Wait for React to render the new block
+                  await new Promise(r => setTimeout(r, 50))
+                  el = document.getElementById(`block-${blockId}`)
+                }
+              }
               if (el) {
                 el.scrollIntoView({ behavior: 'smooth', block: 'center' })
                 el.classList.add('ring-2', 'ring-amber-400')
