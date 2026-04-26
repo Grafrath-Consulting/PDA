@@ -696,6 +696,16 @@ export function JournalBlock(props: Props) {
     const el = document.getElementById(inputId) as HTMLInputElement | null
     if (!el) return
     datePickerOpenRef.current = true
+    // The hidden input is tabIndex=-1 and showPicker() doesn't focus it, so
+    // onBlur never fires when the native picker closes. Listen for change/cancel
+    // (fired when a date is picked or the picker is dismissed) to clear the flag.
+    const reset = () => {
+      datePickerOpenRef.current = false
+      el.removeEventListener('change', reset)
+      el.removeEventListener('cancel', reset)
+    }
+    el.addEventListener('change', reset)
+    el.addEventListener('cancel', reset)
     if (typeof el.showPicker === 'function') {
       try { el.showPicker() } catch { el.focus(); el.click() }
     } else {
