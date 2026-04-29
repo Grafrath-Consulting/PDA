@@ -32,6 +32,7 @@ export function McpSettingsPanel() {
   const [justCreated, setJustCreated] = useState<{ token: string; label: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const [jsonCopied, setJsonCopied] = useState(false)
+  const [urlCopied, setUrlCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [serverUrl, setServerUrl] = useState('')
   const [activeTab, setActiveTab] = useState<ClientTab>('claude-desktop')
@@ -74,6 +75,13 @@ export function McpSettingsPanel() {
     await navigator.clipboard.writeText(claudeDesktopConfig)
     setJsonCopied(true)
     setTimeout(() => setJsonCopied(false), 1500)
+  }
+
+  async function copyUrl() {
+    if (!serverUrl) return
+    await navigator.clipboard.writeText(serverUrl)
+    setUrlCopied(true)
+    setTimeout(() => setUrlCopied(false), 1500)
   }
 
   useEffect(() => {
@@ -168,9 +176,18 @@ export function McpSettingsPanel() {
 
       <div className="mb-4">
         <label className="text-xs text-gray-500 block mb-1">Server URL</label>
-        <code className="block text-xs font-mono bg-gray-50 border border-[#E5E0D0] rounded px-2 py-1.5 text-gray-700 break-all">
-          {serverUrl || '—'}
-        </code>
+        <div className="relative">
+          <code className="block text-xs font-mono bg-gray-50 border border-[#E5E0D0] rounded px-2 py-1.5 pr-16 text-gray-700 break-all">
+            {serverUrl || '—'}
+          </code>
+          <button
+            onClick={copyUrl}
+            disabled={!serverUrl}
+            className="absolute top-1 right-1 px-2 py-1 text-[11px] text-gray-700 bg-white border border-[#E5E0D0] rounded hover:bg-gray-100 transition-colors disabled:opacity-40"
+          >
+            {urlCopied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
       </div>
 
       {!showNew ? (

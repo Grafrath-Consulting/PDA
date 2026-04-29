@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { AiSettingsPanel } from '@/app/components/AiSettingsPanel'
 import { McpSettingsPanel } from '@/app/components/McpSettingsPanel'
@@ -80,6 +80,25 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
   const [collapseLines, setCollapseLines] = useState(feedCollapseLinesFromProps ?? 10)
   const [saving, setSaving] = useState(false)
   const { dateFormat, timeFormat, setDateFormat, setTimeFormat } = useDateFormat()
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Windows Chrome cycles a <select>'s value when the wheel passes over it,
+  // even if the select isn't focused — which feels like the scroll "jumping"
+  // and unrelated controls changing as you scroll. Intercept wheel events on
+  // unfocused selects inside the panel and forward the scroll to the panel.
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container || !open) return
+    const handler = (e: WheelEvent) => {
+      const target = e.target as HTMLElement | null
+      if (!target || target.tagName !== 'SELECT') return
+      if (document.activeElement === target) return
+      e.preventDefault()
+      container.scrollBy({ top: e.deltaY, behavior: 'auto' })
+    }
+    container.addEventListener('wheel', handler, { passive: false, capture: true })
+    return () => container.removeEventListener('wheel', handler, { capture: true })
+  }, [open])
 
   useEffect(() => {
     if (feedCollapseLinesFromProps != null) setCollapseLines(feedCollapseLinesFromProps)
@@ -161,7 +180,7 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-5">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-5">
           {/* App info */}
           <div className="bg-gray-50 rounded-lg px-4 py-3 text-center mb-4">
             <p className="text-sm font-semibold text-gray-700">PDA</p>
