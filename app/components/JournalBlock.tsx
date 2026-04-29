@@ -3148,6 +3148,24 @@ export function JournalBlock(props: Props) {
             </div>
           )
         })()}
+        {block?.via_mcp && (
+          <span
+            title="Created or modified via MCP"
+            aria-label="Created or modified via MCP"
+            className="ml-2 flex-shrink-0 text-gray-400 hover:text-gray-500 cursor-default"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="4" y="8" width="16" height="12" rx="2" />
+              <path d="M12 4v4" />
+              <circle cx="12" cy="3" r="1" />
+              <circle cx="9" cy="13" r="1" />
+              <circle cx="15" cy="13" r="1" />
+              <path d="M9 17h6" />
+              <path d="M2 14v3" />
+              <path d="M22 14v3" />
+            </svg>
+          </span>
+        )}
       </div>
 
       {menuState && block && (

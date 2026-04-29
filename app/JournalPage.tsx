@@ -82,6 +82,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [filterDeletedFrom, setFilterDeletedFrom] = useState('')
   const [filterDeletedTo, setFilterDeletedTo] = useState('')
   const [filterAssignee, setFilterAssignee] = useState<string | null>(null) // null=any, 'unassigned', or person id
+  const [filterMcp, setFilterMcp] = useState<'any' | 'mcp' | 'manual'>('any')
   const searchInputRef = useRef<HTMLInputElement>(null)
   const switcherContainerRef = useRef<HTMLDivElement>(null)
   const [searchMode, setSearchMode] = useState<'smart' | 'exact'>('smart')
@@ -151,6 +152,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
   filterDeletedToRef.current = filterDeletedTo
   const filterAssigneeRef = useRef(filterAssignee)
   filterAssigneeRef.current = filterAssignee
+  const filterMcpRef = useRef(filterMcp)
+  filterMcpRef.current = filterMcp
   const [feedCollapsed, setFeedCollapsed] = useState(true)
   const [feedCollapseLines, setFeedCollapseLines] = useState(10)
   const [prefsOpen, setPrefsOpen] = useState(false)
@@ -191,6 +194,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         if (f.deletedFrom) setFilterDeletedFrom(f.deletedFrom)
         if (f.deletedTo) setFilterDeletedTo(f.deletedTo)
         if (f.assignee) setFilterAssignee(f.assignee)
+        if (f.mcp === 'mcp' || f.mcp === 'manual') setFilterMcp(f.mcp)
         if (f.contextFilter) setContextFilter(f.contextFilter)
         if (f.propertyFilters?.length) setActivePropertyFilters(new Set(f.propertyFilters))
         if (f.searchMode) setSearchMode(f.searchMode)
@@ -263,6 +267,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     if (filterDeletedFrom) f.deletedFrom = filterDeletedFrom
     if (filterDeletedTo) f.deletedTo = filterDeletedTo
     if (filterAssignee) f.assignee = filterAssignee
+    if (filterMcp !== 'any') f.mcp = filterMcp
     if (contextFilter) f.contextFilter = contextFilter
     if (activePropertyFilters.size > 0) f.propertyFilters = Array.from(activePropertyFilters)
     if (searchMode !== 'smart') f.searchMode = searchMode
@@ -271,10 +276,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
     } else {
       localStorage.removeItem(FILTERS_KEY)
     }
-  }, [filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, contextFilter, activePropertyFilters, searchMode])
+  }, [filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, contextFilter, activePropertyFilters, searchMode])
 
   const hasActiveSearch = searchText.length > 0
-  const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo || !!filterStartFrom || !!filterStartTo || !!filterArchivedFrom || !!filterArchivedTo || !!filterDeletedFrom || !!filterDeletedTo || !!filterAssignee
+  const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo || !!filterStartFrom || !!filterStartTo || !!filterArchivedFrom || !!filterArchivedTo || !!filterDeletedFrom || !!filterDeletedTo || !!filterAssignee || filterMcp !== 'any'
 
   // Smart search (combined exact + semantic + AI parsing)
   useEffect(() => {
@@ -531,6 +536,13 @@ export function JournalPage({ userId, email, displayName }: Props) {
       query = query.eq('owner_id', filterAssigneeRef.current)
     }
 
+    // Source filter — MCP-touched vs. manual
+    if (filterMcpRef.current === 'mcp') {
+      query = query.eq('via_mcp', true)
+    } else if (filterMcpRef.current === 'manual') {
+      query = query.eq('via_mcp', false)
+    }
+
     // Pagination (disabled during search)
     if (cursor && !isSearching) {
       query = query.lt('created_at', cursor)
@@ -598,7 +610,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, searchMode, searchNonce])
+  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, searchMode, searchNonce])
 
   // ── Periodic sync polling: fetch blocks updated on other devices ──
   const lastPollRef = useRef<string>(new Date().toISOString())
@@ -940,6 +952,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
     if (filterDueTo) {
       const to = filterDueTo + 'T23:59:59'
       results = results.filter(b => (b.due_date ?? '') <= to && b.due_date != null)
+    }
+    // Source filter — MCP-touched vs. manual
+    if (filterMcp === 'mcp') {
+      results = results.filter(b => b.via_mcp === true)
+    } else if (filterMcp === 'manual') {
+      results = results.filter(b => !b.via_mcp)
     }
     // Property filters: OR within property, AND across properties, workspace-scoped
     if (activePropertyFilters.size > 0) {
@@ -1497,6 +1515,21 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 ))}
               </select>
             </div>
+            {/* Source filter — entries touched by MCP vs. authored manually */}
+            <div className="flex items-center gap-1.5" title="Filter by whether the entry was created or modified through the MCP server">
+              <span className="text-gray-400 font-medium">Source:</span>
+              <select
+                value={filterMcp}
+                onChange={(e) => setFilterMcp(e.target.value as 'any' | 'mcp' | 'manual')}
+                className={`px-2 py-0.5 rounded-full border text-[11px] font-medium transition-all cursor-pointer outline-none ${
+                  filterMcp !== 'any' ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}
+              >
+                <option value="any">Any</option>
+                <option value="mcp">MCP-touched</option>
+                <option value="manual">Manual only</option>
+              </select>
+            </div>
             {/* Date range filters */}
             {([
               { label: 'Created', fromId: 'filter-date-from', toId: 'filter-date-to', fromVal: filterDateFrom, toVal: filterDateTo, setFrom: setFilterDateFrom, setTo: setFilterDateTo, showWhen: null },
@@ -1604,7 +1637,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
               </button>
             </div>
             {hasNonDefaultFilters && (
-              <button onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterStartFrom(''); setFilterStartTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null) }}
+              <button onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterStartFrom(''); setFilterStartTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null); setFilterMcp('any') }}
                 className="text-[11px] text-gray-400 hover:text-gray-600 underline">
                 Clear
               </button>
@@ -1628,11 +1661,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
           if (filterDeletedFrom) count++
           if (filterDeletedTo) count++
           if (filterAssignee) count++
+          if (filterMcp !== 'any') count++
           return (
             <div className="flex items-center gap-2 text-[11px] text-amber-700 mt-2 pt-2 border-t border-[#EDE9DB]">
               <span>{count} hidden filter{count !== 1 ? 's' : ''} applied</span>
               <button
-                onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterStartFrom(''); setFilterStartTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null) }}
+                onClick={() => { setFilterEntryTypes(new Set(['info', 'task'])); setFilterStatuses(new Set(['active'])); setFilterDateFrom(''); setFilterDateTo(''); setFilterModifiedFrom(''); setFilterModifiedTo(''); setFilterDueFrom(''); setFilterDueTo(''); setFilterStartFrom(''); setFilterStartTo(''); setFilterArchivedFrom(''); setFilterArchivedTo(''); setFilterDeletedFrom(''); setFilterDeletedTo(''); setFilterAssignee(null); setFilterMcp('any') }}
                 className="text-amber-600 hover:text-amber-800 underline"
               >
                 Clear all filters
@@ -1751,7 +1785,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 !!filterStartFrom || !!filterStartTo ||
                 !!filterArchivedFrom || !!filterArchivedTo ||
                 !!filterDeletedFrom || !!filterDeletedTo ||
-                !!filterAssignee
+                !!filterAssignee ||
+                filterMcp !== 'any'
               }
               totalUnfilteredCount={blocks.length}
               onClearAllFilters={() => {
@@ -1774,6 +1809,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 setFilterDeletedFrom('')
                 setFilterDeletedTo('')
                 setFilterAssignee('')
+                setFilterMcp('any')
                 localStorage.removeItem(FILTERS_KEY)
               }}
               doneLoading={initialised && !switching && !loading}

@@ -24,6 +24,7 @@ export interface Block {
   pinned: boolean
   position: number
   sort_order: number
+  via_mcp: boolean
 }
 
 export interface Context {

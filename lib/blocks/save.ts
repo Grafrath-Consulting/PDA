@@ -25,6 +25,7 @@ export interface CreatedBlock {
   due_date?: string | null
   due_date_type?: string | null
   start_date?: string | null
+  via_mcp?: boolean
 }
 
 // Server-side block insert for non-UI contexts (MCP server, future API surfaces).
@@ -60,9 +61,10 @@ export async function createBlockFromMcp(
       content: input.content,
       status: 'active',
       entry_type: entryType,
+      via_mcp: true,
       ...taskFields,
     })
-    .select('id, workspace_id, content, entry_type, status, created_at, task_status, due_date, due_date_type, start_date')
+    .select('id, workspace_id, content, entry_type, status, created_at, task_status, due_date, due_date_type, start_date, via_mcp')
     .single()
 
   if (error || !block) {
@@ -141,11 +143,14 @@ export async function updateBlockFromMcp(
 
   if (Object.keys(patch).length === 0) return { ok: false, error: 'no_fields_to_update' }
 
+  // Stamp the block as MCP-touched on every MCP-driven update.
+  patch.via_mcp = true
+
   const { data: block, error } = await svc
     .from('journal_blocks')
     .update(patch)
     .eq('id', input.blockId)
-    .select('id, workspace_id, content, entry_type, status, created_at, task_status, due_date, due_date_type, start_date')
+    .select('id, workspace_id, content, entry_type, status, created_at, task_status, due_date, due_date_type, start_date, via_mcp')
     .single()
 
   if (error || !block) {
