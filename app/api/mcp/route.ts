@@ -21,7 +21,6 @@ async function handle(req: Request): Promise<Response> {
   const server = buildMcpServer(userId)
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless — bearer is the credential per request
-    enableJsonResponse: true,
   })
   await server.connect(transport)
   return transport.handleRequest(req)

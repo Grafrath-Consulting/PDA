@@ -4,6 +4,20 @@ import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { AiSettingsPanel } from '@/app/components/AiSettingsPanel'
 import { McpSettingsPanel } from '@/app/components/McpSettingsPanel'
+
+function AccordionSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <details className="group border-b border-[#E5E0D0] last:border-b-0">
+      <summary className="flex items-center justify-between cursor-pointer py-3 list-none [&::-webkit-details-marker]:hidden">
+        <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wide">{title}</h3>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400 transition-transform group-open:rotate-90">
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </summary>
+      <div className="pb-4 pt-1">{children}</div>
+    </details>
+  )
+}
 import { useDateFormat } from '@/context/DateFormatContext'
 import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
 import { versionString, buildDateString } from '@/lib/version'
@@ -147,126 +161,126 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+        <div className="flex-1 overflow-y-auto px-5 py-5">
           {/* App info */}
-          <div className="bg-gray-50 rounded-lg px-4 py-3 text-center">
+          <div className="bg-gray-50 rounded-lg px-4 py-3 text-center mb-4">
             <p className="text-sm font-semibold text-gray-700">PDA</p>
             <p className="text-xs text-gray-500">{versionString()}</p>
             <p className="text-[10px] text-gray-400">Built {buildDateString()}</p>
           </div>
 
-          {/* Profile section */}
-          <section>
-            <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Profile</h3>
-            <div className="space-y-2">
-              <div>
-                <label className="text-xs text-gray-500">Name</label>
-                <p className="text-sm text-gray-800">{displayName || '—'}</p>
+          <div className="border-t border-[#E5E0D0]">
+            <AccordionSection title="Profile">
+              <div className="space-y-2">
+                <div>
+                  <label className="text-xs text-gray-500">Name</label>
+                  <p className="text-sm text-gray-800">{displayName || '—'}</p>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500">Email</label>
+                  <p className="text-sm text-gray-800">{email || '—'}</p>
+                </div>
               </div>
-              <div>
-                <label className="text-xs text-gray-500">Email</label>
-                <p className="text-sm text-gray-800">{email || '—'}</p>
-              </div>
-            </div>
-          </section>
+            </AccordionSection>
 
-          {/* AI section */}
-          <AiSettingsPanel userId={userId} />
+            <AccordionSection title="AI">
+              <AiSettingsPanel userId={userId} />
+            </AccordionSection>
 
-          {/* MCP section */}
-          <McpSettingsPanel />
+            <AccordionSection title="MCP Connections">
+              <McpSettingsPanel />
+            </AccordionSection>
 
-          {/* Preferences section */}
-          <section>
-            <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Preferences</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">Date format</label>
-                <select
-                  value={dateFormat}
-                  onChange={(e) => setDateFormat(e.target.value as DateFormatOption)}
-                  className={selectClass}
-                >
-                  {DATE_FORMAT_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label} ({opt.example})
-                    </option>
-                  ))}
-                </select>
+            <AccordionSection title="Preferences">
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Date format</label>
+                  <select
+                    value={dateFormat}
+                    onChange={(e) => setDateFormat(e.target.value as DateFormatOption)}
+                    className={selectClass}
+                  >
+                    {DATE_FORMAT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label} ({opt.example})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Time format</label>
+                  <select
+                    value={timeFormat}
+                    onChange={(e) => setTimeFormat(e.target.value as TimeFormatOption)}
+                    className={selectClass}
+                  >
+                    {TIME_FORMAT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label} ({opt.example})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Autosave interval</label>
+                  <select
+                    value={autosaveInterval}
+                    onChange={(e) => handleIntervalChange(Number(e.target.value))}
+                    disabled={saving}
+                    className={selectClass}
+                  >
+                    {INTERVAL_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Auto-saves content silently after this period of inactivity.
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Sync interval</label>
+                  <select
+                    value={syncInterval}
+                    onChange={(e) => handleSyncIntervalChange(Number(e.target.value))}
+                    disabled={saving}
+                    className={selectClass}
+                  >
+                    {SYNC_INTERVAL_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    How often to check for changes made on other devices.
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Card collapse threshold</label>
+                  <select
+                    value={collapseLines}
+                    onChange={(e) => handleCollapseLinesChange(Number(e.target.value))}
+                    disabled={saving}
+                    className={selectClass}
+                  >
+                    {COLLAPSE_LINE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Cards longer than this are collapsed in the feed when collapse mode is active.
+                  </p>
+                </div>
               </div>
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">Time format</label>
-                <select
-                  value={timeFormat}
-                  onChange={(e) => setTimeFormat(e.target.value as TimeFormatOption)}
-                  className={selectClass}
-                >
-                  {TIME_FORMAT_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label} ({opt.example})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">Autosave interval</label>
-                <select
-                  value={autosaveInterval}
-                  onChange={(e) => handleIntervalChange(Number(e.target.value))}
-                  disabled={saving}
-                  className={selectClass}
-                >
-                  {INTERVAL_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-400 mt-1">
-                  Auto-saves content silently after this period of inactivity.
-                </p>
-              </div>
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">Sync interval</label>
-                <select
-                  value={syncInterval}
-                  onChange={(e) => handleSyncIntervalChange(Number(e.target.value))}
-                  disabled={saving}
-                  className={selectClass}
-                >
-                  {SYNC_INTERVAL_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-400 mt-1">
-                  How often to check for changes made on other devices.
-                </p>
-              </div>
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">Card collapse threshold</label>
-                <select
-                  value={collapseLines}
-                  onChange={(e) => handleCollapseLinesChange(Number(e.target.value))}
-                  disabled={saving}
-                  className={selectClass}
-                >
-                  {COLLAPSE_LINE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-400 mt-1">
-                  Cards longer than this are collapsed in the feed when collapse mode is active.
-                </p>
-              </div>
-            </div>
-          </section>
+            </AccordionSection>
+          </div>
 
           {/* Sign out */}
-          <section>
+          <section className="mt-6">
             <button
               onClick={async () => {
                 const supabase = createClient()
