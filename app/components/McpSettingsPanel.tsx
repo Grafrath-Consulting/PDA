@@ -26,7 +26,7 @@ interface JustCreatedClient {
   label: string
 }
 
-type ClientTab = 'claude-desktop' | 'claude-web' | 'chatgpt' | 'generic'
+type ClientTab = 'claude-desktop' | 'claude-web' | 'claude-code' | 'chatgpt' | 'generic'
 
 const CLAUDE_WEB_DEFAULT_REDIRECT = 'https://claude.ai/api/mcp/auth_callback'
 
@@ -65,6 +65,7 @@ export function McpSettingsPanel() {
   const [justCreatedClient, setJustCreatedClient] = useState<JustCreatedClient | null>(null)
   const [secretCopied, setSecretCopied] = useState(false)
   const [clientIdCopied, setClientIdCopied] = useState(false)
+  const [cliCopied, setCliCopied] = useState(false)
   const [oauthError, setOauthError] = useState<string | null>(null)
 
   // On Windows the path to npx (e.g. C:\Program Files\nodejs\npx.cmd) contains
@@ -193,6 +194,14 @@ export function McpSettingsPanel() {
     setTimeout(() => setClientIdCopied(false), 1500)
   }
 
+  const claudeCodeCommand = `claude mcp add --transport http --scope user pda ${serverUrl} --header "Authorization: Bearer YOUR_TOKEN_HERE"`
+
+  async function copyCli() {
+    await navigator.clipboard.writeText(claudeCodeCommand)
+    setCliCopied(true)
+    setTimeout(() => setCliCopied(false), 1500)
+  }
+
   async function handleCreate() {
     const label = labelInput.trim()
     if (!label) return
@@ -318,6 +327,7 @@ export function McpSettingsPanel() {
           {([
             ['claude-desktop', 'Claude Desktop'],
             ['claude-web', 'claude.ai'],
+            ['claude-code', 'Claude Code'],
             ['chatgpt', 'ChatGPT'],
             ['generic', 'Gemini / Other'],
           ] as [ClientTab, string][]).map(([key, name]) => (
@@ -389,6 +399,28 @@ export function McpSettingsPanel() {
                 <li><strong>OAuth Client ID:</strong> the client_id from below</li>
                 <li><strong>OAuth Client Secret:</strong> the client_secret (shown once on creation)</li>
               </ul>
+            </div>
+          )}
+          {activeTab === 'claude-code' && (
+            <div>
+              <p className="mb-2">
+                Claude Code supports HTTP MCP servers natively (no <code className="text-[11px] bg-gray-100 px-1 rounded">mcp-remote</code> bridge needed).
+                Run this once from any terminal to register PDA globally for your user — replace <code className="text-[11px] bg-gray-100 px-1 rounded">YOUR_TOKEN_HERE</code> with a fresh bearer token from above:
+              </p>
+              <div className="relative">
+                <pre className="text-[11px] font-mono bg-gray-50 border border-[#E5E0D0] rounded p-2 pr-16 overflow-x-auto whitespace-pre-wrap">{claudeCodeCommand}</pre>
+                <button
+                  onClick={copyCli}
+                  className="absolute top-1.5 right-1.5 px-2 py-1 text-[11px] text-gray-700 bg-white border border-[#E5E0D0] rounded hover:bg-gray-100 transition-colors"
+                >
+                  {cliCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-500">
+                The server is stored in <code className="text-[11px] bg-gray-100 px-1 rounded">~/.claude.json</code> ({isWindows ? <code className="text-[11px] bg-gray-100 px-1 rounded">C:\Users\&lt;you&gt;\.claude.json</code> : <>typically <code className="text-[11px] bg-gray-100 px-1 rounded">/Users/&lt;you&gt;/.claude.json</code></>})
+                and persists across all projects. Use <code className="text-[11px] bg-gray-100 px-1 rounded">--scope project</code> instead of <code className="text-[11px] bg-gray-100 px-1 rounded">--scope user</code> if you only want it inside one repo.
+                Verify with <code className="text-[11px] bg-gray-100 px-1 rounded">claude mcp list</code>; remove with <code className="text-[11px] bg-gray-100 px-1 rounded">claude mcp remove pda</code>.
+              </p>
             </div>
           )}
           {activeTab === 'chatgpt' && (
