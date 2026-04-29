@@ -64,6 +64,7 @@ export function McpSettingsPanel() {
   const [oauthCreating, setOauthCreating] = useState(false)
   const [justCreatedClient, setJustCreatedClient] = useState<JustCreatedClient | null>(null)
   const [secretCopied, setSecretCopied] = useState(false)
+  const [clientIdCopied, setClientIdCopied] = useState(false)
   const [oauthError, setOauthError] = useState<string | null>(null)
 
   // On Windows the path to npx (e.g. C:\Program Files\nodejs\npx.cmd) contains
@@ -185,6 +186,13 @@ export function McpSettingsPanel() {
     setTimeout(() => setSecretCopied(false), 1500)
   }
 
+  async function copyClientId() {
+    if (!justCreatedClient) return
+    await navigator.clipboard.writeText(justCreatedClient.client_id)
+    setClientIdCopied(true)
+    setTimeout(() => setClientIdCopied(false), 1500)
+  }
+
   async function handleCreate() {
     const label = labelInput.trim()
     if (!label) return
@@ -264,7 +272,7 @@ export function McpSettingsPanel() {
           <button
             onClick={copyUrl}
             disabled={!serverUrl}
-            className="absolute top-1 right-1 px-2 py-1 text-[11px] text-gray-700 bg-white border border-[#E5E0D0] rounded hover:bg-gray-100 transition-colors disabled:opacity-40"
+            className="absolute top-1/2 -translate-y-1/2 right-1 px-2 py-1 text-[11px] text-gray-700 bg-white border border-[#E5E0D0] rounded hover:bg-gray-100 transition-colors disabled:opacity-40"
           >
             {urlCopied ? 'Copied' : 'Copy'}
           </button>
@@ -384,11 +392,22 @@ export function McpSettingsPanel() {
             </div>
           )}
           {activeTab === 'chatgpt' && (
-            <p>
-              Open Settings → Connectors → <em>Add</em>. Paste the server URL above
-              and the bearer token when prompted. ChatGPT&apos;s connector availability
-              depends on your subscription tier.
-            </p>
+            <div className="space-y-2">
+              <p className="p-2 bg-red-50 border border-red-200 rounded text-[11px] text-red-800">
+                <strong>Heads up:</strong> custom MCP connectors in ChatGPT currently
+                only work in <strong>Developer Mode</strong>. While Developer Mode is
+                on, ChatGPT <strong>can&apos;t access memories</strong>. That&apos;s an OpenAI
+                limitation, not a PDA one.
+              </p>
+              <ol className="text-[11px] text-gray-600 space-y-1 list-decimal list-inside">
+                <li>In ChatGPT: <em>Settings → Apps → Advanced Settings</em>, enable <strong>Developer mode</strong>.</li>
+                <li>A <strong>Create App</strong> button appears — click it.</li>
+                <li>Fill in <strong>Icon</strong>, <strong>Name</strong>, <strong>Description</strong>, set <strong>MCP Server URL</strong> to the URL above, and pick <strong>OAuth</strong> for Authentication.</li>
+                <li>Open <strong>Advanced OAuth Settings</strong> and copy the <strong>callback URL</strong> shown there.</li>
+                <li>Back here, click <strong>Create OAuth client</strong> below, paste the callback URL into the Redirect URI field, label it &ldquo;ChatGPT&rdquo;, and Generate.</li>
+                <li>Copy the resulting <strong>Client ID</strong> and <strong>Client Secret</strong> back into ChatGPT&apos;s OAuth fields and save.</li>
+              </ol>
+            </div>
           )}
           {activeTab === 'generic' && (
             <p>
@@ -448,9 +467,14 @@ export function McpSettingsPanel() {
             </p>
             <div>
               <label className="text-[11px] text-amber-900 block mb-1">Client ID</label>
-              <code className="block text-[11px] font-mono bg-white border border-amber-200 rounded px-2 py-1.5 text-gray-900 break-all">
-                {justCreatedClient.client_id}
-              </code>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-[11px] font-mono bg-white border border-amber-200 rounded px-2 py-1.5 text-gray-900 break-all">
+                  {justCreatedClient.client_id}
+                </code>
+                <button onClick={copyClientId} className={btnPrimary}>
+                  {clientIdCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
             </div>
             <div>
               <label className="text-[11px] text-amber-900 block mb-1">Client Secret</label>
