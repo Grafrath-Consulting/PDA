@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { AiSettingsPanel } from '@/app/components/AiSettingsPanel'
+import { McpSettingsPanel } from '@/app/components/McpSettingsPanel'
 import { useDateFormat } from '@/context/DateFormatContext'
 import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
 import { versionString, buildDateString } from '@/lib/version'
@@ -171,6 +172,9 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
 
           {/* AI section */}
           <AiSettingsPanel userId={userId} />
+
+          {/* MCP section */}
+          <McpSettingsPanel />
 
           {/* Preferences section */}
           <section>
