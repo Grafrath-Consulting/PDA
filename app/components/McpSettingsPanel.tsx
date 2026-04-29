@@ -257,6 +257,13 @@ export function McpSettingsPanel() {
                 After saving, <strong>fully quit and reopen Claude Desktop</strong> (on Windows, right-click the system-tray icon and choose Quit;
                 closing the window only hides it). The server should then appear under <em>Settings → Developer → Local MCP Servers</em>.
               </p>
+              <p className="mt-2 text-[11px] text-gray-500">
+                JSON merges are easy to get wrong (a stray comma or brace will wipe the whole file). If you&apos;re unsure,
+                paste your existing config plus the snippet above into a Claude conversation and ask it to produce the merged file —
+                but <strong>replace your token with a placeholder like <code className="text-[11px] bg-gray-100 px-1 rounded">YOUR_TOKEN_HERE</code> first</strong>,
+                then drop the real token in locally after pasting the result. Don&apos;t share the token with Claude (or any
+                external service); a token grants full access to your PDA account.
+              </p>
             </div>
           )}
           {activeTab === 'claude-web' && (

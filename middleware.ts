@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
-const PUBLIC_PATHS = ['/login', '/auth/callback']
+// Routes that authenticate themselves (e.g. via bearer tokens) instead of
+// using the cookie-based session. The middleware must skip these or it will
+// 307 the request to /login before the route can validate the bearer.
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/api/mcp']
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl

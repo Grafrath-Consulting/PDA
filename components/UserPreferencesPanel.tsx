@@ -183,8 +183,12 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
               </div>
             </AccordionSection>
 
-            <AccordionSection title="AI">
-              <AiSettingsPanel userId={userId} />
+            <AccordionSection title="AI Search Configuration">
+              <AiSettingsPanel userId={userId} section="search" />
+            </AccordionSection>
+
+            <AccordionSection title="Summary Prompts">
+              <AiSettingsPanel userId={userId} section="summary" />
             </AccordionSection>
 
             <AccordionSection title="MCP Connections">

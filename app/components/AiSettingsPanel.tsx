@@ -10,7 +10,12 @@ interface PromptTemplate {
   isCustom: boolean
 }
 
-export function AiSettingsPanel({ userId }: { userId: string }) {
+type AiSection = 'search' | 'summary'
+
+const SEARCH_PROMPT_KEYS = ['smart_search']
+const SUMMARY_PROMPT_KEYS = ['summarize', 'report_summary']
+
+export function AiSettingsPanel({ userId, section }: { userId: string; section: AiSection }) {
   // API key state
   const [keyConfigured, setKeyConfigured] = useState(false)
   const [keyHint, setKeyHint] = useState<string | null>(null)
@@ -171,11 +176,15 @@ export function AiSettingsPanel({ userId }: { userId: string }) {
   const btnPrimary = 'px-3 py-1.5 text-xs text-white bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed'
   const btnSecondary = 'px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-40'
 
+  const visibleKeys = section === 'search' ? SEARCH_PROMPT_KEYS : SUMMARY_PROMPT_KEYS
+  const visibleTemplates = templates.filter(t => visibleKeys.includes(t.key))
+
   return (
     <div className="space-y-6">
+      {section === 'search' && (
+      <>
       {/* API Key Section */}
       <section>
-        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">AI Configuration</h3>
         <p className="text-xs text-gray-500 mb-3">
           PDA uses Anthropic Claude for summarization and search.
           Add your own API key to enable these features. Your key is encrypted
@@ -240,7 +249,7 @@ export function AiSettingsPanel({ userId }: { userId: string }) {
 
       {/* Search Index Section */}
       <section>
-        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Search Index</h3>
+        <h4 className="text-xs font-medium text-gray-500 mb-2">Search Index</h4>
         <p className="text-xs text-gray-500 mb-3">
           Build the semantic search index for AI-powered search. This processes
           all your journal entries and may take a minute.
@@ -272,9 +281,14 @@ export function AiSettingsPanel({ userId }: { userId: string }) {
         )}
       </section>
 
+      </>
+      )}
+
       {/* Prompt Templates Section */}
       <section>
-        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Prompt Templates</h3>
+        {section === 'search' && (
+          <h4 className="text-xs font-medium text-gray-500 mb-2">Search Prompt</h4>
+        )}
         <p className="text-xs text-gray-500 mb-3">
           Customize the prompts used for each AI feature. Revert to restore the built-in default.
         </p>
@@ -283,7 +297,7 @@ export function AiSettingsPanel({ userId }: { userId: string }) {
           <div className="text-xs text-gray-400">Loading...</div>
         ) : (
           <div className="space-y-4">
-            {templates.map(t => (
+            {visibleTemplates.map(t => (
               <div key={t.key} className="space-y-1.5">
                 <div>
                   <span className="text-sm font-medium text-gray-700">{t.label}</span>
