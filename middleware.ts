@@ -4,7 +4,11 @@ import { createServerClient } from '@supabase/ssr'
 // Routes that authenticate themselves (e.g. via bearer tokens) instead of
 // using the cookie-based session. The middleware must skip these or it will
 // 307 the request to /login before the route can validate the bearer.
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/api/mcp']
+//
+// /api/oauth/* is listed because the authorize endpoint redirects to /login
+// itself (preserving the full URL) and the token endpoint is server-to-server.
+// /.well-known/* must be reachable without auth for OAuth discovery.
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/api/mcp', '/api/oauth/', '/.well-known/']
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl

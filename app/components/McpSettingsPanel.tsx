@@ -11,7 +11,24 @@ interface McpToken {
   expires_at: string | null
 }
 
+interface OAuthClient {
+  id: string
+  label: string
+  client_id: string
+  redirect_uris: string[]
+  created_at: string
+  last_used_at: string | null
+}
+
+interface JustCreatedClient {
+  client_id: string
+  client_secret: string
+  label: string
+}
+
 type ClientTab = 'claude-desktop' | 'claude-web' | 'chatgpt' | 'generic'
+
+const CLAUDE_WEB_DEFAULT_REDIRECT = 'https://claude.ai/api/mcp/auth_callback'
 
 const inputClass = 'w-full text-sm text-gray-800 border border-[#E5E0D0] rounded-lg px-3 py-2 bg-white outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-300 transition-colors'
 const btnPrimary = 'px-3 py-1.5 text-xs text-white bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed'
@@ -37,6 +54,17 @@ export function McpSettingsPanel() {
   const [serverUrl, setServerUrl] = useState('')
   const [activeTab, setActiveTab] = useState<ClientTab>('claude-desktop')
   const [isWindows, setIsWindows] = useState(false)
+
+  // OAuth clients
+  const [oauthClients, setOauthClients] = useState<OAuthClient[]>([])
+  const [oauthLoading, setOauthLoading] = useState(true)
+  const [showNewOauth, setShowNewOauth] = useState(false)
+  const [oauthLabel, setOauthLabel] = useState('')
+  const [oauthRedirect, setOauthRedirect] = useState(CLAUDE_WEB_DEFAULT_REDIRECT)
+  const [oauthCreating, setOauthCreating] = useState(false)
+  const [justCreatedClient, setJustCreatedClient] = useState<JustCreatedClient | null>(null)
+  const [secretCopied, setSecretCopied] = useState(false)
+  const [oauthError, setOauthError] = useState<string | null>(null)
 
   // On Windows the path to npx (e.g. C:\Program Files\nodejs\npx.cmd) contains
   // spaces that Claude Desktop's spawn doesn't quote, so we wrap with `cmd /c`.
@@ -102,7 +130,60 @@ export function McpSettingsPanel() {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  const loadClients = useCallback(async () => {
+    setOauthLoading(true)
+    try {
+      const res = await fetch('/api/user/mcp-oauth-clients')
+      if (res.ok) {
+        const data = await res.json()
+        setOauthClients(data.clients ?? [])
+      }
+    } finally {
+      setOauthLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load(); loadClients() }, [load, loadClients])
+
+  async function handleCreateClient() {
+    const label = oauthLabel.trim()
+    const redirect = oauthRedirect.trim()
+    if (!label || !redirect) return
+    setOauthCreating(true)
+    setOauthError(null)
+    try {
+      const res = await fetch('/api/user/mcp-oauth-clients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, redirectUris: [redirect] }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setOauthError(data?.error ?? 'Failed to create client')
+        return
+      }
+      setJustCreatedClient({ client_id: data.client_id, client_secret: data.client_secret, label: data.label })
+      setOauthLabel('')
+      setOauthRedirect(CLAUDE_WEB_DEFAULT_REDIRECT)
+      setShowNewOauth(false)
+      await loadClients()
+    } finally {
+      setOauthCreating(false)
+    }
+  }
+
+  async function handleRevokeClient(id: string, label: string) {
+    if (!confirm(`Revoke OAuth client "${label}"? Any service using it will lose access.`)) return
+    const res = await fetch(`/api/user/mcp-oauth-clients/${id}`, { method: 'DELETE' })
+    if (res.ok) await loadClients()
+  }
+
+  async function copySecret() {
+    if (!justCreatedClient) return
+    await navigator.clipboard.writeText(justCreatedClient.client_secret)
+    setSecretCopied(true)
+    setTimeout(() => setSecretCopied(false), 1500)
+  }
 
   async function handleCreate() {
     const label = labelInput.trim()
@@ -284,10 +365,23 @@ export function McpSettingsPanel() {
             </div>
           )}
           {activeTab === 'claude-web' && (
-            <p>
-              Open Settings → Connectors → <em>Add custom connector</em>. Paste the
-              server URL above and the bearer token when prompted.
-            </p>
+            <div>
+              <p className="mb-2">
+                Open Settings → Connectors → <em>Add custom connector</em>. claude.ai
+                requires OAuth — paste the values below and it will redirect you here
+                to approve the connection.
+              </p>
+              <p className="mb-2 text-[11px] text-gray-500">
+                Each field corresponds to one in claude.ai&apos;s connector form. Bearer
+                tokens are not accepted by claude.ai; create an <strong>OAuth client</strong> below.
+              </p>
+              <ul className="text-[11px] text-gray-600 space-y-1 list-disc list-inside">
+                <li><strong>Name:</strong> anything you&apos;ll recognize, e.g. &ldquo;PDA&rdquo;</li>
+                <li><strong>Remote MCP server URL:</strong> the Server URL above</li>
+                <li><strong>OAuth Client ID:</strong> the client_id from below</li>
+                <li><strong>OAuth Client Secret:</strong> the client_secret (shown once on creation)</li>
+              </ul>
+            </div>
           )}
           {activeTab === 'chatgpt' && (
             <p>
@@ -334,6 +428,121 @@ export function McpSettingsPanel() {
             ))}
           </ul>
         )}
+      </div>
+
+      {/* OAuth clients */}
+      <div className="mt-6 pt-5 border-t border-[#E5E0D0]">
+        <h4 className="text-xs font-medium text-gray-500 mb-2">OAuth clients</h4>
+        <p className="text-xs text-gray-500 mb-3">
+          Required for claude.ai (web) and ChatGPT, which don&apos;t accept bearer tokens.
+          The client_secret is shown once on creation.
+        </p>
+
+        {justCreatedClient && (
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+            <p className="text-xs font-medium text-amber-900">
+              OAuth client created for &ldquo;{justCreatedClient.label}&rdquo; — copy the secret now
+            </p>
+            <p className="text-[11px] text-amber-800">
+              The client_secret will not be retrievable after you dismiss this. The client_id stays visible later.
+            </p>
+            <div>
+              <label className="text-[11px] text-amber-900 block mb-1">Client ID</label>
+              <code className="block text-[11px] font-mono bg-white border border-amber-200 rounded px-2 py-1.5 text-gray-900 break-all">
+                {justCreatedClient.client_id}
+              </code>
+            </div>
+            <div>
+              <label className="text-[11px] text-amber-900 block mb-1">Client Secret</label>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-[11px] font-mono bg-white border border-amber-200 rounded px-2 py-1.5 text-gray-900 break-all">
+                  {justCreatedClient.client_secret}
+                </code>
+                <button onClick={copySecret} className={btnPrimary}>
+                  {secretCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => setJustCreatedClient(null)}
+              className="text-[11px] text-amber-900 underline hover:text-amber-700"
+            >
+              I&apos;ve saved it, dismiss
+            </button>
+          </div>
+        )}
+
+        {!showNewOauth ? (
+          <button onClick={() => setShowNewOauth(true)} className={btnPrimary}>
+            Create OAuth client
+          </button>
+        ) : (
+          <div className="space-y-2 mb-3">
+            <label className="text-xs text-gray-500 block">Label</label>
+            <input
+              type="text"
+              value={oauthLabel}
+              onChange={(e) => setOauthLabel(e.target.value)}
+              placeholder="e.g. claude.ai"
+              className={inputClass}
+              maxLength={80}
+              autoFocus
+            />
+            <label className="text-xs text-gray-500 block mt-2">Redirect URI</label>
+            <input
+              type="text"
+              value={oauthRedirect}
+              onChange={(e) => setOauthRedirect(e.target.value)}
+              placeholder="https://claude.ai/api/mcp/auth_callback"
+              className={inputClass}
+            />
+            <p className="text-[11px] text-gray-400">
+              The URL claude.ai (or other client) will be sent back to after authorization.
+              Defaults to claude.ai&apos;s callback. Must be https (or localhost for testing).
+            </p>
+            <div className="flex items-center gap-2">
+              <button onClick={handleCreateClient} disabled={oauthCreating || !oauthLabel.trim() || !oauthRedirect.trim()} className={btnPrimary}>
+                {oauthCreating ? 'Creating...' : 'Generate'}
+              </button>
+              <button onClick={() => { setShowNewOauth(false); setOauthLabel(''); setOauthError(null) }} className={btnSecondary}>
+                Cancel
+              </button>
+            </div>
+            {oauthError && <p className="text-xs text-red-500">{oauthError}</p>}
+          </div>
+        )}
+
+        <div className="mt-4">
+          <h5 className="text-xs font-medium text-gray-500 mb-2">Active OAuth clients</h5>
+          {oauthLoading ? (
+            <p className="text-xs text-gray-400">Loading...</p>
+          ) : oauthClients.length === 0 ? (
+            <p className="text-xs text-gray-400">No OAuth clients yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {oauthClients.map((c) => (
+                <li key={c.id} className="flex items-start justify-between gap-2 p-2 border border-[#E5E0D0] rounded-lg">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-gray-800 truncate">{c.label}</p>
+                    <p className="text-[11px] text-gray-500 font-mono truncate">{c.client_id}</p>
+                    <p className="text-[11px] text-gray-400 truncate">
+                      → {c.redirect_uris.join(', ')}
+                    </p>
+                    <p className="text-[11px] text-gray-400">
+                      Created {formatDate(c.created_at)} · Last used {formatDate(c.last_used_at)}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleRevokeClient(c.id, c.label)}
+                    className="px-2 py-1 text-[11px] text-red-500 hover:bg-red-50 rounded transition-colors"
+                  >
+                    Revoke
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   )
