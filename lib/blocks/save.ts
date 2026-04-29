@@ -93,3 +93,69 @@ export async function createBlockFromMcp(
 
   return { ok: true, block: block as CreatedBlock }
 }
+
+export interface UpdateBlockInput {
+  userId: string
+  blockId: string
+  content?: string
+  taskStatus?: 'not_started' | 'in_progress' | 'done'
+  dueDate?: string | null
+  dueDateType?: 'deadline' | 'target' | null
+  startDate?: string | null
+  status?: 'active' | 'archived' | 'complete'
+}
+
+export async function updateBlockFromMcp(
+  svc: SupabaseClient,
+  input: UpdateBlockInput
+): Promise<{ ok: true; block: CreatedBlock } | { ok: false; error: string }> {
+  // Verify ownership before any update.
+  const { data: existing } = await svc
+    .from('journal_blocks')
+    .select('id, user_id')
+    .eq('id', input.blockId)
+    .eq('user_id', input.userId)
+    .is('deleted_at', null)
+    .maybeSingle()
+  if (!existing) return { ok: false, error: 'block_not_found' }
+
+  // Build the patch from only the fields the caller actually provided.
+  const patch: Record<string, unknown> = {}
+  let contentChanged = false
+  if (input.content !== undefined) {
+    const html = input.content.trim().startsWith('<')
+      ? input.content
+      : `<p>${input.content.split(/\n{2,}/).map(p => p.replace(/\n/g, '<br>')).join('</p><p>')}</p>`
+    patch.content = html
+    contentChanged = true
+  }
+  if (input.taskStatus !== undefined) patch.task_status = input.taskStatus
+  if (input.dueDate !== undefined) patch.due_date = input.dueDate
+  if (input.dueDateType !== undefined) patch.due_date_type = input.dueDateType
+  if (input.startDate !== undefined) patch.start_date = input.startDate
+  if (input.status !== undefined) {
+    patch.status = input.status
+    // Mirror the client save flow: keep is_archived in sync with status.
+    patch.is_archived = input.status === 'archived'
+  }
+
+  if (Object.keys(patch).length === 0) return { ok: false, error: 'no_fields_to_update' }
+
+  const { data: block, error } = await svc
+    .from('journal_blocks')
+    .update(patch)
+    .eq('id', input.blockId)
+    .select('id, workspace_id, content, entry_type, status, created_at, task_status, due_date, due_date_type, start_date')
+    .single()
+
+  if (error || !block) {
+    console.error('[updateBlockFromMcp] update error:', error)
+    return { ok: false, error: 'update_failed' }
+  }
+
+  if (contentChanged) {
+    embedBlock(svc, block.id, input.userId).catch(() => {})
+  }
+
+  return { ok: true, block: block as CreatedBlock }
+}

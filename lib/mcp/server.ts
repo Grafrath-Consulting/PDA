@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { SupabaseClient } from '@supabase/supabase-js'
 import { getServiceClient } from './auth'
-import { createBlockFromMcp } from '@/lib/blocks/save'
+import { createBlockFromMcp, updateBlockFromMcp } from '@/lib/blocks/save'
 import { embedQuery } from '@/lib/voyage'
 import { versionString } from '@/lib/version'
 
@@ -122,6 +122,35 @@ function registerCreateBlock(server: McpServer, deps: ToolDeps) {
       dueDate: due_date,
       dueDateType: due_date_type,
       startDate: start_date,
+    })
+    if (!result.ok) return err(result.error)
+    return ok({ block: result.block })
+  })
+}
+
+function registerUpdateBlock(server: McpServer, deps: ToolDeps) {
+  server.registerTool('update_block', {
+    description:
+      'Edit an existing journal entry. Use this to: change content, mark a task as in_progress or done (task_status), set or clear a due date, or archive/restore a block (status). Only the fields you pass are updated; omit fields you want to leave alone. Pass null to clear an optional field.',
+    inputSchema: {
+      id: z.string().uuid().describe('Block UUID, from search_blocks, get_block, or create_block.'),
+      content: z.string().min(1).optional().describe('New body. Plain text or simple HTML; line breaks become paragraphs. Re-fires the semantic search index.'),
+      task_status: z.enum(['not_started', 'in_progress', 'done']).optional().describe('Task progress. Use "done" to mark a task complete.'),
+      due_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone, or null to clear.'),
+      due_date_type: z.enum(['deadline', 'target']).nullable().optional().describe('"deadline" (hard) or "target" (soft), or null to clear.'),
+      start_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone, or null to clear.'),
+      status: z.enum(['active', 'archived', 'complete']).optional().describe('"archived" hides the block from the active feed. "active" restores it. "complete" marks it done at the block level (separate from task_status).'),
+    },
+  }, async ({ id, content, task_status, due_date, due_date_type, start_date, status }) => {
+    const result = await updateBlockFromMcp(deps.svc, {
+      userId: deps.userId,
+      blockId: id,
+      content,
+      taskStatus: task_status,
+      dueDate: due_date,
+      dueDateType: due_date_type,
+      startDate: start_date,
+      status,
     })
     if (!result.ok) return err(result.error)
     return ok({ block: result.block })
@@ -279,6 +308,7 @@ export function buildMcpServer(userId: string): McpServer {
   registerListWorkspaces(server, deps)
   registerListProperties(server, deps)
   registerCreateBlock(server, deps)
+  registerUpdateBlock(server, deps)
   registerSearchBlocks(server, deps)
   registerGetBlock(server, deps)
   return server
