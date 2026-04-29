@@ -39,6 +39,9 @@ next-env.d.ts
 # playwright / browser testing
 .playwright-mcp/
 
+# claude code state (worktrees, agent scratch)
+.claude/
+
 # supabase CLI temp files
 supabase/.temp/
 
