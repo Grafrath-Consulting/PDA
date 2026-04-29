@@ -42,6 +42,9 @@ next-env.d.ts
 # claude code state (worktrees, agent scratch)
 .claude/
 
+# local scratch dir for screenshots, debug dumps, ad-hoc artifacts
+.scratch/
+
 # supabase CLI temp files
 supabase/.temp/
 
