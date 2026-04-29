@@ -95,14 +95,18 @@ function registerListProperties(server: McpServer, deps: ToolDeps) {
 function registerCreateBlock(server: McpServer, deps: ToolDeps) {
   server.registerTool('create_block', {
     description:
-      'Create a new journal entry (a "block") in the user\'s PDA. workspace_id is required — call list_workspaces first and ask the user which one to use. property_value_ids is optional; call list_properties to get available tag values.',
+      'Create a new journal entry (a "block") in the user\'s PDA. workspace_id is required — call list_workspaces first and ask the user which one to use. property_value_ids is optional; call list_properties to get available tag values. The task_*, due_*, and start_date fields are only honored when entry_type is "task".',
     inputSchema: {
       content: z.string().min(1).describe('The body of the entry. Plain text or simple HTML; line breaks become paragraphs.'),
       workspace_id: z.string().uuid().describe('UUID of the workspace, from list_workspaces.'),
       entry_type: z.enum(['info', 'task']).optional().describe('"info" (default) for notes, "task" for actionable items.'),
       property_value_ids: z.array(z.string().uuid()).optional().describe('UUIDs of property values to attach as tags, from list_properties.'),
+      task_status: z.enum(['not_started', 'in_progress', 'done']).optional().describe('Task progress (defaults to "not_started"). Only used when entry_type is "task".'),
+      due_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone, e.g. "2026-05-15T17:00:00-05:00". Only used when entry_type is "task".'),
+      due_date_type: z.enum(['deadline', 'target']).nullable().optional().describe('"deadline" (hard) or "target" (soft). Only meaningful when due_date is set.'),
+      start_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone for when the task should begin. Only used when entry_type is "task".'),
     },
-  }, async ({ content, workspace_id, entry_type, property_value_ids }) => {
+  }, async ({ content, workspace_id, entry_type, property_value_ids, task_status, due_date, due_date_type, start_date }) => {
     // Promote plain-text input to minimal HTML so it renders in the TipTap editor.
     const html = content.trim().startsWith('<')
       ? content
@@ -114,6 +118,10 @@ function registerCreateBlock(server: McpServer, deps: ToolDeps) {
       content: html,
       entryType: entry_type,
       propertyValueIds: property_value_ids,
+      taskStatus: task_status,
+      dueDate: due_date,
+      dueDateType: due_date_type,
+      startDate: start_date,
     })
     if (!result.ok) return err(result.error)
     return ok({ block: result.block })

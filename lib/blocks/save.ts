@@ -7,6 +7,11 @@ export interface CreateBlockInput {
   content: string                // HTML or plain text; stored as-is
   entryType?: 'info' | 'task'
   propertyValueIds?: string[]
+  // Task-only fields. Ignored unless entryType === 'task'.
+  taskStatus?: 'not_started' | 'in_progress' | 'done'
+  dueDate?: string | null        // ISO 8601 timestamp
+  dueDateType?: 'deadline' | 'target' | null
+  startDate?: string | null      // ISO 8601 timestamp
 }
 
 export interface CreatedBlock {
@@ -16,6 +21,10 @@ export interface CreatedBlock {
   entry_type: string
   status: string
   created_at: string
+  task_status?: string
+  due_date?: string | null
+  due_date_type?: string | null
+  start_date?: string | null
 }
 
 // Server-side block insert for non-UI contexts (MCP server, future API surfaces).
@@ -36,6 +45,13 @@ export async function createBlockFromMcp(
     .maybeSingle()
   if (!ws) return { ok: false, error: 'workspace_not_found' }
 
+  const taskFields = entryType === 'task' ? {
+    task_status: input.taskStatus ?? 'not_started',
+    due_date: input.dueDate ?? null,
+    due_date_type: input.dueDateType ?? null,
+    start_date: input.startDate ?? null,
+  } : {}
+
   const { data: block, error } = await svc
     .from('journal_blocks')
     .insert({
@@ -44,8 +60,9 @@ export async function createBlockFromMcp(
       content: input.content,
       status: 'active',
       entry_type: entryType,
+      ...taskFields,
     })
-    .select('id, workspace_id, content, entry_type, status, created_at')
+    .select('id, workspace_id, content, entry_type, status, created_at, task_status, due_date, due_date_type, start_date')
     .single()
 
   if (error || !block) {
