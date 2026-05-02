@@ -36,13 +36,16 @@ const DEFAULT_AUTOSAVE_INTERVAL = 30
 const DEFAULT_SYNC_INTERVAL = 60
 const MIN_SYNC_INTERVAL = 5
 const SORT_MODE_KEY = 'journal-sort-mode'
-const ADVANCED_OPEN_KEY = 'search-advanced-open'
+const ADVANCED_OPEN_KEY = 'search-advanced-open'  // legacy — read for migration only
+const PANEL_MODE_KEY = 'search-panel-mode'
 const FEED_COLLAPSED_KEY = 'feed-collapsed'
 const FILTERS_KEY = 'journal-filters'
 
 const VALID_SORT_MODES: SortMode[] = ['created_desc', 'created_asc', 'modified_desc', 'modified_asc', 'due_date', 'manual']
+const VALID_PANEL_MODES: PanelMode[] = ['collapsed', 'normal', 'expanded']
 
 type SortMode = 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc' | 'due_date' | 'manual'
+type PanelMode = 'collapsed' | 'normal' | 'expanded'
 
 interface Props {
   userId: string
@@ -66,7 +69,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   // Inline search & advanced filters
   const [searchText, setSearchText] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [panelMode, setPanelMode] = useState<PanelMode>('normal')
   const [filterEntryTypes, setFilterEntryTypes] = useState<Set<string>>(new Set(['info', 'task']))
   const [filterStatuses, setFilterStatuses] = useState<Set<string>>(new Set(['active']))
   const [filterDateFrom, setFilterDateFrom] = useState('')
@@ -165,13 +168,24 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
   useEffect(() => {
     const saved = localStorage.getItem(PANEL_STORAGE_KEY)
-    if (saved !== null) setPanelOpen(saved === 'true')
+    if (saved !== null) {
+      setPanelOpen(saved === 'true')
+    } else if (typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches) {
+      // Default focus panel closed on mobile so the journal feed is visible first
+      setPanelOpen(false)
+    }
     const fmt = localStorage.getItem(FORMATTING_VISIBLE_KEY)
     if (fmt === 'true') setFormattingVisible(true)
     const sort = localStorage.getItem(SORT_MODE_KEY)
     if (sort && VALID_SORT_MODES.includes(sort as SortMode)) setSortMode(sort as SortMode)
-    const adv = localStorage.getItem(ADVANCED_OPEN_KEY)
-    if (adv !== null) setAdvancedOpen(adv === 'true')
+    const mode = localStorage.getItem(PANEL_MODE_KEY)
+    if (mode && VALID_PANEL_MODES.includes(mode as PanelMode)) {
+      setPanelMode(mode as PanelMode)
+    } else {
+      // Migrate from legacy boolean key
+      const adv = localStorage.getItem(ADVANCED_OPEN_KEY)
+      if (adv === 'true') setPanelMode('expanded')
+    }
     const fc = localStorage.getItem(FEED_COLLAPSED_KEY)
     if (fc !== null) setFeedCollapsed(fc === 'true')
     // Restore saved filters
@@ -237,11 +251,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
     return () => clearTimeout(id)
   }, [searchText, searchMode])
 
-  // Toggle advanced panel with localStorage persistence
-  function toggleAdvanced() {
-    setAdvancedOpen(prev => {
-      const next = !prev
-      localStorage.setItem(ADVANCED_OPEN_KEY, String(next))
+  // Cycle the filter panel through three sizes (collapsed → normal → expanded)
+  function cyclePanelMode() {
+    setPanelMode(prev => {
+      const next: PanelMode = prev === 'collapsed' ? 'normal' : prev === 'normal' ? 'expanded' : 'collapsed'
+      localStorage.setItem(PANEL_MODE_KEY, next)
       return next
     })
   }
@@ -378,12 +392,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
       }
       if (ids.size > 0) setActivePropertyFilters(ids)
     }
-    // Auto-open the advanced panel so filters are visible
-    if (!advancedOpen) {
-      setAdvancedOpen(true)
-      localStorage.setItem(ADVANCED_OPEN_KEY, 'true')
+    // Auto-expand the panel so filters are visible
+    if (panelMode !== 'expanded') {
+      setPanelMode('expanded')
+      localStorage.setItem(PANEL_MODE_KEY, 'expanded')
     }
-  }, [aiParsedInfo, propertiesForWorkspace, activeWorkspaceId, advancedOpen])
+  }, [aiParsedInfo, propertiesForWorkspace, activeWorkspaceId, panelMode])
 
   function toggleFormatting() {
     setFormattingVisible(prev => {
@@ -1090,7 +1104,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
             ) : (
               <>
                 {activeWorkspace?.emoji && <span className="w-6 h-6 rounded-full flex items-center justify-center text-sm flex-shrink-0" style={{ backgroundColor: activeScheme?.muted ?? '#F3F4F6' }}>{activeWorkspace.emoji}</span>}
-                <span className="text-sm font-medium truncate max-w-[80px] sm:max-w-none">{activeWorkspace?.name}</span>
+                <span className="text-sm font-medium truncate max-w-[200px] sm:max-w-none">{activeWorkspace?.name}</span>
               </>
             )}
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
@@ -1283,8 +1297,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
         }}
       >
         {/* Row 1: Sort + Properties + search box + toggles */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
-          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1 flex-shrink-0 order-1">
             {/* Sort dropdown — left side */}
             <div className="relative flex-shrink-0">
               <button
@@ -1425,14 +1439,16 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 <line x1="7" y1="7" x2="7.01" y2="7" />
               </svg>
             </button>
-            {/* Property filter pills */}
-            <div className="basis-full sm:basis-0 sm:flex-1 min-w-0">
+          </div>
+          {/* Property filter pills — own row on mobile, inline on desktop */}
+          {panelMode !== 'collapsed' && (
+            <div className="basis-full sm:basis-0 sm:flex-1 min-w-0 order-3 sm:order-2">
               {(() => {
                 // In global/multi-workspace view, show all properties; in single workspace, show that workspace's
                 const allProps = isGlobalView
                   ? allProperties
                   : propertiesForWorkspace(activeWorkspaceId)
-                const props = advancedOpen
+                const props = panelMode === 'expanded'
                   ? allProps
                   : allProps.filter(p => p.pinned_in_filter_bar)
                 return props.length > 0 ? (
@@ -1441,8 +1457,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
                     activeFilters={activePropertyFilters}
                     onToggleFilter={togglePropertyFilter}
                     onClearFilters={clearPropertyFilters}
-                    showPinToggle={advancedOpen}
-                    onTogglePin={advancedOpen ? async (propertyId, pinned) => {
+                    showPinToggle={panelMode === 'expanded'}
+                    onTogglePin={panelMode === 'expanded' ? async (propertyId, pinned) => {
                       const supabase = createClient()
                       await supabase.from('properties').update({ pinned_in_filter_bar: pinned }).eq('id', propertyId)
                     } : undefined}
@@ -1450,9 +1466,9 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 ) : null
               })()}
             </div>
-          </div>
+          )}
           {/* Search input + toggles */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-1 min-w-[150px] sm:flex-none order-2 sm:order-3">
             <div className="relative flex-1 sm:flex-none sm:w-64">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                 className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
@@ -1482,11 +1498,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 </button>
               )}
             </div>
-            {/* Expand/collapse filters toggle */}
+            {/* Cycle filter panel size: collapsed → normal → expanded */}
             <button
-              onClick={toggleAdvanced}
-              className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-gray-600 transition-colors"
-              title={advancedOpen ? 'Collapse filters' : 'Expand filters'}
+              onClick={cyclePanelMode}
+              className={`flex-shrink-0 p-1 rounded transition-colors ${panelMode === 'collapsed' ? 'text-gray-300 hover:text-gray-500' : panelMode === 'expanded' ? 'text-amber-700' : 'text-gray-400 hover:text-gray-600'}`}
+              title={panelMode === 'collapsed' ? 'Show pinned properties' : panelMode === 'normal' ? 'Show all properties + advanced filters' : 'Hide properties'}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
@@ -1510,7 +1526,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         </div>
 
         {/* Row 2 (expanded): Type, Status, Date, Search mode, Clear filters */}
-        {advancedOpen && (
+        {panelMode === 'expanded' && (
           <div className="flex items-center gap-3 sm:gap-4 flex-wrap text-[11px] mt-2.5 pt-2.5 border-t border-[#EDE9DB]">
             <div className="flex items-center gap-1.5">
               <span className="text-gray-400 font-medium">Type:</span>
@@ -1689,7 +1705,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         )}
 
         {/* Hidden filters indicator (when collapsed + filters active) */}
-        {!advancedOpen && hasNonDefaultFilters && (() => {
+        {panelMode !== 'expanded' && hasNonDefaultFilters && (() => {
           let count = 0
           if (filterEntryTypes.size < 2) count++
           if (filterStatuses.size !== 1 || !filterStatuses.has('active')) count++
