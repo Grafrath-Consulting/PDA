@@ -297,7 +297,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
       if (prev.size === 0) return prev
       const next = new Set<string>()
       let changed = false
-      for (const id of prev) {
+      Array.from(prev).forEach(id => {
         if (id.startsWith('none::')) {
           if (validPropIds.has(id.slice(6))) next.add(id)
           else changed = true
@@ -306,7 +306,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         } else {
           changed = true
         }
-      }
+      })
       return changed ? next : prev
     })
   }, [activeWorkspaceId, selectedWsIds, allProperties, propertiesForWorkspace])
