@@ -137,7 +137,7 @@ interface NewEntryProps extends BaseProps {
   block?: undefined
   userId: string
   contextId: string | null
-  onSaved: (block: Block) => void
+  onSaved: (block: Block, propertyValueIds?: Set<string>) => void
   onUpdate?: never
   onRemove?: never
   onSplitBlock?: never
@@ -1287,6 +1287,7 @@ export function JournalBlock(props: Props) {
       if (error) { console.error(error); return null }
       saved = data as Block | null
     }
+    let savedPropertyIds: Set<string> | undefined
     if (saved) {
       // Flush pending properties
       const pendingProps = pendingPropertyIdsRef.current
@@ -1296,6 +1297,7 @@ export function JournalBlock(props: Props) {
           property_value_id: pvId,
         }))
         await supabase.from('entry_properties').insert(rows)
+        savedPropertyIds = new Set(pendingProps)
       }
       // Flush pending files
       const files = pendingFilesRef.current
@@ -1339,7 +1341,7 @@ export function JournalBlock(props: Props) {
     setFocused(false)
     setEditorKey(k => k + 1)
     if (saved) {
-      p.onSaved(saved)
+      p.onSaved(saved, savedPropertyIds)
       // Fire-and-forget: embed block for semantic search
       fetch('/api/ai/embed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blockId: saved.id }) }).catch(() => {})
     }

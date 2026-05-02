@@ -1,4 +1,2 @@
-@echo off
-start "Dummy" powershell -NoExit -Command ""
-start "Claude" powershell -NoExit -Command "cd C:\Projects\PDA\; claude --dangerously-skip-permissions"
-start "Dev Server" powershell -NoExit -Command "cd C:\Projects\PDA\; npm run dev:clean"
+cd C:\Projects\PDA\
+claude --dangerously-skip-permissions

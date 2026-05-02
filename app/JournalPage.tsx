@@ -278,6 +278,39 @@ export function JournalPage({ userId, email, displayName }: Props) {
     }
   }, [filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, contextFilter, activePropertyFilters, searchMode])
 
+  // Drop property filters that fall out of scope when the workspace selection changes.
+  // Global view (no active workspace, no narrowed multi-select) keeps all properties in scope.
+  useEffect(() => {
+    if (allProperties.length === 0) return
+    const inScopeProps = activeWorkspaceId
+      ? propertiesForWorkspace(activeWorkspaceId)
+      : selectedWsIds && selectedWsIds.size > 0
+        ? allProperties.filter(p => p.workspace_id === null || selectedWsIds.has(p.workspace_id))
+        : allProperties
+    const validValueIds = new Set<string>()
+    const validPropIds = new Set<string>()
+    for (const p of inScopeProps) {
+      validPropIds.add(p.id)
+      for (const v of p.values) validValueIds.add(v.id)
+    }
+    setActivePropertyFilters(prev => {
+      if (prev.size === 0) return prev
+      const next = new Set<string>()
+      let changed = false
+      for (const id of prev) {
+        if (id.startsWith('none::')) {
+          if (validPropIds.has(id.slice(6))) next.add(id)
+          else changed = true
+        } else if (validValueIds.has(id)) {
+          next.add(id)
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [activeWorkspaceId, selectedWsIds, allProperties, propertiesForWorkspace])
+
   const hasActiveSearch = searchText.length > 0
   const hasNonDefaultFilters = filterEntryTypes.size < 2 || filterStatuses.size !== 1 || !filterStatuses.has('active') || !!filterDateFrom || !!filterDateTo || !!filterModifiedFrom || !!filterModifiedTo || !!filterDueFrom || !!filterDueTo || !!filterStartFrom || !!filterStartTo || !!filterArchivedFrom || !!filterArchivedTo || !!filterDeletedFrom || !!filterDeletedTo || !!filterAssignee || filterMcp !== 'any'
 
@@ -719,7 +752,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     if (last) fetchBlocks(last.created_at)
   }
 
-  function handleNewBlock(block: Block) {
+  function handleNewBlock(block: Block, propertyValueIds?: Set<string>) {
     const minOrder = blocks.reduce((m, b) => Math.min(m, b.sort_order, 0), 0)
     const newOrder = minOrder - 1
     const withOrder = { ...block, sort_order: newOrder }
@@ -730,6 +763,16 @@ export function JournalPage({ userId, email, displayName }: Props) {
       }
       return [withOrder, ...prev]
     })
+    // Optimistically seed blockProperties so an active property filter accepts
+    // the new block immediately, instead of hiding it until the visibleBlockIds
+    // useEffect refetches entry_properties.
+    if (propertyValueIds && propertyValueIds.size > 0) {
+      setBlockProperties(prev => {
+        const next = new Map(prev)
+        next.set(block.id, new Set(propertyValueIds))
+        return next
+      })
+    }
     // Always persist sort_order so it's never null
     const supabase = createClient()
     supabase.from('journal_blocks')
