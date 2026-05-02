@@ -42,7 +42,7 @@ export function PropertyFilterBar({ properties, activeFilters, onToggleFilter, o
       {properties.map((prop) => {
         const pinned = pinOverrides[prop.id] ?? prop.pinned_in_filter_bar
         return (
-        <div key={prop.id} className="flex items-center gap-1">
+        <div key={prop.id} className="flex flex-wrap items-center gap-1">
           {showPinToggle && (
             <button
               onClick={() => handleTogglePin(prop)}

@@ -1284,7 +1284,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
       >
         {/* Row 1: Sort + Properties + search box + toggles */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
-          <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
             {/* Sort dropdown — left side */}
             <div className="relative flex-shrink-0">
               <button
@@ -1426,7 +1426,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
               </svg>
             </button>
             {/* Property filter pills */}
-            <div className="flex-1 min-w-0">
+            <div className="basis-full sm:basis-0 sm:flex-1 min-w-0">
               {(() => {
                 // In global/multi-workspace view, show all properties; in single workspace, show that workspace's
                 const allProps = isGlobalView

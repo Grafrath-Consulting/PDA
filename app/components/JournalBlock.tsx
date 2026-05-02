@@ -2782,7 +2782,7 @@ export function JournalBlock(props: Props) {
             }
             const startPickerId = 'datepicker-new-start'
             return (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
                 <span className="text-[10px] text-gray-400 font-medium">Start</span>
                 <div className="relative flex-shrink-0">
                   <button type="button" title="Start Date" onClick={() => { openDatePicker(startPickerId) }} className="cursor-pointer text-gray-400 hover:text-gray-600">
@@ -2828,7 +2828,7 @@ export function JournalBlock(props: Props) {
             }
             const newDatePickerId = 'datepicker-new-entry'
             return (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
                 <div className="relative flex-shrink-0">
                   <button type="button" title="Due Date" onClick={() => { openDatePicker(newDatePickerId) }} className="cursor-pointer text-gray-400 hover:text-gray-600">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
@@ -2944,7 +2944,7 @@ export function JournalBlock(props: Props) {
             }
             const startPickerId = `datepicker-start-${block.id}`
             return (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
                 <span className="text-[10px] text-gray-400 font-medium">Start</span>
                 <div className="relative flex-shrink-0">
                   <button type="button" title="Start Date" onClick={() => { openDatePicker(startPickerId) }} className="cursor-pointer text-gray-400 hover:text-gray-600">
@@ -3024,7 +3024,7 @@ export function JournalBlock(props: Props) {
             const datePickerId = `datepicker-${block?.id ?? 'new'}`
 
             return (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
                 <div className="relative flex-shrink-0">
                   <button
                     type="button"
