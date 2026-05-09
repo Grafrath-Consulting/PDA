@@ -1883,6 +1883,32 @@ export function JournalPage({ userId, email, displayName }: Props) {
             refreshKey={blocks.length}
             onClose={() => setPanelOpen(false)}
             activePropertyFilters={activePropertyFilters}
+            filterEntryTypes={filterEntryTypes}
+            filterAssignee={filterAssignee}
+            filterMcp={filterMcp}
+            contextFilter={contextFilter}
+            filterDateFrom={filterDateFrom}
+            filterDateTo={filterDateTo}
+            filterModifiedFrom={filterModifiedFrom}
+            filterModifiedTo={filterModifiedTo}
+            filterDueFrom={filterDueFrom}
+            filterDueTo={filterDueTo}
+            filterStartFrom={filterStartFrom}
+            filterStartTo={filterStartTo}
+            hasActiveFilters={
+              activePropertyFilters.size > 0 ||
+              !!contextFilter ||
+              filterEntryTypes.size < 2 ||
+              !(filterStatuses.size === 1 && filterStatuses.has('active')) ||
+              !!filterDateFrom || !!filterDateTo ||
+              !!filterModifiedFrom || !!filterModifiedTo ||
+              !!filterDueFrom || !!filterDueTo ||
+              !!filterStartFrom || !!filterStartTo ||
+              !!filterArchivedFrom || !!filterArchivedTo ||
+              !!filterDeletedFrom || !!filterDeletedTo ||
+              !!filterAssignee ||
+              filterMcp !== 'any'
+            }
             onTaskClick={async (blockId) => {
               let el = document.getElementById(`block-${blockId}`)
               if (!el) {

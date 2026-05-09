@@ -82,13 +82,64 @@ interface Props {
   onTaskClick?: (blockId: string) => void
   onClose?: () => void
   activePropertyFilters?: Set<string>
+  filterEntryTypes?: Set<string>
+  filterAssignee?: string | null
+  filterMcp?: 'any' | 'mcp' | 'manual'
+  contextFilter?: string | null
+  filterDateFrom?: string
+  filterDateTo?: string
+  filterModifiedFrom?: string
+  filterModifiedTo?: string
+  filterDueFrom?: string
+  filterDueTo?: string
+  filterStartFrom?: string
+  filterStartTo?: string
+  hasActiveFilters?: boolean
 }
 
-export function RightPanel({ userId, refreshKey, onTaskClick, onClose, activePropertyFilters }: Props) {
+export function RightPanel({
+  userId,
+  refreshKey,
+  onTaskClick,
+  onClose,
+  activePropertyFilters,
+  filterEntryTypes,
+  filterAssignee,
+  filterMcp,
+  contextFilter,
+  filterDateFrom,
+  filterDateTo,
+  filterModifiedFrom,
+  filterModifiedTo,
+  filterDueFrom,
+  filterDueTo,
+  filterStartFrom,
+  filterStartTo,
+  hasActiveFilters,
+}: Props) {
   const { activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
   const { allProperties, propertiesForWorkspace } = useProperties()
   // Stable key for property filters to avoid re-fetching on every render
   const propertyFiltersKey = activePropertyFilters ? Array.from(activePropertyFilters).sort().join(',') : ''
+  // Stable key for the loaded property catalog — when properties hydrate after mount,
+  // fetchAll must re-run so the property-filter intersection runs against a populated list
+  // (otherwise an empty `props` array makes every block pass the filter).
+  const propsCatalogKey = allProperties.map(p => p.id + ':' + p.values.map(v => v.id).join('.')).join(',')
+  const entryTypesKey = filterEntryTypes ? Array.from(filterEntryTypes).sort().join(',') : 'info,task'
+  const filterKey = [
+    entryTypesKey,
+    filterAssignee ?? '',
+    filterMcp ?? 'any',
+    contextFilter ?? '',
+    filterDateFrom ?? '',
+    filterDateTo ?? '',
+    filterModifiedFrom ?? '',
+    filterModifiedTo ?? '',
+    filterDueFrom ?? '',
+    filterDueTo ?? '',
+    filterStartFrom ?? '',
+    filterStartTo ?? '',
+  ].join('|')
   const [dueTasks, setDueTasks] = useState<TaskItem[]>([])
   const [futureTasks, setFutureTasks] = useState<TaskItem[]>([])
   const [activity, setActivity] = useState<ActivityItem[]>([])
@@ -100,6 +151,31 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose, activePro
     setLoading(true)
     const supabase = createClient()
     const today = todayEnd()
+
+    const includeTasks = !filterEntryTypes || filterEntryTypes.has('task')
+    const includeInfo = !filterEntryTypes || filterEntryTypes.has('info')
+
+    // Apply common filter constraints (assignee, mcp, context) used by all three sections.
+    // Typed as `any` because Supabase's chainable filter types are awkward to thread through generics.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    function applyCommon(q: any): any {
+      if (filterAssignee === 'me') q = q.is('owner_id', null)
+      else if (filterAssignee === 'others') q = q.not('owner_id', 'is', null)
+      else if (filterAssignee) q = q.eq('owner_id', filterAssignee)
+      if (filterMcp === 'mcp') q = q.eq('via_mcp', true)
+      else if (filterMcp === 'manual') q = q.eq('via_mcp', false)
+      if (contextFilter) q = q.eq('context_id', contextFilter)
+      return q
+    }
+
+    function applyTaskDateRanges(q: any): any {
+      if (filterDueFrom) q = q.gte('due_date', filterDueFrom + 'T00:00:00')
+      if (filterDueTo) q = q.lte('due_date', filterDueTo + 'T23:59:59')
+      if (filterStartFrom) q = q.gte('start_date', filterStartFrom + 'T00:00:00')
+      if (filterStartTo) q = q.lte('start_date', filterStartTo + 'T23:59:59')
+      return q
+    }
+    /* eslint-enable @typescript-eslint/no-explicit-any */
 
     // Tasks Due: past due + due today
     let dueQuery = supabase
@@ -114,6 +190,8 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose, activePro
       .order('due_date', { ascending: true })
       .limit(50)
     if (!isGlobalView && activeWorkspaceId) dueQuery = dueQuery.eq('workspace_id', activeWorkspaceId)
+    dueQuery = applyCommon(dueQuery)
+    dueQuery = applyTaskDateRanges(dueQuery)
 
     // Future tasks
     const futureEnd = futureRange === 0 ? undefined : addDays(futureRange)
@@ -130,6 +208,8 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose, activePro
       .limit(50)
     if (futureEnd) futureQuery = futureQuery.lte('due_date', futureEnd)
     if (!isGlobalView && activeWorkspaceId) futureQuery = futureQuery.eq('workspace_id', activeWorkspaceId)
+    futureQuery = applyCommon(futureQuery)
+    futureQuery = applyTaskDateRanges(futureQuery)
 
     // Recent activity: last 20 modified blocks
     let activityQuery = supabase
@@ -141,8 +221,22 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose, activePro
       .order('updated_at', { ascending: false })
       .limit(20)
     if (!isGlobalView && activeWorkspaceId) activityQuery = activityQuery.eq('workspace_id', activeWorkspaceId)
+    activityQuery = applyCommon(activityQuery)
+    if (filterEntryTypes && filterEntryTypes.size === 1) {
+      activityQuery = activityQuery.eq('entry_type', Array.from(filterEntryTypes)[0])
+    } else if (filterEntryTypes && filterEntryTypes.size === 0) {
+      activityQuery = activityQuery.eq('entry_type', '__none__')
+    }
+    if (filterDateFrom) activityQuery = activityQuery.gte('created_at', filterDateFrom + 'T00:00:00')
+    if (filterDateTo) activityQuery = activityQuery.lte('created_at', filterDateTo + 'T23:59:59')
+    if (filterModifiedFrom) activityQuery = activityQuery.gte('updated_at', filterModifiedFrom + 'T00:00:00')
+    if (filterModifiedTo) activityQuery = activityQuery.lte('updated_at', filterModifiedTo + 'T23:59:59')
 
-    const [dueRes, futureRes, activityRes] = await Promise.all([dueQuery, futureQuery, activityQuery])
+    const [dueRes, futureRes, activityRes] = await Promise.all([
+      includeTasks ? dueQuery : Promise.resolve({ data: [] as TaskItem[] }),
+      includeTasks ? futureQuery : Promise.resolve({ data: [] as TaskItem[] }),
+      (includeTasks || includeInfo) ? activityQuery : Promise.resolve({ data: [] as ActivityItem[] }),
+    ])
     const allDue = (dueRes.data ?? []) as TaskItem[]
     const allFuture = (futureRes.data ?? []) as TaskItem[]
     const allActivity = (activityRes.data ?? []) as ActivityItem[]
@@ -212,7 +306,7 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose, activePro
     setActivity(allActivity)
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, activeWorkspaceId, isGlobalView, futureRange, propertyFiltersKey])
+  }, [userId, activeWorkspaceId, isGlobalView, futureRange, propertyFiltersKey, filterKey, propsCatalogKey])
 
   useEffect(() => { fetchAll() }, [fetchAll, refreshKey])
 
@@ -325,7 +419,9 @@ export function RightPanel({ userId, refreshKey, onTaskClick, onClose, activePro
       <div className="fixed inset-y-0 right-0 w-[280px] z-50 sm:relative sm:z-auto flex flex-shrink-0 bg-white border-l border-[#E5E0D0] flex-col overflow-hidden">
         {/* Header */}
         <div className="px-4 py-3 border-b border-[#E5E0D0] flex items-center justify-between">
-          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Focus</h2>
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            Focus{hasActiveFilters && <span className="ml-1 text-amber-600 normal-case font-medium tracking-normal">(Filtered)</span>}
+          </h2>
           {onClose && (
             <button onClick={onClose} className="sm:hidden p-1 text-gray-400 hover:text-gray-600">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
