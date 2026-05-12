@@ -1778,6 +1778,8 @@ export function JournalBlock(props: Props) {
     // then check whether the click was actually outside the card.
     if (!e.relatedTarget) {
       requestAnimationFrame(() => {
+        // The native date picker steals focus from the DOM — keep the card active.
+        if (datePickerOpenRef.current) return
         // If focus has already landed inside this card, do nothing.
         if (cardRef.current?.contains(document.activeElement)) return
         // If focus moved to an emoji picker (shadow DOM — activeElement is the host element)
@@ -1897,7 +1899,8 @@ export function JournalBlock(props: Props) {
     if (!p.block) return
     p.onUpdate({ ...p.block, [field]: value })
     const supabase = createClient()
-    supabase.from('journal_blocks').update({ [field]: value }).eq('id', p.block.id).then(() => {})
+    supabase.from('journal_blocks').update({ [field]: value }).eq('id', p.block.id).select('*').single()
+      .then(({ data }) => { if (data) p.onUpdate(data as Block) })
   }
 
   function handlePersonAdded(person: Person) {
@@ -1910,7 +1913,8 @@ export function JournalBlock(props: Props) {
     // Keep status active — task_status drives strikethrough/grey styling, no auto-archive
     p.onUpdate({ ...p.block, task_status: taskStatus })
     const supabase = createClient()
-    supabase.from('journal_blocks').update({ task_status: taskStatus }).eq('id', p.block.id).then(() => {})
+    supabase.from('journal_blocks').update({ task_status: taskStatus }).eq('id', p.block.id).select('*').single()
+      .then(({ data }) => { if (data) p.onUpdate(data as Block) })
   }
 
   async function moveToWorkspace(targetWsId: string | null) {
@@ -2793,7 +2797,7 @@ export function JournalBlock(props: Props) {
                     setStartWithValidation(buildStartTs(e.target.value, startTimeVal || null))
                   }} className="absolute inset-0 opacity-0 w-full h-full cursor-pointer" tabIndex={-1} />
                 </div>
-                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { openDatePicker(startPickerId) }}>
+                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onMouseDown={(e) => e.preventDefault()} onClick={() => { openDatePicker(startPickerId) }}>
                   {startDateVal ? formatDatePart(new Date(startDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
                 </span>
                 {startDateVal && (
@@ -2838,7 +2842,7 @@ export function JournalBlock(props: Props) {
                     else { setDueWithValidation(buildPendingTimestamp(e.target.value, pendingTimeVal || null)); if (!pendingDueDateType) setPendingDueDateType('target') }
                   }} className="absolute inset-0 opacity-0 w-full h-full cursor-pointer" tabIndex={-1} />
                 </div>
-                <span title="Due Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { openDatePicker(newDatePickerId) }}>
+                <span title="Due Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onMouseDown={(e) => e.preventDefault()} onClick={() => { openDatePicker(newDatePickerId) }}>
                   {pendingDateVal ? formatDatePart(new Date(pendingDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
                 </span>
                 {pendingDateVal && (
@@ -2955,7 +2959,7 @@ export function JournalBlock(props: Props) {
                     setStartValidated(buildStartTs(e.target.value, sdTimeVal || null))
                   }} className="absolute inset-0 opacity-0 w-full h-full cursor-pointer" tabIndex={-1} />
                 </div>
-                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onClick={() => { openDatePicker(startPickerId) }}>
+                <span title="Start Date" className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none" onMouseDown={(e) => e.preventDefault()} onClick={() => { openDatePicker(startPickerId) }}>
                   {sdDateVal ? formatDatePart(new Date(sdDateVal + 'T00:00:00'), dateFormat) : <span className="text-gray-300">mm/dd/yyyy</span>}
                 </span>
                 {sdDateVal && (
@@ -3047,6 +3051,7 @@ export function JournalBlock(props: Props) {
                 <span
                   title="Due Date"
                   className="text-xs text-gray-600 hover:text-gray-900 py-0.5 cursor-pointer select-none"
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => openDatePicker(datePickerId)}
                 >
                   {dateVal

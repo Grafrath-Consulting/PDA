@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react'
 import { createPortal } from 'react-dom'
 import data from '@emoji-mart/data'
 
@@ -103,6 +103,21 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [blockProperties, setBlockProperties] = useState<Map<string, Set<string>>>(new Map())
 
   const [blocks, setBlocks] = useState<Block[]>([])
+  // Signature that changes whenever the feed gains/loses a block or a task block
+  // is persisted (updated_at is bumped server-side on every row update). Drives
+  // RightPanel (FOCUS) re-fetch so it stays in sync after editing a due/start
+  // date inline. Keyed on updated_at rather than the optimistic field values so
+  // the re-fetch fires only after the write has committed (avoiding a stale read).
+  const focusPanelKey = useMemo(
+    () =>
+      blocks.length +
+      '|' +
+      blocks
+        .filter((b) => b.entry_type === 'task')
+        .map((b) => `${b.id}:${b.updated_at}`)
+        .join(','),
+    [blocks]
+  )
   const [contexts, setContexts] = useState<Context[]>([])
   const [contextFilter, setContextFilter] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(true)
@@ -1880,7 +1895,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         {panelOpen && (
           <RightPanel
             userId={userId}
-            refreshKey={blocks.length}
+            refreshKey={focusPanelKey}
             onClose={() => setPanelOpen(false)}
             activePropertyFilters={activePropertyFilters}
             filterEntryTypes={filterEntryTypes}

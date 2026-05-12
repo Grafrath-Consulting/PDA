@@ -78,7 +78,7 @@ const FUTURE_RANGES = [
 
 interface Props {
   userId: string
-  refreshKey?: number
+  refreshKey?: number | string
   onTaskClick?: (blockId: string) => void
   onClose?: () => void
   activePropertyFilters?: Set<string>
