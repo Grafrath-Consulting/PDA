@@ -792,6 +792,16 @@ export function JournalPage({ userId, email, displayName }: Props) {
       }
       return [withOrder, ...prev]
     })
+    // When smart search is active, the feed renders smartSearchResults — not blocks.
+    // Prepend the new card so it's visible immediately; otherwise it stays hidden
+    // until the search re-runs.
+    setSmartSearchResults(prev => {
+      if (!prev) return prev
+      if (prev.some(b => b.id === block.id)) {
+        return prev.map(b => b.id === block.id ? withOrder : b)
+      }
+      return [withOrder, ...prev]
+    })
     // Optimistically seed blockProperties so an active property filter accepts
     // the new block immediately, instead of hiding it until the visibleBlockIds
     // useEffect refetches entry_properties.
