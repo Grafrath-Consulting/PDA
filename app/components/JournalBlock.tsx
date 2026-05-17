@@ -1490,28 +1490,40 @@ export function JournalBlock(props: Props) {
     lastSyncedContentRef.current = html // prevent our own draft from re-triggering sync
   }
 
-  // beforeunload: save draft via fetch+keepalive so it survives page close
+  // beforeunload: save draft via fetch+keepalive so it survives page close,
+  // and warn the user before discarding unsaved changes on the current edit
   useEffect(() => {
-    if (isNewEntry) return
-    function handleBeforeUnload() {
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (isNewEntry) {
+        // Warn if the user has typed text into a new entry that isn't yet saved
+        const text = liveTextRef.current.trim()
+        if (text && liveHTMLRef.current !== lastSavedHTMLRef.current) {
+          e.preventDefault()
+          e.returnValue = ''
+        }
+        return
+      }
       const blockId = (propsRef.current as ExistingBlockProps).block?.id
       if (!blockId) return
       const html = liveHTMLRef.current
       if (html === lastSavedHTMLRef.current) return
       const token = accessTokenRef.current
-      if (!token) return
-      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/journal_blocks?id=eq.${blockId}`
-      fetch(url, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-          'Authorization': `Bearer ${token}`,
-          'Prefer': 'return=minimal',
-        },
-        body: JSON.stringify({ draft_content: html }),
-        keepalive: true,
-      }).catch(() => {})
+      if (token) {
+        const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/journal_blocks?id=eq.${blockId}`
+        fetch(url, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+            'Authorization': `Bearer ${token}`,
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({ draft_content: html }),
+          keepalive: true,
+        }).catch(() => {})
+      }
+      e.preventDefault()
+      e.returnValue = ''
     }
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
@@ -1646,6 +1658,10 @@ export function JournalBlock(props: Props) {
   function handleEditorKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Escape' && !isNewEntry && focused) {
       e.preventDefault()
+      const hasUnsavedChanges = liveHTMLRef.current !== lastSavedHTMLRef.current
+      if (hasUnsavedChanges && !window.confirm('Discard unsaved changes?')) {
+        return
+      }
       const revertTo = lastSavedHTMLRef.current
       editorRef.current?.setContent(revertTo)
       liveHTMLRef.current = revertTo
