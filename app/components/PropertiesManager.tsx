@@ -10,7 +10,7 @@ import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   DragEndEvent, DragStartEvent, DragOverlay,
 } from '@dnd-kit/core'
-import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { SortableContext, useSortable, verticalListSortingStrategy, rectSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
 const VALUE_COLORS = PROPERTY_COLOR_KEYS
@@ -201,6 +201,23 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
   const [optimisticMulti, setOptimisticMulti] = useState(property.allow_multiple)
   const [optimisticArchived, setOptimisticArchived] = useState(property.archived)
   const newColorRef = useRef<HTMLDivElement>(null)
+  const { reorderPropertyValues } = useProperties()
+  const [activeValue, setActiveValue] = useState<PropertyValue | null>(null)
+  const valueSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
+
+  function handleValueDragStart(event: DragStartEvent) {
+    setActiveValue(property.values.find(v => v.id === String(event.active.id)) ?? null)
+  }
+
+  function handleValueDragEnd(event: DragEndEvent) {
+    setActiveValue(null)
+    const { active, over } = event
+    if (over && active.id !== over.id) {
+      const from = property.values.findIndex(v => v.id === String(active.id))
+      const to = property.values.findIndex(v => v.id === String(over.id))
+      if (from !== -1 && to !== -1) reorderPropertyValues(property.id, from, to)
+    }
+  }
 
   // Sync optimistic state when property updates from server
   useEffect(() => {
@@ -353,11 +370,27 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1 mb-2">
-        {property.values.map((val) => (
-          <ValueChip key={val.id} value={val} onChanged={onChanged} />
-        ))}
-      </div>
+      <DndContext
+        sensors={valueSensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleValueDragStart}
+        onDragEnd={handleValueDragEnd}
+      >
+        <SortableContext items={property.values.map(v => v.id)} strategy={rectSortingStrategy}>
+          <div className="flex flex-wrap gap-1 mb-2">
+            {property.values.map((val) => (
+              <SortableValueChip key={val.id} value={val} onChanged={onChanged} />
+            ))}
+          </div>
+        </SortableContext>
+        <DragOverlay dropAnimation={null}>
+          {activeValue && (
+            <div className="opacity-90">
+              <ValueChip value={activeValue} onChanged={() => {}} />
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
 
       {addingValue ? (
         <div className="flex items-center gap-1.5">
@@ -433,7 +466,26 @@ function PropertyRow({ property, workspaces, onChanged }: { property: Property; 
 
 // ── Individual value chip (editable) ─────────────────────────────────
 
-function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () => void }) {
+function SortableValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () => void }) {
+  const { setNodeRef, setActivatorNodeRef, listeners, attributes, transform, transition, isDragging } = useSortable({ id: value.id })
+  const style: React.CSSProperties = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+    opacity: isDragging ? 0.3 : 1,
+  }
+  return (
+    <div ref={setNodeRef} style={style}>
+      <ValueChip value={value} onChanged={onChanged} dragHandleRef={setActivatorNodeRef} dragHandleProps={{ ...listeners, ...attributes }} />
+    </div>
+  )
+}
+
+function ValueChip({ value, onChanged, dragHandleRef, dragHandleProps }: {
+  value: PropertyValue
+  onChanged: () => void
+  dragHandleRef?: (el: HTMLElement | null) => void
+  dragHandleProps?: Record<string, unknown>
+}) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(value.label)
   const [showColorPicker, setShowColorPicker] = useState(false)
@@ -480,6 +532,20 @@ function ValueChip({ value, onChanged }: { value: PropertyValue; onChanged: () =
     <div ref={chipRef} className={`relative group inline-flex items-center gap-1 bg-gray-50 border rounded px-1.5 py-0.5 ${
       value.archived ? 'border-dashed border-gray-300 opacity-60' : 'border-gray-200'
     }`}>
+      {dragHandleProps && (
+        <span
+          ref={dragHandleRef}
+          {...dragHandleProps}
+          title="Drag to reorder"
+          className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity -ml-0.5 flex-shrink-0"
+        >
+          <svg width="6" height="10" viewBox="0 0 6 10" fill="currentColor">
+            <circle cx="1.5" cy="2" r="1" /><circle cx="4.5" cy="2" r="1" />
+            <circle cx="1.5" cy="5" r="1" /><circle cx="4.5" cy="5" r="1" />
+            <circle cx="1.5" cy="8" r="1" /><circle cx="4.5" cy="8" r="1" />
+          </svg>
+        </span>
+      )}
       <button
         onClick={() => setShowColorPicker(!showColorPicker)}
         className="w-2.5 h-2.5 rounded-full flex-shrink-0"

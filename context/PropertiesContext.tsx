@@ -31,6 +31,7 @@ interface PropertiesContextValue {
   propertiesForWorkspace: (workspaceId: string | null) => Property[]
   refetch: () => Promise<void>
   reorderProperties: (fromIndex: number, toIndex: number) => void
+  reorderPropertyValues: (propertyId: string, fromIndex: number, toIndex: number) => void
 }
 
 const PropertiesContext = createContext<PropertiesContextValue | null>(null)
@@ -54,6 +55,7 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
       .select('id, property_id, label, color, sort_order, archived')
       .in('property_id', props.map(p => p.id))
       .order('sort_order')
+      .order('label')
 
     const valuesByProp = new Map<string, PropertyValue[]>()
     for (const v of (vals ?? []) as PropertyValue[]) {
@@ -65,7 +67,7 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
     setAllProperties(
       (props as Omit<Property, 'values'>[]).map(p => ({
         ...p,
-        values: (valuesByProp.get(p.id) ?? []).sort((a, b) => a.label.localeCompare(b.label)),
+        values: valuesByProp.get(p.id) ?? [],
       }))
     )
   }, [userId])
@@ -85,6 +87,20 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
     })
   }, [])
 
+  const reorderPropertyValues = useCallback((propertyId: string, fromIndex: number, toIndex: number) => {
+    setAllProperties(prev => prev.map(p => {
+      if (p.id !== propertyId) return p
+      const next = [...p.values]
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
+      const supabase = createClient()
+      next.forEach((v, i) => {
+        supabase.from('property_values').update({ sort_order: i + 1 }).eq('id', v.id).then(() => {})
+      })
+      return { ...p, values: next }
+    }))
+  }, [])
+
   const globalProperties = allProperties.filter(p => p.workspace_id === null)
 
   const propertiesForWorkspace = useCallback((workspaceId: string | null): Property[] => {
@@ -100,6 +116,7 @@ export function PropertiesProvider({ userId, children }: { userId: string; child
       propertiesForWorkspace,
       refetch: load,
       reorderProperties,
+      reorderPropertyValues,
     }}>
       {children}
     </PropertiesContext.Provider>

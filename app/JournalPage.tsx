@@ -44,8 +44,23 @@ const FILTERS_KEY = 'journal-filters'
 const VALID_SORT_MODES: SortMode[] = ['created_desc', 'created_asc', 'modified_desc', 'modified_asc', 'due_date', 'manual']
 const VALID_PANEL_MODES: PanelMode[] = ['collapsed', 'normal', 'expanded']
 
-type SortMode = 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc' | 'due_date' | 'manual'
+type SortMode = 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc' | 'due_date' | 'manual' | 'property'
 type PanelMode = 'collapsed' | 'normal' | 'expanded'
+
+// Sort preference is persisted as a string. "Sort by property" encodes the
+// chosen property id as `property:<id>` so it round-trips through the existing
+// profiles.journal_sort_mode text column without a schema change.
+function encodeSortPref(mode: SortMode, propertyId: string | null): string {
+  return mode === 'property' && propertyId ? `property:${propertyId}` : mode
+}
+function decodeSortPref(raw: string): { mode: SortMode; propertyId: string | null } | null {
+  if (raw.startsWith('property:')) {
+    const id = raw.slice('property:'.length)
+    return id ? { mode: 'property', propertyId: id } : null
+  }
+  if (VALID_SORT_MODES.includes(raw as SortMode)) return { mode: raw as SortMode, propertyId: null }
+  return null
+}
 
 interface Props {
   userId: string
@@ -128,6 +143,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [syncInterval, setSyncInterval] = useState(DEFAULT_SYNC_INTERVAL)
   const [formattingVisible, setFormattingVisible] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>('created_desc')
+  const [sortPropertyId, setSortPropertyId] = useState<string | null>(null)
   const [sortDropdownOpen, setSortDropdownOpen] = useState(false)
 
   const activeWorkspaceIdRef = useRef(activeWorkspaceId)
@@ -192,7 +208,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const fmt = localStorage.getItem(FORMATTING_VISIBLE_KEY)
     if (fmt === 'true') setFormattingVisible(true)
     const sort = localStorage.getItem(SORT_MODE_KEY)
-    if (sort && VALID_SORT_MODES.includes(sort as SortMode)) setSortMode(sort as SortMode)
+    if (sort) {
+      const decoded = decodeSortPref(sort)
+      if (decoded) { setSortMode(decoded.mode); setSortPropertyId(decoded.propertyId) }
+    }
     const mode = localStorage.getItem(PANEL_MODE_KEY)
     if (mode && VALID_PANEL_MODES.includes(mode as PanelMode)) {
       setPanelMode(mode as PanelMode)
@@ -438,8 +457,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
           setSyncInterval(data.sync_interval_seconds)
         }
         if (data?.journal_sort_mode) {
-          setSortMode(data.journal_sort_mode as SortMode)
-          localStorage.setItem(SORT_MODE_KEY, data.journal_sort_mode)
+          const decoded = decodeSortPref(data.journal_sort_mode)
+          if (decoded) {
+            setSortMode(decoded.mode)
+            setSortPropertyId(decoded.propertyId)
+            localStorage.setItem(SORT_MODE_KEY, data.journal_sort_mode)
+          }
         }
         if (data?.ws_select_mode) {
           setWsSelectMode(true)
@@ -467,11 +490,13 @@ export function JournalPage({ userId, email, displayName }: Props) {
     }).eq('id', userId).then(() => {})
   }, [wsSelectMode, selectedWsIds, userId])
 
-  async function saveSortMode(mode: SortMode) {
+  async function saveSortMode(mode: SortMode, propertyId: string | null = null) {
     setSortMode(mode)
-    localStorage.setItem(SORT_MODE_KEY, mode)
+    setSortPropertyId(propertyId)
+    const encoded = encodeSortPref(mode, propertyId)
+    localStorage.setItem(SORT_MODE_KEY, encoded)
     const supabase = createClient()
-    await supabase.from('profiles').update({ journal_sort_mode: mode }).eq('id', userId)
+    await supabase.from('profiles').update({ journal_sort_mode: encoded }).eq('id', userId)
   }
 
   function togglePanel() {
@@ -979,6 +1004,28 @@ export function JournalPage({ userId, email, displayName }: Props) {
         infos.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
         return [...tasks, ...infos]
       })()
+    : sortMode === 'property' && sortPropertyId
+    ? (() => {
+        const prop = allProperties.find(p => p.id === sortPropertyId)
+        // Cards with a value rank by the value's position in the property
+        // (top value first); cards missing the property fall to the bottom.
+        // Within a rank, newest-entered first.
+        const rank = new Map<string, number>()
+        filteredBlocks.forEach(b => {
+          let best = Infinity
+          if (prop) {
+            const applied = blockProperties.get(b.id)
+            if (applied) prop.values.forEach((v, i) => { if (applied.has(v.id) && i < best) best = i })
+          }
+          rank.set(b.id, best)
+        })
+        return [...filteredBlocks].sort((a, b) => {
+          const ra = rank.get(a.id) ?? Infinity
+          const rb = rank.get(b.id) ?? Infinity
+          if (ra !== rb) return ra - rb
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        })
+      })()
     : [...filteredBlocks].sort((a, b) => {
         switch (sortMode) {
           case 'created_asc':
@@ -1345,6 +1392,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
                   </svg>
+                ) : sortMode === 'property' ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" />
+                  </svg>
                 ) : sortMode.startsWith('created') ? (
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="10" />
@@ -1355,7 +1406,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
                     <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                   </svg>
                 )}
-                {sortMode !== 'manual' && sortMode !== 'due_date' && (
+                {sortMode !== 'manual' && sortMode !== 'due_date' && sortMode !== 'property' && (
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                     {sortMode.endsWith('_desc') ? (
                       <path d="M12 4v16M5 13l7 7 7-7" />
@@ -1424,6 +1475,34 @@ export function JournalPage({ userId, email, displayName }: Props) {
                       <span>{label}</span>
                     </button>
                   ))}
+                  {(() => {
+                    const sortableProps = (isGlobalView ? allProperties : propertiesForWorkspace(activeWorkspaceId)).filter(p => !p.archived)
+                    if (sortableProps.length === 0) return null
+                    return (
+                      <>
+                        <div className="my-1 border-t border-gray-100" />
+                        <p className="px-3 py-1 text-[10px] font-medium text-gray-400 uppercase tracking-wide">Sort by property</p>
+                        {sortableProps.map((prop) => (
+                          <button
+                            key={prop.id}
+                            onClick={() => { saveSortMode('property', prop.id); setSortDropdownOpen(false) }}
+                            className={`w-full flex items-center gap-2 px-3 py-2 text-sm whitespace-nowrap transition-colors ${
+                              sortMode === 'property' && sortPropertyId === prop.id
+                                ? 'bg-amber-50 text-amber-800 font-medium'
+                                : 'text-gray-700 hover:bg-[#FFFEF7]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-0.5 flex-shrink-0 w-[22px]">
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" />
+                              </svg>
+                            </span>
+                            <span>{prop.name}</span>
+                          </button>
+                        ))}
+                      </>
+                    )
+                  })()}
                 </div>
               )}
             </div>
