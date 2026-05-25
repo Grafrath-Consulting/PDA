@@ -22,7 +22,7 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   title: "PDA",
-  description: "capture everything, organize later",
+  description: "capture now, organize later",
   icons: {
     icon: [
       { url: "/favicon.svg", type: "image/svg+xml" },
@@ -32,7 +32,7 @@ export const metadata: Metadata = {
   manifest: "/manifest.json",
   openGraph: {
     title: "PDA",
-    description: "capture everything, organize later",
+    description: "capture now, organize later",
     images: [{ url: "/og-image-1280x640.png", width: 1280, height: 640 }],
   },
 };

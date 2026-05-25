@@ -1340,7 +1340,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
               className="text-[11px] leading-[1.2] opacity-60"
               style={{ color: barText }}
             >
-              capture everything, organize later
+              capture now, organize later
             </span>
           </div>
         </div>
