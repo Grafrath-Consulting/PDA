@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createServiceClient } from '@supabase/supabase-js'
 import { getUserApiKey } from '@/lib/get-user-ai-config'
-import { formatDueDate } from '@/lib/date-format'
+import { formatDueDate, zonedToUtcIso, zonedDateStr } from '@/lib/date-format'
 import type { DateFormatOption, TimeFormatOption } from '@/lib/date-format'
 import { REPORT_SUMMARY_DEFAULT_PROMPT } from '@/lib/ai-prompts'
 
@@ -26,15 +26,15 @@ function truncate(text: string, max = 200): string {
   return text.slice(0, max).trimEnd() + '…'
 }
 
-function formatDue(date: string | null, type: string | null, dateFmt: DateFormatOption = 'MM/DD/YYYY', timeFmt: TimeFormatOption = '12h'): string {
+function formatDue(date: string | null, type: string | null, dateFmt: DateFormatOption, timeFmt: TimeFormatOption, tz: string): string {
   if (!date) return ''
-  const label = formatDueDate(date, dateFmt, timeFmt)
+  const label = formatDueDate(date, dateFmt, timeFmt, tz)
   return type === 'deadline' ? `${label} (deadline)` : label
 }
 
 function formatDateHeader(date: string): string {
-  return new Date(date + 'T00:00:00').toLocaleDateString(undefined, {
-    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  return new Date(date + 'T00:00:00Z').toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC',
   })
 }
 
@@ -79,9 +79,14 @@ export async function POST(request: Request) {
   const wsIds: string[] = body.workspaceIds ?? (body.workspaceId ? [body.workspaceId] : [])
   const filterByWs = wsIds.length > 0
 
-  const { data: profileData } = await supabase.from('profiles').select('date_format, time_format').eq('id', user.id).single()
+  const { data: profileData } = await supabase.from('profiles').select('date_format, time_format, timezone').eq('id', user.id).single()
   const userDateFmt = (profileData?.date_format ?? 'MM/DD/YYYY') as DateFormatOption
   const userTimeFmt = (profileData?.time_format ?? '12h') as TimeFormatOption
+  const userTz = (profileData?.timezone as string | undefined) ?? 'America/Chicago'
+  // Local-day bounds (in the user's zone) as true-UTC instants for querying.
+  const fromBound = zonedToUtcIso(dateFrom, '00:00:00', userTz)
+  const toBound = zonedToUtcIso(dateTo, '23:59:59', userTz)
+  const todayStartBound = zonedToUtcIso(zonedDateStr(new Date().toISOString(), userTz), '00:00:00', userTz)
 
   const { data: peopleData } = await supabase.from('people').select('id, name').eq('user_id', user.id)
   const people = (peopleData ?? []) as PersonRow[]
@@ -146,8 +151,8 @@ export async function POST(request: Request) {
     let q = supabase.from('journal_blocks')
       .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
       .eq('user_id', user.id).is('deleted_at', null)
-      .or(`created_at.gte.${dateFrom}T00:00:00,updated_at.gte.${dateFrom}T00:00:00`)
-      .lte('created_at', dateTo + 'T23:59:59')
+      .or(`created_at.gte.${fromBound},updated_at.gte.${fromBound}`)
+      .lte('created_at', toBound)
       .order('created_at', { ascending: false }).limit(30)
     if (body.statusFilter) q = q.eq('status', body.statusFilter)
     else q = q.neq('status', 'archived')
@@ -162,7 +167,7 @@ export async function POST(request: Request) {
     let q = supabase.from('journal_blocks')
       .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
       .eq('user_id', user.id).eq('entry_type', 'task').eq('status', 'complete').is('deleted_at', null)
-      .gte('updated_at', dateFrom + 'T00:00:00').lte('updated_at', dateTo + 'T23:59:59')
+      .gte('updated_at', fromBound).lte('updated_at', toBound)
       .order('updated_at', { ascending: false }).limit(20)
     q = applyFilters(q)
     const { data } = await q
@@ -175,7 +180,7 @@ export async function POST(request: Request) {
     let q = supabase.from('journal_blocks')
       .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
       .eq('user_id', user.id).eq('entry_type', 'task').eq('status', 'active').is('deleted_at', null)
-      .lt('due_date', `${today}T00:00:00`).order('due_date', { ascending: true }).limit(20)
+      .lt('due_date', todayStartBound).order('due_date', { ascending: true }).limit(20)
     q = applyFilters(q)
     const { data } = await q
     pastDue = (data ?? []) as BlockRow[]
@@ -246,7 +251,7 @@ export async function POST(request: Request) {
       for (const { name: ws, items } of groupByWorkspace(priorityTasks)) {
         sections.push(`[${ws}]`)
         for (const t of items) {
-          sections.push(`• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type, userDateFmt, userTimeFmt)}` : ''}`)
+          sections.push(`• ${truncate(stripHTML(t.content))} — Owner: ${personName(t.owner_id)}${t.due_date ? ` — Due: ${formatDue(t.due_date, t.due_date_type, userDateFmt, userTimeFmt, userTz)}` : ''}`)
         }
       }
       sections.push('')
@@ -279,7 +284,7 @@ export async function POST(request: Request) {
       for (const { name: ws, items } of groupByWorkspace(pastDue)) {
         sections.push(`[${ws}]`)
         for (const p of items) {
-          sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type, userDateFmt, userTimeFmt)} — Owner: ${personName(p.owner_id)}`)
+          sections.push(`• ${truncate(stripHTML(p.content))} — Due: ${formatDue(p.due_date, p.due_date_type, userDateFmt, userTimeFmt, userTz)} — Owner: ${personName(p.owner_id)}`)
         }
       }
       sections.push('')

@@ -3,53 +3,129 @@ export type TimeFormatOption = '12h' | '24h'
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-/** Format a Date's date portion according to the user's preference */
-export function formatDatePart(d: Date, fmt: DateFormatOption): string {
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  const yyyy = String(d.getFullYear())
+const pad = (n: number) => String(n).padStart(2, '0')
+
+// ── Pure component formatters (no Date/timezone involved) ────────────
+function fmtDate(year: number, month: number, day: number, fmt: DateFormatOption): string {
+  const mm = pad(month)
+  const dd = pad(day)
+  const yyyy = String(year)
   switch (fmt) {
     case 'DD/MM/YYYY': return `${dd}/${mm}/${yyyy}`
     case 'YYYY-MM-DD': return `${yyyy}-${mm}-${dd}`
-    case 'Mon DD, YYYY': return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${yyyy}`
+    case 'Mon DD, YYYY': return `${MONTH_NAMES[month - 1]} ${day}, ${yyyy}`
     case 'MM/DD/YYYY':
     default: return `${mm}/${dd}/${yyyy}`
   }
 }
 
-/** Format a Date's time portion according to the user's preference */
-export function formatTimePart(d: Date, fmt: TimeFormatOption): string {
-  const h = d.getHours()
-  const m = String(d.getMinutes()).padStart(2, '0')
-  if (fmt === '24h') {
-    return `${String(h).padStart(2, '0')}:${m}`
-  }
-  const period = h >= 12 ? 'PM' : 'AM'
-  const h12 = h % 12 || 12
+function fmtTime(hour: number, minute: number, fmt: TimeFormatOption): string {
+  const m = pad(minute)
+  if (fmt === '24h') return `${pad(hour)}:${m}`
+  const period = hour >= 12 ? 'PM' : 'AM'
+  const h12 = hour % 12 || 12
   return `${h12}:${m} ${period}`
 }
 
-/** Format a full timestamp string (ISO) for display */
+// ── Date-based helpers (operate on a Date's local components) ─────────
+// Used to render a plain "YYYY-MM-DD" picker value, which is already the
+// wall-clock date the user selected — no timezone conversion needed.
+export function formatDatePart(d: Date, fmt: DateFormatOption): string {
+  return fmtDate(d.getFullYear(), d.getMonth() + 1, d.getDate(), fmt)
+}
+
+export function formatTimePart(d: Date, fmt: TimeFormatOption): string {
+  return fmtTime(d.getHours(), d.getMinutes(), fmt)
+}
+
+// ── Timezone-aware instant helpers ───────────────────────────────────
+export interface ZonedParts {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+  second: number
+}
+
+/** Wall-clock components of a UTC instant as seen in the given IANA zone. */
+export function zonedParts(iso: string, timeZone: string): ZonedParts {
+  const date = new Date(iso)
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  })
+  const map: Record<string, string> = {}
+  for (const part of dtf.formatToParts(date)) {
+    if (part.type !== 'literal') map[part.type] = part.value
+  }
+  // Some engines emit hour "24" at midnight with hour12:false — normalise to 0.
+  let hour = Number(map.hour)
+  if (hour === 24) hour = 0
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour,
+    minute: Number(map.minute),
+    second: Number(map.second),
+  }
+}
+
+/** "YYYY-MM-DD" of an instant in the given zone. */
+export function zonedDateStr(iso: string, timeZone: string): string {
+  const p = zonedParts(iso, timeZone)
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`
+}
+
+/** "HH:MM" (24h) of an instant in the given zone. */
+export function zonedTimeStr(iso: string, timeZone: string): string {
+  const p = zonedParts(iso, timeZone)
+  return `${pad(p.hour)}:${pad(p.minute)}`
+}
+
+/**
+ * Convert a wall-clock date+time interpreted in `timeZone` to a UTC ISO instant.
+ * dateStr: "YYYY-MM-DD", timeStr: "HH:MM" or "HH:MM:SS".
+ */
+export function zonedToUtcIso(dateStr: string, timeStr: string, timeZone: string): string {
+  const [y, mo, d] = dateStr.split('-').map(Number)
+  const t = timeStr.split(':').map(Number)
+  const h = t[0] ?? 0, mi = t[1] ?? 0, s = t[2] ?? 0
+  // Treat the wall-clock as if it were UTC, then correct by the zone's offset
+  // at that instant (handles DST automatically, per date).
+  const utcGuess = Date.UTC(y, mo - 1, d, h, mi, s)
+  const p = zonedParts(new Date(utcGuess).toISOString(), timeZone)
+  const zoneWallAsUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second)
+  const offset = zoneWallAsUtc - utcGuess
+  return new Date(utcGuess - offset).toISOString()
+}
+
+/** Format a full timestamp (ISO instant) for display in the user's zone. */
 export function formatTimestamp(
   iso: string,
   dateFmt: DateFormatOption,
   timeFmt: TimeFormatOption,
+  timeZone: string,
 ): string {
-  const d = new Date(iso)
-  return `${formatDatePart(d, dateFmt)}, ${formatTimePart(d, timeFmt)}`
+  const p = zonedParts(iso, timeZone)
+  return `${fmtDate(p.year, p.month, p.day, dateFmt)}, ${fmtTime(p.hour, p.minute, timeFmt)}`
 }
 
-/** Format a due-date timestamp, hiding the time if it's the 23:59:59 sentinel */
+/**
+ * Format a due-date instant for display in the user's zone, hiding the time
+ * when it is the 23:59:59 "all-day / no time set" sentinel.
+ */
 export function formatDueDate(
   iso: string,
   dateFmt: DateFormatOption,
   timeFmt: TimeFormatOption,
+  timeZone: string,
 ): string {
-  // Strip timezone to parse as local
-  const localStr = iso.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '')
-  const d = new Date(localStr)
-  const dateStr = formatDatePart(d, dateFmt)
-  const hh = d.getHours(), mi = d.getMinutes(), ss = d.getSeconds()
-  if (hh === 23 && mi === 59 && ss === 59) return dateStr
-  return `${dateStr} ${formatTimePart(d, timeFmt)}`
+  const p = zonedParts(iso, timeZone)
+  const dateStr = fmtDate(p.year, p.month, p.day, dateFmt)
+  if (p.hour === 23 && p.minute === 59 && p.second === 59) return dateStr
+  return `${dateStr} ${fmtTime(p.hour, p.minute, timeFmt)}`
 }

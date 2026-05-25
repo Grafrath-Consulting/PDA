@@ -63,6 +63,20 @@ const TIME_FORMAT_OPTIONS: { value: TimeFormatOption; label: string; example: st
   { value: '24h', label: '24-hour', example: '14:30' },
 ]
 
+// Full IANA zone list where supported, with a curated fallback for older engines.
+const TIMEZONE_OPTIONS: string[] = (() => {
+  try {
+    const fn = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf
+    if (fn) return fn('timeZone')
+  } catch { /* fall through */ }
+  return [
+    'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+    'America/Anchorage', 'Pacific/Honolulu', 'America/Phoenix', 'America/Toronto',
+    'UTC', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Asia/Tokyo',
+    'Asia/Shanghai', 'Asia/Kolkata', 'Australia/Sydney',
+  ]
+})()
+
 const selectClass = "w-full text-sm text-gray-800 border border-[#E5E0D0] rounded-lg px-3 py-2 bg-white outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-300 transition-colors"
 
 const COLLAPSE_LINE_OPTIONS = [
@@ -79,7 +93,7 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
   const [syncInterval, setSyncInterval] = useState(60)
   const [collapseLines, setCollapseLines] = useState(feedCollapseLinesFromProps ?? 10)
   const [saving, setSaving] = useState(false)
-  const { dateFormat, timeFormat, setDateFormat, setTimeFormat } = useDateFormat()
+  const { dateFormat, timeFormat, setDateFormat, setTimeFormat, timezone, autoDetectTimezone, setTimezone, setAutoDetectTimezone } = useDateFormat()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Windows Chrome cycles a <select>'s value when the wheel passes over it,
@@ -243,6 +257,34 @@ export function UserPreferencesPanel({ email, displayName, userId, open, onClose
                       </option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Timezone</label>
+                  <select
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    disabled={autoDetectTimezone}
+                    className={`${selectClass} ${autoDetectTimezone ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  >
+                    {!TIMEZONE_OPTIONS.includes(timezone) && (
+                      <option value={timezone}>{timezone}</option>
+                    )}
+                    {TIMEZONE_OPTIONS.map((tz) => (
+                      <option key={tz} value={tz}>{tz.replace(/_/g, ' ')}</option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoDetectTimezone}
+                      onChange={(e) => setAutoDetectTimezone(e.target.checked)}
+                      className="rounded border-gray-300 text-amber-500 focus:ring-amber-300"
+                    />
+                    <span className="text-xs text-gray-600">Auto-detect from this device</span>
+                  </label>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Due dates and timestamps are shown in this timezone. With auto-detect on, it follows the device you&apos;re using.
+                  </p>
                 </div>
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">Autosave interval</label>

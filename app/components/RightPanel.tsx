@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useWorkspace } from '@/context/WorkspaceContext'
 import { useProperties } from '@/context/PropertiesContext'
+import { useDateFormat } from '@/context/DateFormatContext'
+import { zonedDateStr, zonedToUtcIso, zonedParts } from '@/lib/date-format'
 import { getScheme } from '@/constants/workspaceColorSchemes'
 
 interface TaskItem {
@@ -43,18 +45,18 @@ function truncate(text: string, maxLen: number): string {
   return text.slice(0, maxLen).trimEnd() + '…'
 }
 
-function todayStart(): string {
-  return new Date().toISOString().split('T')[0] + 'T00:00:00'
+// "End of today" in the user's zone, as a true-UTC instant for querying.
+function todayEnd(tz: string): string {
+  return zonedToUtcIso(zonedDateStr(new Date().toISOString(), tz), '23:59:59', tz)
 }
 
-function todayEnd(): string {
-  return new Date().toISOString().split('T')[0] + 'T23:59:59'
-}
-
-function addDays(days: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() + days)
-  return d.toISOString().split('T')[0] + 'T23:59:59'
+// "End of today + N days" in the user's zone, as a true-UTC instant.
+function addDays(days: number, tz: string): string {
+  const [y, m, d] = zonedDateStr(new Date().toISOString(), tz).split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + days)
+  const next = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+  return zonedToUtcIso(next, '23:59:59', tz)
 }
 
 function relativeTime(dateStr: string): string {
@@ -119,6 +121,7 @@ export function RightPanel({
 }: Props) {
   const { activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
   const { allProperties, propertiesForWorkspace } = useProperties()
+  const { timezone } = useDateFormat()
   // Stable key for property filters to avoid re-fetching on every render
   const propertyFiltersKey = activePropertyFilters ? Array.from(activePropertyFilters).sort().join(',') : ''
   // Stable key for the loaded property catalog — when properties hydrate after mount,
@@ -150,7 +153,7 @@ export function RightPanel({
   const fetchAll = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const today = todayEnd()
+    const today = todayEnd(timezone)
 
     const includeTasks = !filterEntryTypes || filterEntryTypes.has('task')
     const includeInfo = !filterEntryTypes || filterEntryTypes.has('info')
@@ -169,10 +172,10 @@ export function RightPanel({
     }
 
     function applyTaskDateRanges(q: any): any {
-      if (filterDueFrom) q = q.gte('due_date', filterDueFrom + 'T00:00:00')
-      if (filterDueTo) q = q.lte('due_date', filterDueTo + 'T23:59:59')
-      if (filterStartFrom) q = q.gte('start_date', filterStartFrom + 'T00:00:00')
-      if (filterStartTo) q = q.lte('start_date', filterStartTo + 'T23:59:59')
+      if (filterDueFrom) q = q.gte('due_date', zonedToUtcIso(filterDueFrom, '00:00:00', timezone))
+      if (filterDueTo) q = q.lte('due_date', zonedToUtcIso(filterDueTo, '23:59:59', timezone))
+      if (filterStartFrom) q = q.gte('start_date', zonedToUtcIso(filterStartFrom, '00:00:00', timezone))
+      if (filterStartTo) q = q.lte('start_date', zonedToUtcIso(filterStartTo, '23:59:59', timezone))
       return q
     }
     /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -194,7 +197,7 @@ export function RightPanel({
     dueQuery = applyTaskDateRanges(dueQuery)
 
     // Future tasks
-    const futureEnd = futureRange === 0 ? undefined : addDays(futureRange)
+    const futureEnd = futureRange === 0 ? undefined : addDays(futureRange, timezone)
     let futureQuery = supabase
       .from('journal_blocks')
       .select('id, content, owner_id, due_date, due_date_type, start_date, workspace_id, updated_at')
@@ -227,10 +230,10 @@ export function RightPanel({
     } else if (filterEntryTypes && filterEntryTypes.size === 0) {
       activityQuery = activityQuery.eq('entry_type', '__none__')
     }
-    if (filterDateFrom) activityQuery = activityQuery.gte('created_at', filterDateFrom + 'T00:00:00')
-    if (filterDateTo) activityQuery = activityQuery.lte('created_at', filterDateTo + 'T23:59:59')
-    if (filterModifiedFrom) activityQuery = activityQuery.gte('updated_at', filterModifiedFrom + 'T00:00:00')
-    if (filterModifiedTo) activityQuery = activityQuery.lte('updated_at', filterModifiedTo + 'T23:59:59')
+    if (filterDateFrom) activityQuery = activityQuery.gte('created_at', zonedToUtcIso(filterDateFrom, '00:00:00', timezone))
+    if (filterDateTo) activityQuery = activityQuery.lte('created_at', zonedToUtcIso(filterDateTo, '23:59:59', timezone))
+    if (filterModifiedFrom) activityQuery = activityQuery.gte('updated_at', zonedToUtcIso(filterModifiedFrom, '00:00:00', timezone))
+    if (filterModifiedTo) activityQuery = activityQuery.lte('updated_at', zonedToUtcIso(filterModifiedTo, '23:59:59', timezone))
 
     const [dueRes, futureRes, activityRes] = await Promise.all([
       includeTasks ? dueQuery : Promise.resolve({ data: [] as TaskItem[] }),
@@ -306,7 +309,7 @@ export function RightPanel({
     setActivity(allActivity)
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, activeWorkspaceId, isGlobalView, futureRange, propertyFiltersKey, filterKey, propsCatalogKey])
+  }, [userId, activeWorkspaceId, isGlobalView, futureRange, propertyFiltersKey, filterKey, propsCatalogKey, timezone])
 
   useEffect(() => { fetchAll() }, [fetchAll, refreshKey])
 
@@ -335,32 +338,35 @@ export function RightPanel({
     return getScheme(ws.color_scheme)?.primary ?? null
   }
 
+  // Whole-day difference between an instant and "today", both in the user's zone.
+  function dayDiff(iso: string): number {
+    const [y1, m1, d1] = zonedDateStr(iso, timezone).split('-').map(Number)
+    const [y2, m2, d2] = zonedDateStr(new Date().toISOString(), timezone).split('-').map(Number)
+    return Math.round((Date.UTC(y1, m1 - 1, d1) - Date.UTC(y2, m2 - 1, d2)) / 86400000)
+  }
+
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  function shortMonthDay(iso: string): string {
+    const p = zonedParts(iso, timezone)
+    return `${MONTHS[p.month - 1]} ${p.day}`
+  }
+
   function formatDueDate(dueDate: string | null): string {
     if (!dueDate) return ''
-    const d = new Date(dueDate)
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const due = new Date(d)
-    due.setHours(0, 0, 0, 0)
-    const diff = Math.round((due.getTime() - today.getTime()) / 86400000)
+    const diff = dayDiff(dueDate)
     if (diff < 0) return `${Math.abs(diff)}d overdue`
     if (diff === 0) return 'Today'
     if (diff === 1) return 'Tomorrow'
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    return shortMonthDay(dueDate)
   }
 
   function formatStartDate(startDate: string | null): string {
     if (!startDate) return ''
-    const d = new Date(startDate)
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const sd = new Date(d)
-    sd.setHours(0, 0, 0, 0)
-    const diff = Math.round((sd.getTime() - today.getTime()) / 86400000)
+    const diff = dayDiff(startDate)
     if (diff < 0) return `Started ${Math.abs(diff)}d ago`
     if (diff === 0) return 'Starts today'
     if (diff === 1) return 'Starts tomorrow'
-    return `Starts ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+    return `Starts ${shortMonthDay(startDate)}`
   }
 
   function renderTask(task: TaskItem, showDueLabel = true) {
@@ -368,7 +374,7 @@ export function RightPanel({
     const owner = personName(task.owner_id)
     const text = truncate(htmlToPlainText(task.content), 100)
     const isDeadline = task.due_date_type === 'deadline'
-    const isOverdue = task.due_date ? new Date(task.due_date) < new Date(todayStart()) : false
+    const isOverdue = task.due_date ? new Date(task.due_date) < new Date() : false
 
     return (
       <div

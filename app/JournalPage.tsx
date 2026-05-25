@@ -19,6 +19,7 @@ import { PeopleModal } from './components/PeopleModal'
 import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
 import { useProperties } from '@/context/PropertiesContext'
 import { useDateFormat } from '@/context/DateFormatContext'
+import { zonedToUtcIso } from '@/lib/date-format'
 import { formatDatePart } from '@/lib/date-format'
 import workspaceColorSchemes, { type WorkspaceColorScheme } from '@/constants/workspaceColorSchemes'
 import { PdaIcon } from '@/components/PdaIcon'
@@ -71,7 +72,7 @@ interface Props {
 export function JournalPage({ userId, email, displayName }: Props) {
   const { activeWorkspace, activeWorkspaceId, activeScheme, isGlobalView, hydrated, workspaces, setActiveWorkspace, refreshWorkspaces, reorderWorkspaces } = useWorkspace()
   const { propertiesForWorkspace, allProperties, refetch: refetchProperties } = useProperties()
-  const { dateFormat } = useDateFormat()
+  const { dateFormat, timezone, tzNotice, dismissTzNotice } = useDateFormat()
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null)
@@ -190,6 +191,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
   filterMcpRef.current = filterMcp
   const activePropertyFiltersRef = useRef(activePropertyFilters)
   activePropertyFiltersRef.current = activePropertyFilters
+  const timezoneRef = useRef(timezone)
+  timezoneRef.current = timezone
   const allPropertiesRef = useRef(allProperties)
   allPropertiesRef.current = allProperties
   const [feedCollapsed, setFeedCollapsed] = useState(true)
@@ -575,47 +578,54 @@ export function JournalPage({ userId, email, displayName }: Props) {
       query = query.eq('entry_type', '__none__')
     }
 
+    // Date-range bounds are interpreted as the user's local calendar day and
+    // converted to true-UTC instants for comparison against timestamptz columns.
+    const tz = timezoneRef.current
+    const dayStart = (d: string) => zonedToUtcIso(d, '00:00:00', tz)
+    const dayEnd = (d: string) => zonedToUtcIso(d, '23:59:59', tz)
     // Created date range
     if (filterDateFromRef.current) {
-      query = query.gte('created_at', filterDateFromRef.current + 'T00:00:00')
+      query = query.gte('created_at', dayStart(filterDateFromRef.current))
     }
     if (filterDateToRef.current) {
-      query = query.lte('created_at', filterDateToRef.current + 'T23:59:59')
+      query = query.lte('created_at', dayEnd(filterDateToRef.current))
     }
     // Modified date range
     if (filterModifiedFromRef.current) {
-      query = query.gte('updated_at', filterModifiedFromRef.current + 'T00:00:00')
+      query = query.gte('updated_at', dayStart(filterModifiedFromRef.current))
     }
     if (filterModifiedToRef.current) {
-      query = query.lte('updated_at', filterModifiedToRef.current + 'T23:59:59')
+      query = query.lte('updated_at', dayEnd(filterModifiedToRef.current))
     }
     // Due date range
     if (filterDueFromRef.current) {
-      query = query.gte('due_date', filterDueFromRef.current + 'T00:00:00')
+      query = query.gte('due_date', dayStart(filterDueFromRef.current))
     }
     if (filterDueToRef.current) {
-      query = query.lte('due_date', filterDueToRef.current + 'T23:59:59')
+      query = query.lte('due_date', dayEnd(filterDueToRef.current))
     }
     // Start date range
     if (filterStartFromRef.current) {
-      query = query.gte('start_date', filterStartFromRef.current + 'T00:00:00')
+      query = query.gte('start_date', dayStart(filterStartFromRef.current))
     }
     if (filterStartToRef.current) {
-      query = query.lte('start_date', filterStartToRef.current + 'T23:59:59')
+      query = query.lte('start_date', dayEnd(filterStartToRef.current))
     }
     // Archived/Done date range — filter on archived_at OR completed_at
     if (filterArchivedFromRef.current) {
-      query = query.or(`archived_at.gte.${filterArchivedFromRef.current}T00:00:00,completed_at.gte.${filterArchivedFromRef.current}T00:00:00`)
+      const b = dayStart(filterArchivedFromRef.current)
+      query = query.or(`archived_at.gte.${b},completed_at.gte.${b}`)
     }
     if (filterArchivedToRef.current) {
-      query = query.or(`archived_at.lte.${filterArchivedToRef.current}T23:59:59,completed_at.lte.${filterArchivedToRef.current}T23:59:59`)
+      const b = dayEnd(filterArchivedToRef.current)
+      query = query.or(`archived_at.lte.${b},completed_at.lte.${b}`)
     }
     // Deleted date range
     if (filterDeletedFromRef.current) {
-      query = query.gte('deleted_at', filterDeletedFromRef.current + 'T00:00:00')
+      query = query.gte('deleted_at', dayStart(filterDeletedFromRef.current))
     }
     if (filterDeletedToRef.current) {
-      query = query.lte('deleted_at', filterDeletedToRef.current + 'T23:59:59')
+      query = query.lte('deleted_at', dayEnd(filterDeletedToRef.current))
     }
 
     // Assignee filter
@@ -782,7 +792,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, activePropertyFilters, searchMode, searchNonce])
+  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, activePropertyFilters, timezone, searchMode, searchNonce])
 
   // ── Periodic sync polling: fetch blocks updated on other devices ──
   const lastPollRef = useRef<string>(new Date().toISOString())
@@ -1140,32 +1150,35 @@ export function JournalPage({ userId, email, displayName }: Props) {
     if (filterStatuses.size > 0) {
       results = results.filter(b => filterStatuses.has(b.status))
     }
+    // Date-range filters compare instants; bounds are the user's local day in UTC.
+    const fromMs = (d: string) => new Date(zonedToUtcIso(d, '00:00:00', timezone)).getTime()
+    const toMs = (d: string) => new Date(zonedToUtcIso(d, '23:59:59', timezone)).getTime()
     // Created date range filters
     if (filterDateFrom) {
-      const from = filterDateFrom + 'T00:00:00'
-      results = results.filter(b => b.created_at >= from)
+      const from = fromMs(filterDateFrom)
+      results = results.filter(b => new Date(b.created_at).getTime() >= from)
     }
     if (filterDateTo) {
-      const to = filterDateTo + 'T23:59:59'
-      results = results.filter(b => b.created_at <= to)
+      const to = toMs(filterDateTo)
+      results = results.filter(b => new Date(b.created_at).getTime() <= to)
     }
     // Modified date range filters
     if (filterModifiedFrom) {
-      const from = filterModifiedFrom + 'T00:00:00'
-      results = results.filter(b => b.updated_at >= from)
+      const from = fromMs(filterModifiedFrom)
+      results = results.filter(b => new Date(b.updated_at).getTime() >= from)
     }
     if (filterModifiedTo) {
-      const to = filterModifiedTo + 'T23:59:59'
-      results = results.filter(b => b.updated_at <= to)
+      const to = toMs(filterModifiedTo)
+      results = results.filter(b => new Date(b.updated_at).getTime() <= to)
     }
     // Due date range filters
     if (filterDueFrom) {
-      const from = filterDueFrom + 'T00:00:00'
-      results = results.filter(b => (b.due_date ?? '') >= from)
+      const from = fromMs(filterDueFrom)
+      results = results.filter(b => b.due_date != null && new Date(b.due_date).getTime() >= from)
     }
     if (filterDueTo) {
-      const to = filterDueTo + 'T23:59:59'
-      results = results.filter(b => (b.due_date ?? '') <= to && b.due_date != null)
+      const to = toMs(filterDueTo)
+      results = results.filter(b => b.due_date != null && new Date(b.due_date).getTime() <= to)
     }
     // Source filter — MCP-touched vs. manual
     if (filterMcp === 'mcp') {
@@ -1234,6 +1247,20 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
+      {tzNotice && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 bg-stone-800 text-white text-sm rounded-lg shadow-lg px-4 py-2.5 animate-fade-in">
+          <span>Timezone updated to <span className="font-medium">{tzNotice.replace(/_/g, ' ')}</span></span>
+          <button
+            onClick={dismissTzNotice}
+            className="text-white/60 hover:text-white transition-colors"
+            title="Dismiss"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
       <header
         className="h-14 border-b flex items-center justify-between px-3 sm:px-6 flex-shrink-0 transition-colors duration-200 relative"
         style={{
