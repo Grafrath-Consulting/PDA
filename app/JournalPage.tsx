@@ -188,6 +188,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
   filterAssigneeRef.current = filterAssignee
   const filterMcpRef = useRef(filterMcp)
   filterMcpRef.current = filterMcp
+  const activePropertyFiltersRef = useRef(activePropertyFilters)
+  activePropertyFiltersRef.current = activePropertyFilters
+  const allPropertiesRef = useRef(allProperties)
+  allPropertiesRef.current = allProperties
   const [feedCollapsed, setFeedCollapsed] = useState(true)
   const [feedCollapseLines, setFeedCollapseLines] = useState(10)
   const [prefsOpen, setPrefsOpen] = useState(false)
@@ -630,6 +634,87 @@ export function JournalPage({ userId, email, displayName }: Props) {
       query = query.eq('via_mcp', false)
     }
 
+    // Property filters — translate into server-side id constraints so pagination
+    // reaches matching blocks anywhere in history, not just the loaded window.
+    // We only add *necessary* conditions here; the exact OR-within / AND-across /
+    // None / workspace-scope semantics are still enforced client-side in
+    // `filteredBlocks`, which remains the source of truth.
+    if (activePropertyFiltersRef.current.size > 0) {
+      const allProps = isGlobalViewRef.current
+        ? allPropertiesRef.current
+        : allPropertiesRef.current.filter(p => p.workspace_id === null || p.workspace_id === activeWorkspaceIdRef.current)
+
+      // Group selected filter value ids by their parent property (mirrors client logic)
+      const byProperty = new Map<string, { valueIds: string[]; includeNone: boolean; allValueIds: string[]; workspaceId: string | null }>()
+      Array.from(activePropertyFiltersRef.current).forEach(valueId => {
+        if (valueId.startsWith('none::')) {
+          const propId = valueId.slice(6)
+          const prop = allProps.find(p => p.id === propId)
+          if (prop) {
+            const existing = byProperty.get(propId)
+            if (existing) existing.includeNone = true
+            else byProperty.set(propId, { valueIds: [], includeNone: true, allValueIds: prop.values.map(v => v.id), workspaceId: prop.workspace_id })
+          }
+          return
+        }
+        for (const prop of allProps) {
+          if (prop.values.some(v => v.id === valueId)) {
+            const existing = byProperty.get(prop.id)
+            if (existing) existing.valueIds.push(valueId)
+            else byProperty.set(prop.id, { valueIds: [valueId], includeNone: false, allValueIds: prop.values.map(v => v.id), workspaceId: prop.workspace_id })
+            break
+          }
+        }
+      })
+
+      // A positive group (selected values, no "None", not workspace-pass-through) is a
+      // hard requirement: the block must carry one of its values. AND across such groups
+      // becomes the intersection of their entry-id sets. A pure "None" group requires the
+      // block to carry none of the property's values, so we exclude every block that does.
+      // Mixed groups (a value AND "None" on one property) are an OR — left to the client.
+      // Workspace-scoped positive groups in global view let other-workspace blocks pass
+      // through, so they can't be tightened server-side and are left to the client too.
+      const positiveGroups: string[][] = []
+      const excludeValueIds: string[] = []
+      for (const g of Array.from(byProperty.values())) {
+        const passThrough = g.workspaceId !== null && isGlobalViewRef.current
+        if (g.valueIds.length > 0 && !g.includeNone && !passThrough) positiveGroups.push(g.valueIds)
+        if (g.includeNone && g.valueIds.length === 0) excludeValueIds.push(...g.allValueIds)
+      }
+
+      if (positiveGroups.length > 0) {
+        const idSets: Set<string>[] = []
+        for (const valueIds of positiveGroups) {
+          const { data: rows } = await supabase
+            .from('entry_properties')
+            .select('entry_id')
+            .in('property_value_id', valueIds)
+          idSets.push(new Set((rows ?? []).map(r => (r as { entry_id: string }).entry_id)))
+        }
+        let allowed = idSets[0]
+        for (let i = 1; i < idSets.length; i++) allowed = new Set(Array.from(allowed).filter(id => idSets[i].has(id)))
+        if (allowed.size === 0) {
+          // No block can satisfy the positive filters — short-circuit to an empty feed.
+          if (!(cursor && !isSearching)) setBlocks([])
+          setHasMore(false)
+          setLoading(false)
+          setSwitching(false)
+          setInitialised(true)
+          return
+        }
+        query = query.in('id', Array.from(allowed))
+      }
+
+      if (excludeValueIds.length > 0) {
+        const { data: rows } = await supabase
+          .from('entry_properties')
+          .select('entry_id')
+          .in('property_value_id', excludeValueIds)
+        const exclude = Array.from(new Set((rows ?? []).map(r => (r as { entry_id: string }).entry_id)))
+        if (exclude.length > 0) query = query.not('id', 'in', `(${exclude.join(',')})`)
+      }
+    }
+
     // Pagination (disabled during search)
     if (cursor && !isSearching) {
       query = query.lt('created_at', cursor)
@@ -697,7 +782,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, searchMode, searchNonce])
+  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, activePropertyFilters, searchMode, searchNonce])
 
   // ── Periodic sync polling: fetch blocks updated on other devices ──
   const lastPollRef = useRef<string>(new Date().toISOString())
