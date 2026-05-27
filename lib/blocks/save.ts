@@ -1,6 +1,30 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import { embedBlock } from './embed'
 
+// MCP clients send wall-clock-with-offset timestamps like "T23:59:00-05:00"
+// to express "end of day" / "no specific time". Normalise those to the
+// canonical UTC-literal sentinel so detection works in any viewer's zone.
+// (See isDueDateOnly / isStartDateOnly in lib/date-format.ts.)
+function normaliseDueDate(iso: string | null | undefined): string | null | undefined {
+  if (iso == null) return iso
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  if (d.getUTCHours() === 23 && d.getUTCMinutes() === 59) {
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T23:59:59.000Z`
+  }
+  return iso
+}
+
+function normaliseStartDate(iso: string | null | undefined): string | null | undefined {
+  if (iso == null) return iso
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T00:00:00.000Z`
+  }
+  return iso
+}
+
 export interface CreateBlockInput {
   userId: string
   workspaceId: string
@@ -48,9 +72,9 @@ export async function createBlockFromMcp(
 
   const taskFields = entryType === 'task' ? {
     task_status: input.taskStatus ?? 'not_started',
-    due_date: input.dueDate ?? null,
+    due_date: normaliseDueDate(input.dueDate) ?? null,
     due_date_type: input.dueDateType ?? null,
-    start_date: input.startDate ?? null,
+    start_date: normaliseStartDate(input.startDate) ?? null,
   } : {}
 
   const { data: block, error } = await svc
@@ -132,9 +156,9 @@ export async function updateBlockFromMcp(
     contentChanged = true
   }
   if (input.taskStatus !== undefined) patch.task_status = input.taskStatus
-  if (input.dueDate !== undefined) patch.due_date = input.dueDate
+  if (input.dueDate !== undefined) patch.due_date = normaliseDueDate(input.dueDate)
   if (input.dueDateType !== undefined) patch.due_date_type = input.dueDateType
-  if (input.startDate !== undefined) patch.start_date = input.startDate
+  if (input.startDate !== undefined) patch.start_date = normaliseStartDate(input.startDate)
   if (input.status !== undefined) {
     patch.status = input.status
     // Mirror the client save flow: keep is_archived in sync with status.

@@ -121,14 +121,18 @@ export function formatTimestamp(
 // same regardless of which zone the viewer is in (like "Christmas is Dec
 // 25 everywhere").
 
+// Detection ignores seconds: the 30-minute picker can't produce 23:59 or
+// 00:00:30, so any UTC instant whose hour/minute matches the sentinel was
+// written as date-only intent — either by us (23:59:59Z / 00:00:00Z) or by
+// an MCP client that sent `T23:59:00-05:00` style "end of day" timestamps.
 export function isDueDateOnly(iso: string): boolean {
   const d = new Date(iso)
-  return d.getUTCHours() === 23 && d.getUTCMinutes() === 59 && d.getUTCSeconds() === 59
+  return d.getUTCHours() === 23 && d.getUTCMinutes() === 59
 }
 
 export function isStartDateOnly(iso: string): boolean {
   const d = new Date(iso)
-  return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0
+  return d.getUTCHours() === 0 && d.getUTCMinutes() === 0
 }
 
 /** "YYYY-MM-DD" of the UTC date of an instant. */
