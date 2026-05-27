@@ -114,9 +114,56 @@ export function formatTimestamp(
   return `${fmtDate(p.year, p.month, p.day, dateFmt)}, ${fmtTime(p.hour, p.minute, timeFmt)}`
 }
 
+// ── Date-only sentinels ──────────────────────────────────────────────
+// Date-only due dates are stored as `YYYY-MM-DDT23:59:59Z` (literal UTC),
+// and date-only start dates as `YYYY-MM-DDT00:00:00Z`. Storing them as
+// fixed UTC instants — not zone-converted — keeps the calendar date the
+// same regardless of which zone the viewer is in (like "Christmas is Dec
+// 25 everywhere").
+
+export function isDueDateOnly(iso: string): boolean {
+  const d = new Date(iso)
+  return d.getUTCHours() === 23 && d.getUTCMinutes() === 59 && d.getUTCSeconds() === 59
+}
+
+export function isStartDateOnly(iso: string): boolean {
+  const d = new Date(iso)
+  return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0
+}
+
+/** "YYYY-MM-DD" of the UTC date of an instant. */
+export function utcDateStr(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
+}
+
+/** Build the stored ISO for a due date — UTC sentinel if no time. */
+export function buildDueDateIso(date: string, time: string | null, timeZone: string): string {
+  if (!time) return `${date}T23:59:59.000Z`
+  const t = time.includes(':') && time.split(':').length === 3 ? time : `${time}:00`
+  return zonedToUtcIso(date, t, timeZone)
+}
+
+/** Build the stored ISO for a start date — UTC sentinel if no time. */
+export function buildStartDateIso(date: string, time: string | null, timeZone: string): string {
+  if (!time) return `${date}T00:00:00.000Z`
+  const t = time.includes(':') && time.split(':').length === 3 ? time : `${time}:00`
+  return zonedToUtcIso(date, t, timeZone)
+}
+
+/** Calendar day of a due date — UTC date for date-only, zoned date otherwise. */
+export function dueDateDayStr(iso: string, timeZone: string): string {
+  return isDueDateOnly(iso) ? utcDateStr(iso) : zonedDateStr(iso, timeZone)
+}
+
+/** Calendar day of a start date — UTC date for date-only, zoned date otherwise. */
+export function startDateDayStr(iso: string, timeZone: string): string {
+  return isStartDateOnly(iso) ? utcDateStr(iso) : zonedDateStr(iso, timeZone)
+}
+
 /**
- * Format a due-date instant for display in the user's zone, hiding the time
- * when it is the 23:59:59 "all-day / no time set" sentinel.
+ * Format a due-date instant for display. Date-only sentinels render as a
+ * bare date (no zone adjustment); date+time renders in the user's zone.
  */
 export function formatDueDate(
   iso: string,
@@ -124,8 +171,10 @@ export function formatDueDate(
   timeFmt: TimeFormatOption,
   timeZone: string,
 ): string {
+  if (isDueDateOnly(iso)) {
+    const d = new Date(iso)
+    return fmtDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), dateFmt)
+  }
   const p = zonedParts(iso, timeZone)
-  const dateStr = fmtDate(p.year, p.month, p.day, dateFmt)
-  if (p.hour === 23 && p.minute === 59 && p.second === 59) return dateStr
-  return `${dateStr} ${fmtTime(p.hour, p.minute, timeFmt)}`
+  return `${fmtDate(p.year, p.month, p.day, dateFmt)} ${fmtTime(p.hour, p.minute, timeFmt)}`
 }

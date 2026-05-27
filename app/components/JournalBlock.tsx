@@ -10,7 +10,11 @@ import { HistoryModal } from './HistoryModal'
 import type { TipTapEditorHandle } from './TipTapEditor'
 import { useWorkspace } from '@/context/WorkspaceContext'
 import { useDateFormat } from '@/context/DateFormatContext'
-import { formatTimestamp, formatDatePart, zonedParts, zonedDateStr, zonedToUtcIso } from '@/lib/date-format'
+import {
+  formatTimestamp, formatDatePart, zonedParts, zonedDateStr, zonedToUtcIso,
+  isDueDateOnly, isStartDateOnly, utcDateStr, buildDueDateIso, buildStartDateIso,
+  dueDateDayStr, startDateDayStr,
+} from '@/lib/date-format'
 import { getScheme } from '@/constants/workspaceColorSchemes'
 import { getPropertyColor } from '@/constants/propertyColors'
 import { useProperties } from '@/context/PropertiesContext'
@@ -1251,19 +1255,27 @@ export function JournalBlock(props: Props) {
     const supabase = createClient()
     let saved: Block | null = null
 
-    // Pending due/start are held as naive wall-clock strings while editing;
-    // convert them to true-UTC instants (interpreted in the user's zone) on save.
-    const naiveToUtc = (naive: string | null): string | null => {
+    // Pending due/start are held as naive wall-clock strings while editing.
+    // No time set is signalled by the sentinel HH:MM:SS (23:59:59 for due,
+    // 00:00:00 for start) — those collapse to a UTC-literal sentinel so the
+    // date renders the same in any viewer's zone. Real times are interpreted
+    // in the user's zone and stored as a true-UTC instant.
+    const naiveToUtc = (naive: string | null, kind: 'due' | 'start'): string | null => {
       if (!naive) return null
       const [date, time] = naive.split('T')
-      return zonedToUtcIso(date, time ?? '23:59:59', timezoneRef.current)
+      const sentinel = kind === 'due' ? '23:59:59' : '00:00:00'
+      if (!time || time === sentinel) {
+        return kind === 'due' ? buildDueDateIso(date, null, timezoneRef.current)
+                              : buildStartDateIso(date, null, timezoneRef.current)
+      }
+      return zonedToUtcIso(date, time, timezoneRef.current)
     }
     const taskFields = pendingEntryTypeRef.current === 'task' ? {
       task_status: pendingTaskFieldsRef.current.taskStatus,
       owner_id: pendingTaskFieldsRef.current.ownerId,
-      due_date: naiveToUtc(pendingTaskFieldsRef.current.dueDate),
+      due_date: naiveToUtc(pendingTaskFieldsRef.current.dueDate, 'due'),
       due_date_type: pendingTaskFieldsRef.current.dueDateType,
-      start_date: naiveToUtc(pendingTaskFieldsRef.current.startDate),
+      start_date: naiveToUtc(pendingTaskFieldsRef.current.startDate, 'start'),
     } : {}
 
     if (autosavedBlockIdRef.current) {
@@ -2247,16 +2259,19 @@ export function JournalBlock(props: Props) {
     : pendingPropertyIds
   const hasAppliedProps = appliedProps.size > 0
 
-  // Due date visual indicators (compared by calendar day in the user's zone)
+  // Due date visual indicators (compared by calendar day in the user's zone;
+  // date-only entries use their UTC date so they stay on the same day in any zone)
   const todayStr = zonedDateStr(new Date().toISOString(), timezone)
-  const dueDateDay = block?.due_date ? zonedDateStr(block.due_date, timezone) : null
+  const dueDateDay = block?.due_date ? dueDateDayStr(block.due_date, timezone) : null
   const isDueToday = dueDateDay === todayStr
   const isPastDue = !!dueDateDay && dueDateDay < todayStr
 
-  // Future start date → dim the card (compare instants directly)
+  // Future start date → dim the card. Date-only starts compare by day in the
+  // user's zone; date+time compares by instant.
   const hasFutureStart = (() => {
     const sd = block?.start_date
     if (!sd) return false
+    if (isStartDateOnly(sd)) return startDateDayStr(sd, timezone) > todayStr
     return new Date(sd) > new Date()
   })()
 
@@ -2937,11 +2952,11 @@ export function JournalBlock(props: Props) {
               onClick={() => {
                 const todayDay = zonedDateStr(new Date().toISOString(), timezone)
                 if (block.due_date) {
-                  const dueDay = zonedDateStr(block.due_date, timezone)
+                  const dueDay = dueDateDayStr(block.due_date, timezone)
                   const day = todayDay > dueDay ? dueDay : todayDay
-                  updateTaskField('start_date', zonedToUtcIso(day, '00:00:00', timezone))
+                  updateTaskField('start_date', buildStartDateIso(day, null, timezone))
                 } else {
-                  updateTaskField('start_date', zonedToUtcIso(todayDay, '00:00:00', timezone))
+                  updateTaskField('start_date', buildStartDateIso(todayDay, null, timezone))
                 }
               }}
               className="w-5 h-5 flex items-center justify-center rounded-full text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
@@ -2953,17 +2968,21 @@ export function JournalBlock(props: Props) {
             let sdDateVal = ''
             let sdTimeVal = ''
             if (sdStr) {
-              const p = zonedParts(sdStr, timezone)
-              sdDateVal = `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`
-              if (!(p.hour === 0 && p.minute === 0 && p.second === 0)) sdTimeVal = `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`
+              if (isStartDateOnly(sdStr)) {
+                sdDateVal = utcDateStr(sdStr)
+              } else {
+                const p = zonedParts(sdStr, timezone)
+                sdDateVal = `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`
+                sdTimeVal = `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`
+              }
             }
             function buildStartTs(date: string, time: string | null): string {
-              return zonedToUtcIso(date, time ? `${time}:00` : '00:00:00', timezone)
+              return buildStartDateIso(date, time, timezone)
             }
             function setStartValidated(ts: string | null) {
               if (ts && block?.due_date) {
-                const startDay = zonedDateStr(ts, timezone)
-                const dueDay = zonedDateStr(block.due_date, timezone)
+                const startDay = startDateDayStr(ts, timezone)
+                const dueDay = dueDateDayStr(block.due_date, timezone)
                 if (startDay > dueDay) { showDateWarning('Start date cannot be after due date'); return }
               }
               updateTaskField('start_date', ts)
@@ -2995,21 +3014,23 @@ export function JournalBlock(props: Props) {
           })()}
           <span className="w-px h-4 bg-gray-200" />
           {(() => {
-            // Parse the stored UTC instant into date and time parts in the user's zone
+            // Date-only sentinels store as UTC-literal HH:MM:SS so the date
+            // renders the same in any zone. Real times use the user's zone.
             const dueDateStr = block.due_date
             let dateVal = ''
-            let timeVal = '' // empty means no time set (sentinel 23:59:59), otherwise "HH:MM" 24h
+            let timeVal = '' // empty = no time set; otherwise "HH:MM" 24h
             if (dueDateStr) {
-              const p = zonedParts(dueDateStr, timezone)
-              dateVal = `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`
-              // 23:59:59 (local) is the sentinel for "no time"
-              if (!(p.hour === 23 && p.minute === 59 && p.second === 59)) {
+              if (isDueDateOnly(dueDateStr)) {
+                dateVal = utcDateStr(dueDateStr)
+              } else {
+                const p = zonedParts(dueDateStr, timezone)
+                dateVal = `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`
                 timeVal = `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`
               }
             }
 
             function buildTimestamp(date: string, time: string | null): string {
-              return zonedToUtcIso(date, time ? `${time}:00` : '23:59:59', timezone)
+              return buildDueDateIso(date, time, timezone)
             }
 
             function onDateChange(newDate: string) {
@@ -3020,7 +3041,7 @@ export function JournalBlock(props: Props) {
               }
               // Prevent due date before start_date
               if (block?.start_date) {
-                const startDay = zonedDateStr(block.start_date, timezone)
+                const startDay = startDateDayStr(block.start_date, timezone)
                 if (newDate < startDay) { showDateWarning('Due date cannot be before start date'); return }
               }
               const ts = buildTimestamp(newDate, timeVal || null)

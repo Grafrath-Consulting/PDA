@@ -5,7 +5,10 @@ import { createClient } from '@/lib/supabase/client'
 import { useWorkspace } from '@/context/WorkspaceContext'
 import { useProperties } from '@/context/PropertiesContext'
 import { useDateFormat } from '@/context/DateFormatContext'
-import { zonedDateStr, zonedToUtcIso, zonedParts } from '@/lib/date-format'
+import {
+  zonedDateStr, zonedToUtcIso, zonedParts,
+  isDueDateOnly, isStartDateOnly, utcDateStr,
+} from '@/lib/date-format'
 import { getScheme } from '@/constants/workspaceColorSchemes'
 
 interface TaskItem {
@@ -338,35 +341,43 @@ export function RightPanel({
     return getScheme(ws.color_scheme)?.primary ?? null
   }
 
-  // Whole-day difference between an instant and "today", both in the user's zone.
-  function dayDiff(iso: string): number {
-    const [y1, m1, d1] = zonedDateStr(iso, timezone).split('-').map(Number)
+  // Whole-day difference between an instant and "today" in the user's zone.
+  // Date-only entries use their UTC calendar date so they stay on the same
+  // day in any zone (e.g. a date-only "May 27" task is May 27 everywhere).
+  function dayDiff(iso: string, kind: 'due' | 'start'): number {
+    const dateOnly = kind === 'due' ? isDueDateOnly(iso) : isStartDateOnly(iso)
+    const [y1, m1, d1] = (dateOnly ? utcDateStr(iso) : zonedDateStr(iso, timezone)).split('-').map(Number)
     const [y2, m2, d2] = zonedDateStr(new Date().toISOString(), timezone).split('-').map(Number)
     return Math.round((Date.UTC(y1, m1 - 1, d1) - Date.UTC(y2, m2 - 1, d2)) / 86400000)
   }
 
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  function shortMonthDay(iso: string): string {
+  function shortMonthDay(iso: string, kind: 'due' | 'start'): string {
+    const dateOnly = kind === 'due' ? isDueDateOnly(iso) : isStartDateOnly(iso)
+    if (dateOnly) {
+      const d = new Date(iso)
+      return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`
+    }
     const p = zonedParts(iso, timezone)
     return `${MONTHS[p.month - 1]} ${p.day}`
   }
 
   function formatDueDate(dueDate: string | null): string {
     if (!dueDate) return ''
-    const diff = dayDiff(dueDate)
+    const diff = dayDiff(dueDate, 'due')
     if (diff < 0) return `${Math.abs(diff)}d overdue`
     if (diff === 0) return 'Today'
     if (diff === 1) return 'Tomorrow'
-    return shortMonthDay(dueDate)
+    return shortMonthDay(dueDate, 'due')
   }
 
   function formatStartDate(startDate: string | null): string {
     if (!startDate) return ''
-    const diff = dayDiff(startDate)
+    const diff = dayDiff(startDate, 'start')
     if (diff < 0) return `Started ${Math.abs(diff)}d ago`
     if (diff === 0) return 'Starts today'
     if (diff === 1) return 'Starts tomorrow'
-    return `Starts ${shortMonthDay(startDate)}`
+    return `Starts ${shortMonthDay(startDate, 'start')}`
   }
 
   function renderTask(task: TaskItem, showDueLabel = true) {
@@ -374,7 +385,7 @@ export function RightPanel({
     const owner = personName(task.owner_id)
     const text = truncate(htmlToPlainText(task.content), 100)
     const isDeadline = task.due_date_type === 'deadline'
-    const isOverdue = task.due_date ? new Date(task.due_date) < new Date() : false
+    const isOverdue = task.due_date ? dayDiff(task.due_date, 'due') < 0 : false
 
     return (
       <div
