@@ -101,7 +101,7 @@ function registerCreateBlock(server: McpServer, deps: ToolDeps) {
       workspace_id: z.string().uuid().describe('UUID of the workspace, from list_workspaces.'),
       entry_type: z.enum(['info', 'task']).optional().describe('"info" (default) for notes, "task" for actionable items.'),
       property_value_ids: z.array(z.string().uuid()).optional().describe('UUIDs of property values to attach as tags, from list_properties.'),
-      task_status: z.enum(['not_started', 'in_progress', 'done']).optional().describe('Task progress (defaults to "not_started"). Only used when entry_type is "task".'),
+      task_status: z.enum(['not_started', 'held', 'in_progress', 'done']).optional().describe('Task progress (defaults to "not_started"). "held" pauses a task and excludes it from the focus panel\'s due/upcoming lists. Only used when entry_type is "task".'),
       due_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone, e.g. "2026-05-15T17:00:00-05:00". Only used when entry_type is "task".'),
       due_date_type: z.enum(['deadline', 'target']).nullable().optional().describe('"deadline" (hard) or "target" (soft). Only meaningful when due_date is set.'),
       start_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone for when the task should begin. Only used when entry_type is "task".'),
@@ -135,7 +135,7 @@ function registerUpdateBlock(server: McpServer, deps: ToolDeps) {
     inputSchema: {
       id: z.string().uuid().describe('Block UUID, from search_blocks, get_block, or create_block.'),
       content: z.string().min(1).optional().describe('New body. Plain text or simple HTML; line breaks become paragraphs. Re-fires the semantic search index.'),
-      task_status: z.enum(['not_started', 'in_progress', 'done']).optional().describe('Task progress. Use "done" to mark a task complete.'),
+      task_status: z.enum(['not_started', 'held', 'in_progress', 'done']).optional().describe('Task progress. Use "held" to pause (hides from the focus panel without losing the due date), or "done" to mark complete.'),
       due_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone, or null to clear.'),
       due_date_type: z.enum(['deadline', 'target']).nullable().optional().describe('"deadline" (hard) or "target" (soft), or null to clear.'),
       start_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone, or null to clear.'),

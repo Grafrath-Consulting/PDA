@@ -1,5 +1,5 @@
 export type BlockStatus = 'active' | 'complete' | 'archived'
-export type TaskStatus = 'not_started' | 'in_progress' | 'done'
+export type TaskStatus = 'not_started' | 'held' | 'in_progress' | 'done'
 
 export interface Block {
   id: string

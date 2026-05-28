@@ -643,12 +643,12 @@ export function JournalBlock(props: Props) {
   const [pendingEntryType, setPendingEntryType] = useState<'info' | 'task'>('info')
   const pendingEntryTypeRef = useRef<'info' | 'task'>('info')
   pendingEntryTypeRef.current = pendingEntryType
-  const [pendingTaskStatus, setPendingTaskStatus] = useState<'not_started' | 'in_progress' | 'done'>('not_started')
+  const [pendingTaskStatus, setPendingTaskStatus] = useState<'not_started' | 'held' | 'in_progress' | 'done'>('not_started')
   const [pendingOwnerId, setPendingOwnerId] = useState<string | null>(null)
   const [pendingDueDate, setPendingDueDate] = useState<string | null>(null)
   const [pendingDueDateType, setPendingDueDateType] = useState<'deadline' | 'target' | null>(null)
   const [pendingStartDate, setPendingStartDate] = useState<string | null>(null)
-  const pendingTaskFieldsRef = useRef({ taskStatus: 'not_started' as 'not_started' | 'in_progress' | 'done', ownerId: null as string | null, dueDate: null as string | null, dueDateType: null as 'deadline' | 'target' | null, startDate: null as string | null })
+  const pendingTaskFieldsRef = useRef({ taskStatus: 'not_started' as 'not_started' | 'held' | 'in_progress' | 'done', ownerId: null as string | null, dueDate: null as string | null, dueDateType: null as 'deadline' | 'target' | null, startDate: null as string | null })
   pendingTaskFieldsRef.current = { taskStatus: pendingTaskStatus, ownerId: pendingOwnerId, dueDate: pendingDueDate, dueDateType: pendingDueDateType, startDate: pendingStartDate }
   const workspaceRef = useRef(activeWorkspace)
   workspaceRef.current = activeWorkspace
@@ -1944,7 +1944,7 @@ export function JournalBlock(props: Props) {
     setPeople(prev => [...prev, person].sort((a, b) => a.name.localeCompare(b.name)))
   }
 
-  function setTaskStatus(taskStatus: 'not_started' | 'in_progress' | 'done') {
+  function setTaskStatus(taskStatus: 'not_started' | 'held' | 'in_progress' | 'done') {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
     // Keep status active — task_status drives strikethrough/grey styling, no auto-archive
@@ -2758,12 +2758,14 @@ export function JournalBlock(props: Props) {
           <div className="flex items-center gap-0.5">
             {([
               { value: 'not_started' as const, label: 'Not Started', color: 'gray' },
+              { value: 'held' as const, label: 'Held', color: 'yellow' },
               { value: 'in_progress' as const, label: 'In Progress', color: 'blue' },
               { value: 'done' as const, label: 'Done', color: 'green' },
             ]).map(({ value, label, color }) => {
               const isActive = pendingTaskStatus === value
               const colors = {
                 gray: isActive ? 'bg-gray-100 border-gray-400 text-gray-700' : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-500',
+                yellow: isActive ? 'bg-yellow-50 border-yellow-400 text-yellow-700' : 'border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-600',
                 blue: isActive ? 'bg-blue-50 border-blue-400 text-blue-700' : 'border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-500',
                 green: isActive ? 'bg-green-50 border-green-400 text-green-700' : 'border-gray-200 text-gray-400 hover:border-green-300 hover:text-green-500',
               }[color]
@@ -2917,12 +2919,14 @@ export function JournalBlock(props: Props) {
           <div className="flex items-center gap-0.5">
             {([
               { value: 'not_started' as const, label: 'Not Started', color: 'gray' },
+              { value: 'held' as const, label: 'Held', color: 'yellow' },
               { value: 'in_progress' as const, label: 'In Progress', color: 'blue' },
               { value: 'done' as const, label: 'Done', color: 'green' },
             ]).map(({ value, label, color }) => {
               const isActive = block.task_status === value
               const colors = {
                 gray: isActive ? 'bg-gray-100 border-gray-400 text-gray-700' : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-500',
+                yellow: isActive ? 'bg-yellow-50 border-yellow-400 text-yellow-700' : 'border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-600',
                 blue: isActive ? 'bg-blue-50 border-blue-400 text-blue-700' : 'border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-500',
                 green: isActive ? 'bg-green-50 border-green-400 text-green-700' : 'border-gray-200 text-gray-400 hover:border-green-300 hover:text-green-500',
               }[color]

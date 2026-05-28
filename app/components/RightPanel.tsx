@@ -183,7 +183,8 @@ export function RightPanel({
     }
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
-    // Tasks Due: past due + due today
+    // Tasks Due: past due + due today.
+    // Held tasks are excluded — their due date is retained but treated as not applicable here.
     let dueQuery = supabase
       .from('journal_blocks')
       .select('id, content, owner_id, due_date, due_date_type, start_date, workspace_id, updated_at')
@@ -191,7 +192,7 @@ export function RightPanel({
       .eq('entry_type', 'task')
       .lte('due_date', today)
       .eq('status', 'active')
-      .neq('task_status', 'done')
+      .not('task_status', 'in', '("done","held")')
       .is('deleted_at', null)
       .order('due_date', { ascending: true })
       .limit(50)
@@ -199,7 +200,7 @@ export function RightPanel({
     dueQuery = applyCommon(dueQuery)
     dueQuery = applyTaskDateRanges(dueQuery)
 
-    // Future tasks
+    // Future tasks. Held tasks are excluded for the same reason as Tasks Due.
     const futureEnd = futureRange === 0 ? undefined : addDays(futureRange, timezone)
     let futureQuery = supabase
       .from('journal_blocks')
@@ -208,7 +209,7 @@ export function RightPanel({
       .eq('entry_type', 'task')
       .gt('due_date', today)
       .eq('status', 'active')
-      .neq('task_status', 'done')
+      .not('task_status', 'in', '("done","held")')
       .is('deleted_at', null)
       .order('due_date', { ascending: true })
       .limit(50)

@@ -32,7 +32,7 @@ export interface CreateBlockInput {
   entryType?: 'info' | 'task'
   propertyValueIds?: string[]
   // Task-only fields. Ignored unless entryType === 'task'.
-  taskStatus?: 'not_started' | 'in_progress' | 'done'
+  taskStatus?: 'not_started' | 'held' | 'in_progress' | 'done'
   dueDate?: string | null        // ISO 8601 timestamp
   dueDateType?: 'deadline' | 'target' | null
   startDate?: string | null      // ISO 8601 timestamp
@@ -124,7 +124,7 @@ export interface UpdateBlockInput {
   userId: string
   blockId: string
   content?: string
-  taskStatus?: 'not_started' | 'in_progress' | 'done'
+  taskStatus?: 'not_started' | 'held' | 'in_progress' | 'done'
   dueDate?: string | null
   dueDateType?: 'deadline' | 'target' | null
   startDate?: string | null
