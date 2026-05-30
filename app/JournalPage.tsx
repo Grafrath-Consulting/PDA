@@ -119,6 +119,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [blockProperties, setBlockProperties] = useState<Map<string, Set<string>>>(new Map())
 
   const [blocks, setBlocks] = useState<Block[]>([])
+  const [pinnedBlocks, setPinnedBlocks] = useState<Block[]>([])
   // Signature that changes whenever the feed gains/loses a block or a task block
   // is persisted (updated_at is bumped server-side on every row update). Drives
   // RightPanel (FOCUS) re-fetch so it stays in sync after editing a due/start
@@ -751,6 +752,27 @@ export function JournalPage({ userId, email, displayName }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, hydrated])
 
+  // Fetch pinned blocks for the active workspace, ignoring all filters/search/sort.
+  const fetchPinnedBlocks = useCallback(async () => {
+    const supabase = createClient()
+    let query = supabase
+      .from('journal_blocks')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('pinned', true)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+    if (activeWorkspaceId) {
+      query = query.eq('workspace_id', activeWorkspaceId)
+    }
+    const { data } = await query
+    setPinnedBlocks((data ?? []) as Block[])
+  }, [userId, activeWorkspaceId])
+
+  useEffect(() => {
+    fetchPinnedBlocks()
+  }, [fetchPinnedBlocks])
+
   // On load, commit any blocks that have unsaved drafts from a previous session
   const draftRecoveryDone = useRef(false)
   useEffect(() => {
@@ -938,6 +960,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
       .update({ sort_order: newOrder })
       .eq('id', block.id)
       .then(({ error }) => { if (error) console.error(error) })
+    // If the block was saved with pinned=true, add it to the pinned section
+    if (block.pinned) {
+      setPinnedBlocks(prev => [...prev, block].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()))
+    }
   }
 
   function handleBlockUpdate(updated: Block) {
@@ -945,6 +971,16 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setSmartSearchResults((prev) =>
       prev ? prev.map((b) => (b.id === updated.id ? updated : b)) : prev
     )
+    // Keep the pinned section in sync with the block's pinned flag
+    setPinnedBlocks(prev => {
+      const exists = prev.some(b => b.id === updated.id)
+      if (updated.pinned && !exists) {
+        return [...prev, updated].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+      }
+      if (!updated.pinned && exists) return prev.filter(b => b.id !== updated.id)
+      if (updated.pinned) return prev.map(b => (b.id === updated.id ? updated : b))
+      return prev
+    })
   }
 
   function handleBlockRemove(blockId: string) {
@@ -952,6 +988,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setSmartSearchResults((prev) =>
       prev ? prev.filter((b) => b.id !== blockId) : prev
     )
+    setPinnedBlocks(prev => prev.filter(b => b.id !== blockId))
   }
 
   function handleBlockArchived(block: Block) {
@@ -1034,6 +1071,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
   // Across properties: AND (block must satisfy every property that has selections).
   // Workspace-scoped properties only apply to blocks from that workspace — blocks from
   // other workspaces pass through (aren't excluded by a property they don't have).
+  // Pinned blocks render in their own section at the top — exclude them from the regular list
+  const pinnedIds = new Set(pinnedBlocks.map(b => b.id))
   const filteredBlocks = activePropertyFilters.size > 0
     ? (() => {
         const allProps = isGlobalView ? allProperties : propertiesForWorkspace(activeWorkspaceId)
@@ -1064,6 +1103,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
           }
         })
         return blocks.filter(b => {
+          // Pinned blocks render in the dedicated pinned section — exclude here to avoid duplicates
+          if (pinnedIds.has(b.id)) return false
           const applied = blockProperties.get(b.id)
           const groups = Array.from(byProperty.values())
           return groups.every(({ valueIds, includeNone, allValueIds, workspaceId }) => {
@@ -1080,7 +1121,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
           })
         })
       })()
-    : blocks
+    : blocks.filter(b => !pinnedIds.has(b.id))
 
   // Derive sorted blocks for rendering
   const sortedBlocks = sortMode === 'manual'
@@ -1141,7 +1182,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
   // Apply client-side filters to smart search results so UI filter toggles take effect
   const filteredSmartResults = (() => {
     if (!smartSearchResults) return null
-    let results = smartSearchResults as Block[]
+    // Pinned blocks render in their own section at the top — exclude them here to avoid duplicates
+    let results = (smartSearchResults as Block[]).filter(b => !pinnedIds.has(b.id))
     // Entry type filter
     if (filterEntryTypes.size > 0 && filterEntryTypes.size < 2) {
       results = results.filter(b => filterEntryTypes.has(b.entry_type ?? 'info'))
@@ -2028,6 +2070,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
             <BlockFeed
               blocks={searchMode === 'smart' && filteredSmartResults ? filteredSmartResults : sortedBlocks}
+              pinnedBlocks={pinnedBlocks}
               loading={searchMode === 'smart' ? smartSearchLoading : switching || !initialised}
               hasMore={searchMode === 'smart' && filteredSmartResults ? false : hasMore}
               onLoadMore={loadMore}

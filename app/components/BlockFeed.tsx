@@ -12,6 +12,7 @@ import { CSS } from '@dnd-kit/utilities'
 
 interface Props {
   blocks: Block[]
+  pinnedBlocks?: Block[]
   loading: boolean
   hasMore: boolean
   onLoadMore: () => void
@@ -86,6 +87,7 @@ function SortableBlock({
 
 export function BlockFeed({
   blocks,
+  pinnedBlocks,
   loading,
   hasMore,
   onLoadMore,
@@ -155,7 +157,7 @@ export function BlockFeed({
     )
   }
 
-  if (blocks.length === 0) {
+  if (blocks.length === 0 && (pinnedBlocks?.length ?? 0) === 0) {
     // If filters/search reduced results to zero but there are blocks in the workspace
     if (hasActiveFilters && (totalUnfilteredCount ?? 0) > 0) {
       return (
@@ -210,6 +212,13 @@ export function BlockFeed({
 
   return (
     <>
+      {/* Pinned cards — always at the top, below the new-entry card. Ignore filters, search, and sort. */}
+      {(pinnedBlocks?.length ?? 0) > 0 && (
+        <div className="space-y-[14px] mb-[14px]">
+          {pinnedBlocks!.map((block) => renderBlock(block))}
+        </div>
+      )}
+
       {sortMode === 'manual' ? (
         <DndContext
           sensors={sensors}
