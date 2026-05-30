@@ -2510,7 +2510,7 @@ export function JournalBlock(props: Props) {
             type="button"
             title={(!isNewEntry && block?.pinned) ? 'Unpin' : 'Pin to top'}
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
-            onClick={(e) => { e.stopPropagation(); isNewEntry ? saveAndPin() : togglePin() }}
+            onClick={(e) => { e.stopPropagation(); if (isNewEntry) { saveAndPin() } else { togglePin() } }}
             className={`w-6 h-6 flex items-center justify-center rounded-full bg-white border transition-all ${
               (!isNewEntry && block?.pinned)
                 ? 'opacity-100 border-amber-400 text-amber-700 bg-amber-50'
