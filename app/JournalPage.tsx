@@ -63,6 +63,23 @@ function decodeSortPref(raw: string): { mode: SortMode; propertyId: string | nul
   return null
 }
 
+// Maps the active sort mode to a server-side ORDER BY so the *correct* rows are
+// fetched first and lazily paged — instead of always pulling newest-created rows
+// and re-sorting only the loaded window. `nullsFirst: false` keeps undated rows
+// (e.g. infos when sorting by due date) at the tail. `property` can't be expressed
+// as a single column (it ranks by client-side property values), so it falls back
+// to created-desc; its final order is still resolved client-side in `sortedBlocks`.
+function serverOrderFor(mode: SortMode): { column: string; ascending: boolean } {
+  switch (mode) {
+    case 'created_asc': return { column: 'created_at', ascending: true }
+    case 'modified_desc': return { column: 'updated_at', ascending: false }
+    case 'modified_asc': return { column: 'updated_at', ascending: true }
+    case 'due_date': return { column: 'due_date', ascending: true }
+    case 'manual': return { column: 'sort_order', ascending: true }
+    default: return { column: 'created_at', ascending: false } // created_desc, property
+  }
+}
+
 interface Props {
   userId: string
   email: string
@@ -196,6 +213,14 @@ export function JournalPage({ userId, email, displayName }: Props) {
   timezoneRef.current = timezone
   const allPropertiesRef = useRef(allProperties)
   allPropertiesRef.current = allProperties
+  const sortModeRef = useRef(sortMode)
+  sortModeRef.current = sortMode
+  const sortPropertyIdRef = useRef(sortPropertyId)
+  sortPropertyIdRef.current = sortPropertyId
+  // Number of rows already pulled from the server for the current query context.
+  // Drives offset pagination and is tracked separately from `blocks.length`, which
+  // is mutated by sync-poll prepends/removals and local inserts.
+  const serverLoadedRef = useRef(0)
   const [feedCollapsed, setFeedCollapsed] = useState(true)
   const [feedCollapseLines, setFeedCollapseLines] = useState(10)
   const [prefsOpen, setPrefsOpen] = useState(false)
@@ -525,18 +550,26 @@ export function JournalPage({ userId, email, displayName }: Props) {
       .then(({ data }) => setContexts(data ?? []))
   }, [userId])
 
-  const fetchBlocks = useCallback(async (cursor?: string) => {
-    if (cursor && loading) return
+  // `offset` is the number of rows already loaded for this query context. undefined
+  // means a fresh load (page 0); a number triggers an appended next-page fetch.
+  const fetchBlocks = useCallback(async (offset?: number) => {
+    if (offset !== undefined && loading) return
     setLoading(true)
 
     const isSearching = !!debouncedSearchRef.current
+    // Sorting is resolved client-side from the loaded window, but the *server* must
+    // order/paginate by the same key so the right rows load first (and lazily).
+    // Search ignores sort (relevance-style window), so keep it newest-first.
+    const order = isSearching ? { column: 'created_at', ascending: false } : serverOrderFor(sortModeRef.current)
     const supabase = createClient()
     let query = supabase
       .from('journal_blocks')
       .select('*')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(isSearching ? SEARCH_PAGE_SIZE : PAGE_SIZE)
+      // Stable secondary key on a unique column so offset pages never overlap or skip
+      // rows when the primary sort key has ties or nulls.
+      .order(order.column, { ascending: order.ascending, nullsFirst: false })
+      .order('id', { ascending: true })
 
     // Workspace filter
     if (!isGlobalViewRef.current && activeWorkspaceIdRef.current) {
@@ -706,7 +739,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         for (let i = 1; i < idSets.length; i++) allowed = new Set(Array.from(allowed).filter(id => idSets[i].has(id)))
         if (allowed.size === 0) {
           // No block can satisfy the positive filters — short-circuit to an empty feed.
-          if (!(cursor && !isSearching)) setBlocks([])
+          if (offset === undefined || isSearching) { setBlocks([]); serverLoadedRef.current = 0 }
           setHasMore(false)
           setLoading(false)
           setSwitching(false)
@@ -726,21 +759,30 @@ export function JournalPage({ userId, email, displayName }: Props) {
       }
     }
 
-    // Pagination (disabled during search)
-    if (cursor && !isSearching) {
-      query = query.lt('created_at', cursor)
-    }
+    // Pagination: offset-based windowing in the active sort order. Search loads a
+    // single larger window, so it skips paging.
+    const isAppend = offset !== undefined && !isSearching
+    const from = isAppend ? offset : 0
+    const pageSize = isSearching ? SEARCH_PAGE_SIZE : PAGE_SIZE
+    query = query.range(from, from + pageSize - 1)
 
     const { data, error } = await query
     if (error) { console.error(error); setLoading(false); return }
 
     const rows = (data ?? []) as Block[]
-    if (cursor && !isSearching) {
-      setBlocks((prev) => [...prev, ...rows])
+    if (isAppend) {
+      // Dedupe by id: a concurrent insert/update can shift a row across the page
+      // boundary, so guard against re-appending one already in the list.
+      setBlocks((prev) => {
+        const seen = new Set(prev.map(b => b.id))
+        return [...prev, ...rows.filter(b => !seen.has(b.id))]
+      })
+      serverLoadedRef.current = from + rows.length
     } else {
       setBlocks(rows)
+      serverLoadedRef.current = rows.length
     }
-    setHasMore(!isSearching && rows.length === PAGE_SIZE)
+    setHasMore(!isSearching && rows.length === pageSize)
     setLoading(false)
     setSwitching(false)
     setInitialised(true)
@@ -814,7 +856,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setHasMore(true)
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, activePropertyFilters, timezone, searchMode, searchNonce])
+  }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, activePropertyFilters, timezone, searchMode, searchNonce, sortMode, sortPropertyId])
 
   // ── Periodic sync polling: fetch blocks updated on other devices ──
   const lastPollRef = useRef<string>(new Date().toISOString())
@@ -919,8 +961,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   }
 
   function loadMore() {
-    const last = blocks[blocks.length - 1]
-    if (last) fetchBlocks(last.created_at)
+    if (serverLoadedRef.current > 0) fetchBlocks(serverLoadedRef.current)
   }
 
   function handleNewBlock(block: Block, propertyValueIds?: Set<string>) {

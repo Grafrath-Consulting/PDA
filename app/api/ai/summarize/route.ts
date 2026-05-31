@@ -1,6 +1,38 @@
 import { createClient } from '@/lib/supabase/server'
 import { getUserApiKey, getUserPrompt } from '@/lib/get-user-ai-config'
 
+// Models sometimes wrap HTML output in a markdown code fence and emit empty
+// list items / stacked line breaks. Strip those so the rich text renders clean.
+function sanitizeSummaryHtml(raw: string): string {
+  let html = raw.trim()
+
+  // Strip a leading/trailing markdown code fence (```html ... ``` or ``` ... ```)
+  const fenceMatch = html.match(/^```(?:html)?\s*\n?([\s\S]*?)\n?```$/i)
+  if (fenceMatch) {
+    html = fenceMatch[1].trim()
+  } else {
+    // Fall back to stripping stray fence markers anywhere in the text
+    html = html.replace(/```html/gi, '').replace(/```/g, '').trim()
+  }
+
+  // Drop empty list items: <li></li>, <li> </li>, <li><br></li>
+  html = html.replace(/<li>(?:\s|<br\s*\/?>|&nbsp;)*<\/li>/gi, '')
+
+  // Drop empty paragraphs
+  html = html.replace(/<p>(?:\s|<br\s*\/?>|&nbsp;)*<\/p>/gi, '')
+
+  // Drop empty lists left behind once their items were removed
+  html = html.replace(/<(ul|ol)>\s*<\/\1>/gi, '')
+
+  // Collapse runs of consecutive <br> into a single one
+  html = html.replace(/(?:<br\s*\/?>\s*){2,}/gi, '<br>')
+
+  // Collapse excessive whitespace between tags
+  html = html.replace(/>\s{2,}</g, '> <')
+
+  return html.trim()
+}
+
 export async function POST(request: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -55,8 +87,9 @@ export async function POST(request: Request) {
     }
 
     const data = await res.json()
-    const summary =
+    const rawSummary =
       data.content[0]?.type === 'text' ? data.content[0].text : text
+    const summary = sanitizeSummaryHtml(rawSummary)
 
     return Response.json({ summary })
   } catch (err: unknown) {

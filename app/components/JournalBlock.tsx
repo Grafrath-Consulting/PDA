@@ -539,8 +539,8 @@ function cutIcon() {
 function copyIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
 }
-function sparkleIcon() {
-  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
+function robotIcon() {
+  return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
 }
 function historyIcon() {
   return <svg width={ICON_SIZE} height={ICON_SIZE} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
@@ -2217,7 +2217,7 @@ export function JournalBlock(props: Props) {
       key: 'convert', label: isTask ? 'Convert to Info' : 'Convert to Task', shortcut: '⌥`', shortcutTip: 'Alt + Backtick', icon: convertIcon(),
       onClick: () => { setPopoverOpen(false); if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') } else { toggleEntryType() } },
     },
-    { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', shortcutTip: 'Alt + Shift + S', icon: sparkleIcon(), onClick: () => popoverAction({ type: 'summarize' }) },
+    { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', shortcutTip: 'Alt + Shift + S', icon: robotIcon(), onClick: () => popoverAction({ type: 'summarize' }) },
     ...(block ? [
       { key: 'history', label: 'View History', shortcut: '⌥⇧H', shortcutTip: 'Alt + Shift + H', icon: historyIcon(), onClick: () => { setPopoverOpen(false); setShowHistory(true) } },
       { key: 'copyblock', label: 'Copy Block', shortcut: '⌥⇧C', shortcutTip: 'Alt + Shift + C', icon: copyIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard() } },
