@@ -622,7 +622,8 @@ export function JournalBlock(props: Props) {
 
   // Property filter prompt state (new entries only)
   const [filterPromptOpen, setFilterPromptOpen] = useState(false)
-  const [filterPromptValues, setFilterPromptValues] = useState<Set<string>>(new Set())
+  const [filterPromptValues, setFilterPromptValues] = useState<Set<string>>(new Set())  // options shown
+  const [filterPromptChecked, setFilterPromptChecked] = useState<Set<string>>(new Set())  // user selection
   const filterPromptResolveRef = useRef<((selectedIds: Set<string>) => void) | null>(null)
 
   const editorRef = useRef<TipTapEditorHandle>(null)
@@ -1430,14 +1431,34 @@ export function JournalBlock(props: Props) {
     if (!text) return saveNewEntry()
     const filters = (propsRef.current as NewEntryProps).activePropertyFilters
     if (!filters || filters.size === 0) return saveNewEntry()
-    // Find filter values not already applied to the pending entry
+    // Find filter values not already applied to the pending entry.
     const pending = pendingPropertyIdsRef.current
+    const allProps = propertiesForWorkspace(propertyWorkspaceId)
+    const findProp = (vid: string) => allProps.find(pr => pr.values.some(v => v.id === vid))
     const missing = new Set<string>()
-    filters.forEach(vid => { if (!vid.startsWith('none::') && !pending.has(vid)) missing.add(vid) })
+    filters.forEach(vid => {
+      if (vid.startsWith('none::') || pending.has(vid)) return
+      // Single-select property already satisfied by a pending value → don't prompt
+      // for its other selected filter values (would create an illegal multi-selection).
+      const prop = findProp(vid)
+      if (prop && !prop.allow_multiple && prop.values.some(v => pending.has(v.id))) return
+      missing.add(vid)
+    })
     if (missing.size === 0) return saveNewEntry()
+    // Default check state: check everything except single-select properties that have
+    // multiple options to choose from — those render radio-style and start unchecked.
+    const optionCounts = new Map<string, number>()
+    missing.forEach(vid => { const p = findProp(vid); if (p) optionCounts.set(p.id, (optionCounts.get(p.id) ?? 0) + 1) })
+    const initialChecked = new Set<string>()
+    missing.forEach(vid => {
+      const p = findProp(vid)
+      if (p && !p.allow_multiple && (optionCounts.get(p.id) ?? 0) > 1) return
+      initialChecked.add(vid)
+    })
     // Show prompt and wait for user decision
     clearAutosaveTimer()
     setFilterPromptValues(missing)
+    setFilterPromptChecked(initialChecked)
     setFilterPromptOpen(true)
     const selected = await new Promise<Set<string>>(resolve => {
       filterPromptResolveRef.current = resolve
@@ -1450,7 +1471,7 @@ export function JournalBlock(props: Props) {
       pendingPropertyIdsRef.current = merged
     }
     return saveNewEntry()
-  }, [isNewEntry, saveNewEntry])
+  }, [isNewEntry, saveNewEntry, propertiesForWorkspace, propertyWorkspaceId])
 
   const handleSave = isNewEntry ? saveNewEntryWithFilterPrompt : saveExistingBlock
 
@@ -3269,22 +3290,34 @@ export function JournalBlock(props: Props) {
         (() => {
           const allProps = propertiesForWorkspace(propertyWorkspaceId)
           // Group filter values by property
-          const groups: { propName: string; values: { id: string; label: string; color: string | null }[] }[] = []
-          const grouped = new Map<string, { propName: string; values: { id: string; label: string; color: string | null }[] }>()
+          type PromptGroup = { propId: string; propName: string; allowMultiple: boolean; values: { id: string; label: string; color: string | null }[] }
+          const groups: PromptGroup[] = []
+          const grouped = new Map<string, PromptGroup>()
           filterPromptValues.forEach(vid => {
             for (const prop of allProps) {
               const val = prop.values.find(v => v.id === vid)
               if (val) {
                 let g = grouped.get(prop.id)
-                if (!g) { g = { propName: prop.name, values: [] }; grouped.set(prop.id, g); groups.push(g) }
+                if (!g) { g = { propId: prop.id, propName: prop.name, allowMultiple: prop.allow_multiple, values: [] }; grouped.set(prop.id, g); groups.push(g) }
                 g.values.push({ id: val.id, label: val.label, color: val.color })
                 break
               }
             }
           })
-          const [checked, setChecked] = [filterPromptValues, setFilterPromptValues]
-          const toggle = (vid: string) => {
+          const checked = filterPromptChecked
+          const setChecked = setFilterPromptChecked
+          const toggleCheckbox = (vid: string) => {
             setChecked(prev => { const n = new Set(prev); if (n.has(vid)) n.delete(vid); else n.add(vid); return n })
+          }
+          // Radio-style: a single-select property may only have one value checked at a time.
+          const selectRadio = (g: PromptGroup, vid: string) => {
+            setChecked(prev => {
+              const n = new Set(prev)
+              const already = n.has(vid)
+              g.values.forEach(v => n.delete(v.id))
+              if (!already) n.add(vid)  // clicking the selected option clears it (apply none)
+              return n
+            })
           }
           const resolve = (ids: Set<string>) => {
             setFilterPromptOpen(false)
@@ -3301,18 +3334,26 @@ export function JournalBlock(props: Props) {
                   </p>
                 </div>
                 <div className="px-5 pb-3 space-y-2">
-                  {groups.map(g => (
-                    <div key={g.propName}>
+                  {groups.map(g => {
+                    // Single-select property with several choices → radio (pick at most one).
+                    const isRadio = !g.allowMultiple && g.values.length > 1
+                    return (
+                    <div key={g.propId}>
                       <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">{g.propName}</p>
                       {g.values.map(v => (
-                        <label key={v.id} className="flex items-center gap-2 py-0.5 cursor-pointer">
-                          <input type="checkbox" checked={checked.has(v.id)} onChange={() => toggle(v.id)} className="rounded border-gray-300 text-amber-600 focus:ring-amber-300" />
+                        <label
+                          key={v.id}
+                          className="flex items-center gap-2 py-0.5 cursor-pointer"
+                          onClick={(e) => { e.preventDefault(); if (isRadio) selectRadio(g, v.id); else toggleCheckbox(v.id) }}
+                        >
+                          <input type={isRadio ? 'radio' : 'checkbox'} checked={checked.has(v.id)} readOnly tabIndex={-1} className="pointer-events-none rounded border-gray-300 text-amber-600 focus:ring-amber-300" />
                           <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: getPropertyColor(v.color).swatch }} />
                           <span className="text-xs text-gray-700">{v.label}</span>
                         </label>
                       ))}
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
                 <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">
                   <button onClick={() => resolve(new Set())} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
