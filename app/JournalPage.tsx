@@ -552,8 +552,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
   // `offset` is the number of rows already loaded for this query context. undefined
   // means a fresh load (page 0); a number triggers an appended next-page fetch.
-  const fetchBlocks = useCallback(async (offset?: number) => {
-    if (offset !== undefined && loading) return
+  const fetchBlocks = useCallback(async (offset?: number, refresh?: boolean) => {
+    // `refresh` re-pulls the whole loaded window (see range calc below). Like an
+    // append, skip it while another fetch is in flight to avoid a setBlocks race.
+    if ((offset !== undefined || refresh) && loading) return
     setLoading(true)
 
     const isSearching = !!debouncedSearchRef.current
@@ -764,7 +766,13 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const isAppend = offset !== undefined && !isSearching
     const from = isAppend ? offset : 0
     const pageSize = isSearching ? SEARCH_PAGE_SIZE : PAGE_SIZE
-    query = query.range(from, from + pageSize - 1)
+    // A refresh re-loads the entire window the user has scrolled into view, so a
+    // feed left partial (e.g. the renderer was frozen while idle) becomes whole
+    // again — rather than collapsing back to the first page like a fresh load.
+    const span = (refresh && !isAppend && !isSearching)
+      ? Math.max(serverLoadedRef.current, pageSize)
+      : pageSize
+    query = query.range(from, from + span - 1)
 
     const { data, error } = await query
     if (error) { console.error(error); setLoading(false); return }
@@ -782,7 +790,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
       setBlocks(rows)
       serverLoadedRef.current = rows.length
     }
-    setHasMore(!isSearching && rows.length === pageSize)
+    setHasMore(!isSearching && rows.length === span)
     setLoading(false)
     setSwitching(false)
     setInitialised(true)
@@ -793,6 +801,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, hydrated])
+
+  // Always reach the latest fetchBlocks from interval/event closures below
+  // (its identity changes whenever `loading` flips).
+  const fetchBlocksRef = useRef(fetchBlocks)
+  fetchBlocksRef.current = fetchBlocks
 
   // Fetch pinned blocks for the active workspace, ignoring all filters/search/sort.
   const fetchPinnedBlocks = useCallback(async () => {
@@ -858,69 +871,40 @@ export function JournalPage({ userId, email, displayName }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspaceId, selectedWsIds, contextFilter, debouncedSearch, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, activePropertyFilters, timezone, searchMode, searchNonce, sortMode, sortPropertyId])
 
-  // ── Periodic sync polling: fetch blocks updated on other devices ──
-  const lastPollRef = useRef<string>(new Date().toISOString())
+  // ── Keep-awake sync polling ──
+  // Periodically re-pull the entire loaded window so the feed stays complete and
+  // reflects edits made on other devices. Crucially, this also recovers from
+  // Chromium freezing/throttling an idle PWA renderer: when the tab wakes the
+  // next tick (or the immediate visibility-regain refresh below) repopulates the
+  // feed, so cards are never left missing until a manual refresh. Noisier than a
+  // delta sync — it re-reads the visible window each tick — but always whole.
   const syncIntervalRef = useRef(syncInterval)
   syncIntervalRef.current = syncInterval
 
   useEffect(() => {
     if (!initialised) return
-    const timer = setInterval(async () => {
-      const since = lastPollRef.current
-      lastPollRef.current = new Date().toISOString()
 
-      const supabase = createClient()
-      let query = supabase
-        .from('journal_blocks')
-        .select('*')
-        .eq('user_id', userId)
-        .gt('updated_at', since)
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+      // Text/smart search own their own result windows; don't disturb them
+      // (a full-window refetch would also flicker the results-count header).
+      if (debouncedSearchRef.current) return
+      fetchBlocksRef.current(undefined, true)
+    }
 
-      // Scope to current workspace view
-      if (!isGlobalViewRef.current && activeWorkspaceIdRef.current) {
-        query = query.eq('workspace_id', activeWorkspaceIdRef.current)
-      } else if (isGlobalViewRef.current && selectedWsIdsRef.current) {
-        query = query.in('workspace_id', Array.from(selectedWsIdsRef.current))
-      }
+    const timer = setInterval(refresh, syncIntervalRef.current * 1000)
 
-      const { data, error } = await query
-      if (error || !data || data.length === 0) return
-      const remote = data as Block[]
+    // Wake recovery: refresh the moment the tab becomes visible again rather
+    // than waiting up to a full interval for the next tick.
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', onVisible)
 
-      setBlocks(prev => {
-        const existing = new Map(prev.map(b => [b.id, b]))
-        let updated = [...prev]
-        const addedIds = new Set<string>()
-
-        for (const r of remote) {
-          const local = existing.get(r.id)
-          if (!local) {
-            // New block from another device — add to feed (deduplicate within this batch)
-            if (r.status === 'active' && !r.deleted_at && filterStatusesRef.current.has('active') && !addedIds.has(r.id)) {
-              updated = [r, ...updated]
-              addedIds.add(r.id)
-            }
-          } else {
-            // Existing block updated remotely — merge metadata + content
-            // Content merge happens in JournalBlock via lastSyncedContentRef
-            updated = updated.map(b => b.id === r.id ? { ...r } : b)
-          }
-        }
-
-        // Remove blocks that were archived/deleted on another device
-        const removedIds = new Set(
-          remote.filter(r => r.status !== 'active' || r.deleted_at).map(r => r.id)
-        )
-        if (removedIds.size > 0 && filterStatusesRef.current.has('active') && !filterStatusesRef.current.has('archived') && !filterStatusesRef.current.has('deleted')) {
-          updated = updated.filter(b => !removedIds.has(b.id))
-        }
-
-        return updated
-      })
-    }, syncIntervalRef.current * 1000)
-
-    return () => clearInterval(timer)
-  }, [initialised, userId, syncInterval])
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [initialised, syncInterval])
 
   // Batch-load entry_properties for all visible blocks (including smart search results)
   const visibleBlockIds = (() => {
