@@ -2391,7 +2391,7 @@ export function JournalBlock(props: Props) {
             ? `border-l-[3px] border border-[#E5E0D0] ${focused ? 'shadow-md' : 'hover:border-[#D5D0C0]'}`
             : focused
               ? 'border-l-[3px] border border-[#E5E0D0] shadow-md'
-              : 'border-l-[3px] border-l-transparent border border-[#E5E0D0] hover:border-[#D5D0C0]'
+              : 'border-l-[3px] border-l-[#E5E0D0] border border-[#E5E0D0] hover:border-[#D5D0C0]'
       } ${isDragOver ? '' : focused ? '' : 'bg-white'} ${isDeleted && !restoredLocally ? 'opacity-60' : hasFutureStart && !focused ? 'opacity-50' : ''}`}
       style={{
         ...(focused && !isDragOver
@@ -2399,6 +2399,8 @@ export function JournalBlock(props: Props) {
             : isScratch
               ? { backgroundColor: activeScheme?.activeMuted ?? '#FAF5FF' } // light theme tint for the scratchpad
               : {}),
+        // Scratchpad: colour the whole outline to match its accent border (same width).
+        ...(isScratch && activeScheme?.swatch ? { borderColor: activeScheme.swatch } : {}),
         ...(borderLeftColor ? { borderLeftColor } : {}),
       }}
       onMouseDown={handleContentMouseDown}
@@ -2716,7 +2718,7 @@ export function JournalBlock(props: Props) {
         {shouldCollapse && (
           <div
             className="absolute bottom-0 left-0 right-0 h-16 z-[1] pointer-events-none"
-            style={{ background: 'linear-gradient(transparent, white)' }}
+            style={{ background: `linear-gradient(transparent, ${isScratch ? (activeScheme?.activeMuted ?? '#FAF5FF') : 'white'})` }}
           />
         )}
         <div className={`${summarizing ? 'opacity-30 pointer-events-none' : ''} ${isComplete && !focused ? 'opacity-50 line-through decoration-gray-400' : ''}`}>
