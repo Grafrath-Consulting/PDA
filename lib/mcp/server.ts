@@ -22,6 +22,37 @@ function htmlToText(html: string | null | undefined): string {
     .trim()
 }
 
+// Project a raw journal_blocks row (as returned by the save helpers) into the
+// same clean shape the read tools emit: HTML stripped to a `text` field, never
+// a raw `content` field. Keeps every tool's block shape identical.
+function projectBlock(block: {
+  id: string
+  workspace_id: string
+  content: string | null
+  entry_type: string
+  status: string
+  created_at: string
+  task_status?: string | null
+  due_date?: string | null
+  due_date_type?: string | null
+  start_date?: string | null
+  via_mcp?: boolean
+}) {
+  return {
+    id: block.id,
+    workspace_id: block.workspace_id,
+    entry_type: block.entry_type,
+    status: block.status,
+    created_at: block.created_at,
+    task_status: block.task_status ?? null,
+    due_date: block.due_date ?? null,
+    due_date_type: block.due_date_type ?? null,
+    start_date: block.start_date ?? null,
+    via_mcp: block.via_mcp ?? false,
+    text: htmlToText(block.content),
+  }
+}
+
 function ok(payload: unknown) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
@@ -133,7 +164,7 @@ function registerCreateBlock(server: McpServer, deps: ToolDeps) {
       startDate: start_date,
     })
     if (!result.ok) return err(result.error)
-    return ok({ block: result.block })
+    return ok({ block: projectBlock(result.block) })
   })
 }
 
@@ -162,7 +193,7 @@ function registerUpdateBlock(server: McpServer, deps: ToolDeps) {
       status,
     })
     if (!result.ok) return err(result.error)
-    return ok({ block: result.block })
+    return ok({ block: projectBlock(result.block) })
   })
 }
 
@@ -343,7 +374,7 @@ function registerUpdateScratchpad(server: McpServer, deps: ToolDeps) {
       content: newContent,
     })
     if (!result.ok) return err(result.error)
-    return ok({ block: result.block })
+    return ok({ block: projectBlock(result.block) })
   })
 }
 
