@@ -924,40 +924,54 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setPulledInCards([])
   }, [activeWorkspaceId])
 
-  // Intercept in-app card-link clicks. TipTap's Link extension opens links via a
-  // NATIVE click handler (window.open with target=_blank) — which, in an installed
-  // PWA, launches the system browser. A React onClickCapture can't stop that (its
-  // stopPropagation only affects React's synthetic handlers), so we attach a
-  // native capture-phase listener at the DOCUMENT level (catches links anywhere —
-  // feed, scratchpad, modals, history view — and never depends on a ref existing
-  // at mount) and stopImmediatePropagation before ProseMirror ever sees the click.
+  // Intercept in-app card-link clicks so they navigate in-app instead of opening
+  // a tab (which, in an installed PWA, launches the system browser).
+  //
+  // Two subtleties forced this design:
+  //  1. TipTap's Link extension calls window.open from ProseMirror's OWN click
+  //     detection, which is driven by mousedown/mouseup — NOT the native `click`
+  //     event. So we must kill the event at `mousedown` (capture) to stop
+  //     window.open from ever firing; intercepting `click` alone is too late.
+  //  2. A React onClickCapture can't help (its stopPropagation only affects
+  //     React's synthetic handlers). We use native capture-phase listeners at the
+  //     DOCUMENT level so they run before ProseMirror and catch links anywhere
+  //     (feed, scratchpad, modals, history view) without depending on a ref.
   const navigateToCardRef = useRef(navigateToCard)
   navigateToCardRef.current = navigateToCard
   useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-      const targetEl = e.target as HTMLElement | null
-      if (!targetEl) return
-      // Don't hijack clicks while editing a card (cursor placement, etc.)
-      if (targetEl.closest('.ProseMirror[contenteditable="true"]')) return
-      const anchor = targetEl.closest('a') as HTMLAnchorElement | null
-      if (!anchor) return
+    // Returns the card id for a same-origin ?card= anchor under the event target,
+    // after swallowing the event; null if this isn't an in-app card link.
+    const consumeCardLink = (e: MouseEvent): { cardId: string; sourceId: string | null } | null => {
+      // Allow modified / non-primary clicks to open a new tab deliberately.
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return null
+      const anchor = (e.target as HTMLElement | null)?.closest?.('a') as HTMLAnchorElement | null
+      if (!anchor) return null
       let cardId: string | null = null
       try {
         const u = new URL(anchor.href, window.location.origin)
-        if (u.origin !== window.location.origin) return // leave external links alone
+        if (u.origin !== window.location.origin) return null // leave external links alone
         cardId = u.searchParams.get('card')
-      } catch { return }
-      if (!cardId) return
+      } catch { return null }
+      if (!cardId) return null
       e.preventDefault()
       e.stopPropagation()
       e.stopImmediatePropagation()
       const sourceEl = anchor.closest('[id^="block-"]') as HTMLElement | null
-      const sourceId = sourceEl?.id.replace(/^block-/, '') ?? null
-      navigateToCardRef.current(cardId, sourceId)
+      return { cardId, sourceId: sourceEl?.id.replace(/^block-/, '') ?? null }
     }
-    document.addEventListener('click', onClick, true) // capture phase, document-wide
-    return () => document.removeEventListener('click', onClick, true)
+    // mousedown: stop ProseMirror from ever opening the link (and from focusing).
+    const onMouseDown = (e: MouseEvent) => { consumeCardLink(e) }
+    // click: swallow the browser's default navigation and do the in-app jump.
+    const onClick = (e: MouseEvent) => {
+      const hit = consumeCardLink(e)
+      if (hit) navigateToCardRef.current(hit.cardId, hit.sourceId)
+    }
+    document.addEventListener('mousedown', onMouseDown, true)
+    document.addEventListener('click', onClick, true)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown, true)
+      document.removeEventListener('click', onClick, true)
+    }
   }, [])
 
   // Resolve a ?card=<id> deep link once the feed is ready, then clear the param.
