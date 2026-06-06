@@ -14,6 +14,9 @@ export type ActionInput = ActionBase & (
   | { type: 'move'; fromWorkspaceId: string | null; toWorkspaceName: string }
   | { type: 'pin'; prev: boolean }
   | { type: 'property'; before: string[]; after: string[]; label: string }
+  // In-card field edits (task status, assignee, dates, header, info/task convert).
+  // `patch` holds the column(s) to restore; `label` describes what was done.
+  | { type: 'field'; patch: Record<string, unknown>; label: string }
 )
 export type ActionEntry = ActionInput & { id: string; at: number; undone: boolean }
 

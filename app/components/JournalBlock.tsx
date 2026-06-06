@@ -1987,10 +1987,12 @@ export function JournalBlock(props: Props) {
   async function toggleHeader() {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    const newVal = !(p.block.header_enabled ?? true)
+    const prev = p.block.header_enabled ?? true
+    const newVal = !prev
     p.onUpdate({ ...p.block, header_enabled: newVal })
     const supabase = createClient()
     await supabase.from('journal_blocks').update({ header_enabled: newVal }).eq('id', p.block.id)
+    recordAction({ type: 'field', blockId: p.block.id, blockTitle: blockTitle(p.block.content), patch: { header_enabled: prev }, label: newVal ? 'Enabled header' : 'Disabled header' })
   }
 
   async function restoreBlock() {
@@ -2022,16 +2024,36 @@ export function JournalBlock(props: Props) {
     const updates: Record<string, unknown> = { entry_type: next }
     // When converting to info, revert block status to active if task was done
     // but retain task_status, owner_id, due_date, due_date_type so they restore on revert
-    if (next === 'info' && p.block.status === 'complete') {
+    const statusChanged = next === 'info' && p.block.status === 'complete'
+    if (statusChanged) {
       updates.status = 'active'
     }
     await supabase.from('journal_blocks').update(updates).eq('id', p.block.id)
-    p.onUpdate({ ...p.block, entry_type: next, ...(next === 'info' && p.block.status === 'complete' ? { status: 'active' as const } : {}) })
+    p.onUpdate({ ...p.block, entry_type: next, ...(statusChanged ? { status: 'active' as const } : {}) })
+    recordAction({
+      type: 'field', blockId: p.block.id, blockTitle: blockTitle(p.block.content),
+      patch: { entry_type: current, ...(statusChanged ? { status: p.block.status } : {}) },
+      label: `Converted to ${next === 'task' ? 'task' : 'info'}`,
+    })
   }
 
   function updateTaskField(field: string, value: unknown) {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
+    const before = (p.block as unknown as Record<string, unknown>)[field]
+    if (before !== value) {
+      const fieldLabels: Record<string, [string, string]> = {
+        owner_id: ['Changed assignee', 'Cleared assignee'],
+        due_date: ['Changed due date', 'Cleared due date'],
+        due_date_type: ['Changed due-date type', 'Cleared due-date type'],
+        start_date: ['Changed start date', 'Cleared start date'],
+      }
+      const [setL, clearL] = fieldLabels[field] ?? [`Changed ${field}`, `Cleared ${field}`]
+      recordAction({
+        type: 'field', blockId: p.block.id, blockTitle: blockTitle(p.block.content),
+        patch: { [field]: before }, label: value == null || value === '' ? clearL : setL,
+      })
+    }
     p.onUpdate({ ...p.block, [field]: value })
     const supabase = createClient()
     supabase.from('journal_blocks').update({ [field]: value }).eq('id', p.block.id).select('*').single()
@@ -2045,6 +2067,13 @@ export function JournalBlock(props: Props) {
   function setTaskStatus(taskStatus: 'not_started' | 'held' | 'in_progress' | 'done') {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
+    if (p.block.task_status !== taskStatus) {
+      const labels: Record<string, string> = { not_started: 'Not Started', held: 'Held', in_progress: 'In Progress', done: 'Done' }
+      recordAction({
+        type: 'field', blockId: p.block.id, blockTitle: blockTitle(p.block.content),
+        patch: { task_status: p.block.task_status }, label: `Set status: ${labels[taskStatus] ?? taskStatus}`,
+      })
+    }
     // Keep status active — task_status drives strikethrough/grey styling, no auto-archive
     p.onUpdate({ ...p.block, task_status: taskStatus })
     const supabase = createClient()

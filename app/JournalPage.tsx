@@ -1207,6 +1207,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
         await supabase.from('journal_blocks').update({ pinned: entry.prev }).eq('id', entry.blockId)
         const { data } = await supabase.from('journal_blocks').select('*').eq('id', entry.blockId).maybeSingle()
         if (data) handleBlockUpdate(data as Block)
+      } else if (entry.type === 'field') {
+        await supabase.from('journal_blocks').update(entry.patch).eq('id', entry.blockId)
+        const { data } = await supabase.from('journal_blocks').select('*').eq('id', entry.blockId).maybeSingle()
+        if (data) handleBlockUpdate(data as Block)
+        navigateToCard(entry.blockId)
       } else if (entry.type === 'property') {
         const before = new Set(entry.before)
         const after = new Set(entry.after)
@@ -2547,6 +2552,7 @@ function actionIcon(type: ActionEntry['type']) {
     case 'move': return <svg {...common}><polyline points="5 9 2 12 5 15" /><polyline points="9 5 12 2 15 5" /><polyline points="15 19 12 22 9 19" /><polyline points="19 9 22 12 19 15" /><line x1="2" y1="12" x2="22" y2="12" /><line x1="12" y1="2" x2="12" y2="22" /></svg>
     case 'pin': return <svg {...common}><path d="M12 17v5" /><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" /></svg>
     case 'property': return <svg {...common}><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
+    case 'field': return <svg {...common}><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
   }
 }
 
@@ -2557,6 +2563,7 @@ function describeAction(e: ActionEntry): string {
     case 'move': return `Moved to ${e.toWorkspaceName}`
     case 'pin': return e.prev ? 'Unpinned' : 'Pinned'
     case 'property': return e.label
+    case 'field': return e.label
   }
 }
 
