@@ -20,6 +20,7 @@ import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
 import { useProperties } from '@/context/PropertiesContext'
 import { useDateFormat } from '@/context/DateFormatContext'
 import { useActionHistory, type ActionEntry } from '@/context/ActionHistoryContext'
+import { readViewState, writeViewState, type WorkspaceViewState } from '@/lib/workspace-view-state'
 import { zonedToUtcIso } from '@/lib/date-format'
 import { formatDatePart } from '@/lib/date-format'
 import workspaceColorSchemes, { type WorkspaceColorScheme } from '@/constants/workspaceColorSchemes'
@@ -32,37 +33,17 @@ function splitSchemeStyle(s: WorkspaceColorScheme): React.CSSProperties {
 
 const PAGE_SIZE = 20
 const SEARCH_PAGE_SIZE = 100
-const PANEL_STORAGE_KEY = 'journal-panel-open'
 const FORMATTING_VISIBLE_KEY = 'tiptap-toolbar-visible'
 const DEFAULT_AUTOSAVE_INTERVAL = 30
 const DEFAULT_SYNC_INTERVAL = 60
 const MIN_SYNC_INTERVAL = 5
-const SORT_MODE_KEY = 'journal-sort-mode'
 const ADVANCED_OPEN_KEY = 'search-advanced-open'  // legacy — read for migration only
 const PANEL_MODE_KEY = 'search-panel-mode'
-const FEED_COLLAPSED_KEY = 'feed-collapsed'
-const FILTERS_KEY = 'journal-filters'
 
-const VALID_SORT_MODES: SortMode[] = ['created_desc', 'created_asc', 'modified_desc', 'modified_asc', 'due_date', 'manual']
 const VALID_PANEL_MODES: PanelMode[] = ['collapsed', 'normal', 'expanded']
 
 type SortMode = 'created_desc' | 'created_asc' | 'modified_desc' | 'modified_asc' | 'due_date' | 'manual' | 'property'
 type PanelMode = 'collapsed' | 'normal' | 'expanded'
-
-// Sort preference is persisted as a string. "Sort by property" encodes the
-// chosen property id as `property:<id>` so it round-trips through the existing
-// profiles.journal_sort_mode text column without a schema change.
-function encodeSortPref(mode: SortMode, propertyId: string | null): string {
-  return mode === 'property' && propertyId ? `property:${propertyId}` : mode
-}
-function decodeSortPref(raw: string): { mode: SortMode; propertyId: string | null } | null {
-  if (raw.startsWith('property:')) {
-    const id = raw.slice('property:'.length)
-    return id ? { mode: 'property', propertyId: id } : null
-  }
-  if (VALID_SORT_MODES.includes(raw as SortMode)) return { mode: raw as SortMode, propertyId: null }
-  return null
-}
 
 // Maps the active sort mode to a server-side ORDER BY so the *correct* rows are
 // fetched first and lazily paged — instead of always pulling newest-created rows
@@ -234,21 +215,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [apiKeyBannerDismissed, setApiKeyBannerDismissed] = useState(false)
   const [apiKeyMissing, setApiKeyMissing] = useState(false)
 
+  // Global (not per-workspace) UI prefs: formatting toolbar + filter-bar density.
+  // Sort, feed collapse, Focus panel, and all filters are restored per-workspace
+  // by the view-state effect below.
   useEffect(() => {
-    const saved = localStorage.getItem(PANEL_STORAGE_KEY)
-    if (saved !== null) {
-      setPanelOpen(saved === 'true')
-    } else if (typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches) {
-      // Default focus panel closed on mobile so the journal feed is visible first
-      setPanelOpen(false)
-    }
     const fmt = localStorage.getItem(FORMATTING_VISIBLE_KEY)
     if (fmt === 'true') setFormattingVisible(true)
-    const sort = localStorage.getItem(SORT_MODE_KEY)
-    if (sort) {
-      const decoded = decodeSortPref(sort)
-      if (decoded) { setSortMode(decoded.mode); setSortPropertyId(decoded.propertyId) }
-    }
     const mode = localStorage.getItem(PANEL_MODE_KEY)
     if (mode && VALID_PANEL_MODES.includes(mode as PanelMode)) {
       setPanelMode(mode as PanelMode)
@@ -257,35 +229,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
       const adv = localStorage.getItem(ADVANCED_OPEN_KEY)
       if (adv === 'true') setPanelMode('expanded')
     }
-    const fc = localStorage.getItem(FEED_COLLAPSED_KEY)
-    if (fc !== null) setFeedCollapsed(fc === 'true')
-    // Restore saved filters
-    try {
-      const raw = localStorage.getItem(FILTERS_KEY)
-      if (raw) {
-        const f = JSON.parse(raw)
-        if (f.entryTypes?.length) setFilterEntryTypes(new Set(f.entryTypes))
-        if (f.statuses?.length) setFilterStatuses(new Set(f.statuses))
-        if (f.dateFrom) setFilterDateFrom(f.dateFrom)
-        if (f.dateTo) setFilterDateTo(f.dateTo)
-        if (f.modifiedFrom) setFilterModifiedFrom(f.modifiedFrom)
-        if (f.modifiedTo) setFilterModifiedTo(f.modifiedTo)
-        if (f.dueFrom) setFilterDueFrom(f.dueFrom)
-        if (f.dueTo) setFilterDueTo(f.dueTo)
-        if (f.startFrom) setFilterStartFrom(f.startFrom)
-        if (f.startTo) setFilterStartTo(f.startTo)
-        if (f.archivedFrom) setFilterArchivedFrom(f.archivedFrom)
-        if (f.archivedTo) setFilterArchivedTo(f.archivedTo)
-        if (f.deletedFrom) setFilterDeletedFrom(f.deletedFrom)
-        if (f.deletedTo) setFilterDeletedTo(f.deletedTo)
-        if (f.assignee) setFilterAssignee(f.assignee)
-        if (f.mcp === 'mcp' || f.mcp === 'manual') setFilterMcp(f.mcp)
-        if (f.contextFilter) setContextFilter(f.contextFilter)
-        if (f.propertyFilters?.length) setActivePropertyFilters(new Set(f.propertyFilters))
-        if (f.searchMode) setSearchMode(f.searchMode)
-      }
-    } catch {}
-
   }, [])
 
   // Fetch people list for @mention support
@@ -331,37 +274,69 @@ export function JournalPage({ userId, email, displayName }: Props) {
     })
   }
 
-  // Persist filter selections to localStorage
-  const filtersInitialised = useRef(false)
+  // ── Per-workspace view state (sort, collapse, Focus panel, filters) ──────
+  // Build the current view-state blob from live state.
+  const buildViewState = useCallback((): WorkspaceViewState => ({
+    sortMode,
+    sortPropertyId,
+    feedCollapsed,
+    panelOpen,
+    filters: {
+      entryTypes: Array.from(filterEntryTypes),
+      statuses: Array.from(filterStatuses),
+      dateFrom: filterDateFrom, dateTo: filterDateTo,
+      modifiedFrom: filterModifiedFrom, modifiedTo: filterModifiedTo,
+      dueFrom: filterDueFrom, dueTo: filterDueTo,
+      startFrom: filterStartFrom, startTo: filterStartTo,
+      archivedFrom: filterArchivedFrom, archivedTo: filterArchivedTo,
+      deletedFrom: filterDeletedFrom, deletedTo: filterDeletedTo,
+      assignee: filterAssignee,
+      mcp: filterMcp,
+      contextFilter,
+      propertyFilters: Array.from(activePropertyFilters),
+      searchMode,
+    },
+  }), [sortMode, sortPropertyId, feedCollapsed, panelOpen, filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, contextFilter, activePropertyFilters, searchMode])
+
+  // Which workspace the live state currently represents (undefined until first load).
+  const viewStateWsRef = useRef<string | null | undefined>(undefined)
+
+  // Restore a workspace's view on switch (and on initial hydration).
   useEffect(() => {
-    // Skip the initial render (loading from localStorage)
-    if (!filtersInitialised.current) { filtersInitialised.current = true; return }
-    const f: Record<string, unknown> = {}
-    if (filterEntryTypes.size < 2) f.entryTypes = Array.from(filterEntryTypes)
-    if (filterStatuses.size !== 1 || !filterStatuses.has('active')) f.statuses = Array.from(filterStatuses)
-    if (filterDateFrom) f.dateFrom = filterDateFrom
-    if (filterDateTo) f.dateTo = filterDateTo
-    if (filterModifiedFrom) f.modifiedFrom = filterModifiedFrom
-    if (filterModifiedTo) f.modifiedTo = filterModifiedTo
-    if (filterDueFrom) f.dueFrom = filterDueFrom
-    if (filterDueTo) f.dueTo = filterDueTo
-    if (filterStartFrom) f.startFrom = filterStartFrom
-    if (filterStartTo) f.startTo = filterStartTo
-    if (filterArchivedFrom) f.archivedFrom = filterArchivedFrom
-    if (filterArchivedTo) f.archivedTo = filterArchivedTo
-    if (filterDeletedFrom) f.deletedFrom = filterDeletedFrom
-    if (filterDeletedTo) f.deletedTo = filterDeletedTo
-    if (filterAssignee) f.assignee = filterAssignee
-    if (filterMcp !== 'any') f.mcp = filterMcp
-    if (contextFilter) f.contextFilter = contextFilter
-    if (activePropertyFilters.size > 0) f.propertyFilters = Array.from(activePropertyFilters)
-    if (searchMode !== 'smart') f.searchMode = searchMode
-    if (Object.keys(f).length > 0) {
-      localStorage.setItem(FILTERS_KEY, JSON.stringify(f))
-    } else {
-      localStorage.removeItem(FILTERS_KEY)
-    }
-  }, [filterEntryTypes, filterStatuses, filterDateFrom, filterDateTo, filterModifiedFrom, filterModifiedTo, filterDueFrom, filterDueTo, filterStartFrom, filterStartTo, filterArchivedFrom, filterArchivedTo, filterDeletedFrom, filterDeletedTo, filterAssignee, filterMcp, contextFilter, activePropertyFilters, searchMode])
+    if (!hydrated) return
+    if (viewStateWsRef.current === activeWorkspaceId) return
+    const s = readViewState(activeWorkspaceId)
+    setSortMode(s.sortMode as SortMode)
+    setSortPropertyId(s.sortPropertyId)
+    setFeedCollapsed(s.feedCollapsed)
+    // panelOpen: saved value, else mobile-aware default (closed on small screens)
+    setPanelOpen(s.panelOpen ?? !(typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches))
+    const f = s.filters
+    setFilterEntryTypes(new Set(f.entryTypes))
+    setFilterStatuses(new Set(f.statuses))
+    setFilterDateFrom(f.dateFrom); setFilterDateTo(f.dateTo)
+    setFilterModifiedFrom(f.modifiedFrom); setFilterModifiedTo(f.modifiedTo)
+    setFilterDueFrom(f.dueFrom); setFilterDueTo(f.dueTo)
+    setFilterStartFrom(f.startFrom); setFilterStartTo(f.startTo)
+    setFilterArchivedFrom(f.archivedFrom); setFilterArchivedTo(f.archivedTo)
+    setFilterDeletedFrom(f.deletedFrom); setFilterDeletedTo(f.deletedTo)
+    setFilterAssignee(f.assignee)
+    setFilterMcp(f.mcp)
+    setContextFilter(f.contextFilter)
+    setActivePropertyFilters(new Set(f.propertyFilters))
+    setSearchMode(f.searchMode)
+    // Search text is session-transient — clear on switch.
+    setSearchText('')
+    setDebouncedSearch('')
+    viewStateWsRef.current = activeWorkspaceId
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, activeWorkspaceId])
+
+  // Persist the active workspace's view on any change.
+  useEffect(() => {
+    if (viewStateWsRef.current === undefined) return // not yet initialised
+    writeViewState(viewStateWsRef.current, buildViewState())
+  }, [buildViewState])
 
   // Drop property filters that fall out of scope when the workspace selection changes.
   // Global view (no active workspace, no narrowed multi-select) keeps all properties in scope.
@@ -483,7 +458,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const supabase = createClient()
     supabase
       .from('profiles')
-      .select('autosave_interval_seconds, sync_interval_seconds, journal_sort_mode, ws_select_mode, ws_selected_ids, feed_collapse_lines')
+      .select('autosave_interval_seconds, sync_interval_seconds, ws_select_mode, ws_selected_ids, feed_collapse_lines')
       .eq('id', userId)
       .single()
       .then(({ data }) => {
@@ -492,14 +467,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
         }
         if (data?.sync_interval_seconds) {
           setSyncInterval(data.sync_interval_seconds)
-        }
-        if (data?.journal_sort_mode) {
-          const decoded = decodeSortPref(data.journal_sort_mode)
-          if (decoded) {
-            setSortMode(decoded.mode)
-            setSortPropertyId(decoded.propertyId)
-            localStorage.setItem(SORT_MODE_KEY, data.journal_sort_mode)
-          }
         }
         if (data?.ws_select_mode) {
           setWsSelectMode(true)
@@ -527,21 +494,15 @@ export function JournalPage({ userId, email, displayName }: Props) {
     }).eq('id', userId).then(() => {})
   }, [wsSelectMode, selectedWsIds, userId])
 
-  async function saveSortMode(mode: SortMode, propertyId: string | null = null) {
+  // Sort, panel, and feed-collapse are persisted per-workspace by the view-state
+  // effect below, so these are now plain state setters.
+  function saveSortMode(mode: SortMode, propertyId: string | null = null) {
     setSortMode(mode)
     setSortPropertyId(propertyId)
-    const encoded = encodeSortPref(mode, propertyId)
-    localStorage.setItem(SORT_MODE_KEY, encoded)
-    const supabase = createClient()
-    await supabase.from('profiles').update({ journal_sort_mode: encoded }).eq('id', userId)
   }
 
   function togglePanel() {
-    setPanelOpen((prev) => {
-      const next = !prev
-      localStorage.setItem(PANEL_STORAGE_KEY, String(next))
-      return next
-    })
+    setPanelOpen(prev => !prev)
   }
 
   useEffect(() => {
@@ -1951,11 +1912,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
             </div>
             {/* Expand/Collapse feed toggle */}
             <button
-              onClick={() => {
-                const next = !feedCollapsed
-                setFeedCollapsed(next)
-                localStorage.setItem(FEED_COLLAPSED_KEY, String(next))
-              }}
+              onClick={() => setFeedCollapsed(prev => !prev)}
               title={feedCollapsed ? 'Click to expand cards' : 'Click to collapse cards'}
               className={`flex-shrink-0 p-1 rounded-lg transition-colors ${feedCollapsed ? 'text-gray-400 hover:text-gray-600' : 'text-amber-700'}`}
             >
@@ -2455,7 +2412,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
                 setFilterDeletedTo('')
                 setFilterAssignee('')
                 setFilterMcp('any')
-                localStorage.removeItem(FILTERS_KEY)
+                // Cleared state is persisted per-workspace by the view-state effect.
               }}
               doneLoading={initialised && !switching && !loading}
             />
