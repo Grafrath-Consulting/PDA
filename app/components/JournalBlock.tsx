@@ -2397,7 +2397,7 @@ export function JournalBlock(props: Props) {
         ...(focused && !isDragOver
             ? { backgroundColor: activeScheme?.activeMuted ?? '#FEF3C7' }
             : isScratch
-              ? { backgroundColor: '#FAF5FF' } // violet-50 tint for the scratchpad
+              ? { backgroundColor: activeScheme?.activeMuted ?? '#FAF5FF' } // light theme tint for the scratchpad
               : {}),
         ...(borderLeftColor ? { borderLeftColor } : {}),
       }}

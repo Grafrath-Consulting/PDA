@@ -2239,6 +2239,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
                       formattingVisible={formattingVisible}
                       onToggleFormatting={toggleFormatting}
                       people={peopleList}
+                      feedCollapsed={feedCollapsed}
+                      collapseLines={feedCollapseLines}
                     />
                   </div>
                 )}
