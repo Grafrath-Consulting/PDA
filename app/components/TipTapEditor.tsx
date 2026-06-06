@@ -75,10 +75,15 @@ interface Props {
   searchHighlight?: string | string[]
   matchedChunk?: string
   people?: MentionSuggestionItem[]
+  // When true, the first block renders as a header (bold + larger + divider).
+  headerStyled?: boolean
+  // When provided, a header-toggle button appears in the formatting toolbar.
+  onToggleHeader?: () => void
+  headerActive?: boolean
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
-  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, toolbarBg, onReady, searchHighlight, matchedChunk, people },
+  { content = '', placeholder, autoFocus, onSubmit, onChange, className = '', minHeight = '0', editable = true, toolbarVisible = false, toolbarBg, onReady, searchHighlight, matchedChunk, people, headerStyled = false, onToggleHeader, headerActive = false },
   ref
 ) {
   // Keep refs so the closures inside useEditor always call the latest callbacks
@@ -600,9 +605,21 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   if (!editor) return null
 
   return (
-    <div className={`tiptap-wrapper relative ${className}`}>
+    <div className={`tiptap-wrapper relative ${headerStyled ? 'tiptap-header-on' : ''} ${className}`}>
       {toolbarVisible && (
         <div className="flex items-center gap-0.5 px-1.5 py-0.5 border-b border-[#E5E0D0] rounded-t-lg flex-wrap" style={{ backgroundColor: toolbarBg ?? 'rgba(255, 254, 247, 0.5)' }}>
+          {onToggleHeader && (
+            <>
+              <ToolbarBtn
+                active={headerActive}
+                onClick={onToggleHeader}
+                title="Use first line as header"
+              >
+                <span className="font-bold text-xs">H</span>
+              </ToolbarBtn>
+              <div className="w-px h-4 bg-[#E5E0D0] mx-1" />
+            </>
+          )}
           <ToolbarBtn
             active={editor.isActive('bold')}
             onClick={() => editor.chain().focus().toggleBold().run()}

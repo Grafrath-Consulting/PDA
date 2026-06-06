@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Fragment } from 'react'
 import { Block } from '../types'
 import { JournalBlock } from './JournalBlock'
 import {
@@ -27,6 +27,11 @@ interface Props {
   onToggleFormatting: () => void
   blockProperties?: Map<string, Set<string>>
   onBlockPropertiesChanged?: (blockId: string, newIds: Set<string>) => void
+  // Cards pulled into the feed via an in-app card link. Rendered below their
+  // source card (sourceId), or at the top when sourceId is null.
+  pulledInCards?: { sourceId: string | null; block: Block }[]
+  onPulledInUpdate?: (block: Block) => void
+  onPulledInRemove?: (blockId: string) => void
   searchHighlight?: string | string[]
   similarityScores?: Record<string, number>
   matchedChunks?: Record<string, string>
@@ -102,6 +107,9 @@ export function BlockFeed({
   onToggleFormatting,
   blockProperties,
   onBlockPropertiesChanged,
+  pulledInCards,
+  onPulledInUpdate,
+  onPulledInRemove,
   searchHighlight,
   similarityScores,
   matchedChunks,
@@ -210,12 +218,46 @@ export function BlockFeed({
     )
   }
 
+  // Cards pulled into the feed via an in-app link, rendered indented below their
+  // source card (or at the top when sourceId is null), bypassing filters/sort.
+  function renderPulled(sourceId: string | null) {
+    const items = (pulledInCards ?? []).filter(p => p.sourceId === sourceId)
+    if (items.length === 0) return null
+    return items.map((p) => (
+      <div key={`pulled-${p.block.id}`} className="ml-4 border-l-2 border-amber-300 pl-3">
+        <JournalBlock
+          block={p.block}
+          onUpdate={(b) => onPulledInUpdate?.(b)}
+          onRemove={(id) => onPulledInRemove?.(id)}
+          onSplitBlock={() => {}}
+          autosaveInterval={autosaveInterval}
+          formattingVisible={formattingVisible}
+          onToggleFormatting={onToggleFormatting}
+          appliedPropertyIds={blockProperties?.get(p.block.id)}
+          people={people}
+          feedCollapsed={feedCollapsed}
+          collapseLines={collapseLines}
+        />
+      </div>
+    ))
+  }
+
   return (
     <>
+      {/* Pulled-in cards with no source (deep link / cross-workspace) render at top */}
+      {renderPulled(null) && (
+        <div className="space-y-[14px] mb-[14px]">{renderPulled(null)}</div>
+      )}
+
       {/* Pinned cards — always at the top, below the new-entry card. Ignore filters, search, and sort. */}
       {(pinnedBlocks?.length ?? 0) > 0 && (
         <div className="space-y-[14px] mb-[14px]">
-          {pinnedBlocks!.map((block) => renderBlock(block))}
+          {pinnedBlocks!.map((block) => (
+            <Fragment key={block.id}>
+              {renderBlock(block)}
+              {renderPulled(block.id)}
+            </Fragment>
+          ))}
         </div>
       )}
 
@@ -229,9 +271,12 @@ export function BlockFeed({
           <SortableContext items={blocks.map(b => b.id)} strategy={verticalListSortingStrategy}>
             <div className="space-y-[14px]">
               {blocks.map((block) => (
-                <SortableBlock key={block.id} block={block} isDragActive={!!activeBlock}>
-                  {renderBlock(block)}
-                </SortableBlock>
+                <Fragment key={block.id}>
+                  <SortableBlock block={block} isDragActive={!!activeBlock}>
+                    {renderBlock(block)}
+                  </SortableBlock>
+                  {renderPulled(block.id)}
+                </Fragment>
               ))}
             </div>
           </SortableContext>
@@ -245,7 +290,12 @@ export function BlockFeed({
         </DndContext>
       ) : (
         <div className="space-y-[14px]">
-          {blocks.map((block) => renderBlock(block))}
+          {blocks.map((block) => (
+            <Fragment key={block.id}>
+              {renderBlock(block)}
+              {renderPulled(block.id)}
+            </Fragment>
+          ))}
         </div>
       )}
 

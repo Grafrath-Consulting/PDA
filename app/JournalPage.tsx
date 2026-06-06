@@ -568,6 +568,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
       .from('journal_blocks')
       .select('*')
       .eq('user_id', userId)
+      // Scratchpads render in their own section — never in the regular feed.
+      .eq('is_scratch', false)
       // Stable secondary key on a unique column so offset pages never overlap or skip
       // rows when the primary sort key has ties or nulls.
       .order(order.column, { ascending: order.ascending, nullsFirst: false })
@@ -815,6 +817,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
       .select('*')
       .eq('user_id', userId)
       .eq('pinned', true)
+      .eq('is_scratch', false)
       .is('deleted_at', null)
       .order('created_at', { ascending: true })
     if (activeWorkspaceId) {
@@ -827,6 +830,132 @@ export function JournalPage({ userId, email, displayName }: Props) {
   useEffect(() => {
     fetchPinnedBlocks()
   }, [fetchPinnedBlocks])
+
+  // The scratchpad card for the active workspace. One per workspace, always
+  // visible, excluded from the regular feed/search/pinned queries. In global
+  // view there is no single workspace, so no scratchpad is shown.
+  const [scratchBlock, setScratchBlock] = useState<Block | null>(null)
+  const fetchScratchBlock = useCallback(async () => {
+    if (!activeWorkspaceId || isGlobalView) { setScratchBlock(null); return }
+    const supabase = createClient()
+    const { data } = await supabase
+      .from('journal_blocks')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('workspace_id', activeWorkspaceId)
+      .eq('is_scratch', true)
+      .maybeSingle()
+    setScratchBlock((data as Block) ?? null)
+  }, [userId, activeWorkspaceId, isGlobalView])
+
+  useEffect(() => {
+    fetchScratchBlock()
+  }, [fetchScratchBlock])
+
+  // Cards pulled into the feed by following an in-app card link. Each is shown
+  // directly below its source card (or at the top when there's no source),
+  // bypassing the active filters and sort. Cleared on workspace switch.
+  const [pulledInCards, setPulledInCards] = useState<{ sourceId: string | null; block: Block }[]>([])
+
+  // Smoothly scroll to a card already in the DOM and flash a highlight ring.
+  const flashCard = useCallback((blockId: string): boolean => {
+    const el = document.getElementById(`block-${blockId}`)
+    if (!el) return false
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('ring-2', 'ring-amber-400')
+    setTimeout(() => el.classList.remove('ring-2', 'ring-amber-400'), 1500)
+    return true
+  }, [])
+
+  // Navigate to a card by id: scroll to it if visible; switch workspace if it
+  // lives elsewhere; otherwise pull it into the feed (below the source card when
+  // one is given), ignoring filters.
+  const navigateToCard = useCallback(async (blockId: string, sourceId?: string | null, opts?: { ensurePersistent?: boolean }) => {
+    // Deep links arrive before saved filters / per-block properties have settled,
+    // so the target can flash into the feed (pre-filter) and look "visible". Wait
+    // for the feed to settle before deciding visible-vs-pull-in.
+    if (opts?.ensurePersistent) await new Promise(r => setTimeout(r, 1200))
+    if (flashCard(blockId)) return
+    const supabase = createClient()
+    const { data } = await supabase
+      .from('journal_blocks')
+      .select('*')
+      .eq('id', blockId)
+      .is('deleted_at', null)
+      .maybeSingle()
+    if (!data) return
+    const target = data as Block
+
+    // Different workspace → switch to it, then scroll once the feed loads.
+    // Guard on a non-null activeWorkspaceId so a brief null during hydration
+    // doesn't get mistaken for a cross-workspace jump.
+    if (!isGlobalView && target.workspace_id && activeWorkspaceId && target.workspace_id !== activeWorkspaceId) {
+      setPulledInCards([])
+      setActiveWorkspace(target.workspace_id)
+      for (let i = 0; i < 40; i++) {
+        await new Promise(r => setTimeout(r, 100))
+        if (flashCard(blockId)) return
+      }
+      // Filtered out in the target workspace → pull it in at the top.
+      setPulledInCards([{ sourceId: null, block: target }])
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 50))
+        if (flashCard(blockId)) return
+      }
+      return
+    }
+
+    // Same workspace but not visible (filtered out / not loaded) → pull it in.
+    setPulledInCards(prev => prev.some(p => p.block.id === blockId)
+      ? prev
+      : [...prev, { sourceId: sourceId ?? null, block: target }])
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 50))
+      if (flashCard(blockId)) return
+    }
+  }, [flashCard, isGlobalView, activeWorkspaceId, setActiveWorkspace])
+
+  // Clear pulled-in cards when the workspace actually changes (not on the first
+  // run / hydration, which would wipe a card pulled in by a deep link).
+  const pulledClearWsRef = useRef(activeWorkspaceId)
+  useEffect(() => {
+    if (pulledClearWsRef.current === activeWorkspaceId) return
+    pulledClearWsRef.current = activeWorkspaceId
+    setPulledInCards([])
+  }, [activeWorkspaceId])
+
+  // Handle an in-app card link click anywhere in the feed (capture phase so we
+  // intercept before TipTap's link handler opens it in a new tab). Skipped while
+  // the click is inside an editable card so cursor placement still works.
+  const handleFeedClickCapture = useCallback((e: React.MouseEvent) => {
+    const targetEl = e.target as HTMLElement
+    if (targetEl.closest('.ProseMirror[contenteditable="true"]')) return
+    const anchor = targetEl.closest('a[href*="card="]') as HTMLAnchorElement | null
+    if (!anchor) return
+    let cardId: string | null = null
+    try { cardId = new URL(anchor.href, window.location.origin).searchParams.get('card') } catch { cardId = null }
+    if (!cardId) return
+    e.preventDefault()
+    e.stopPropagation()
+    const sourceEl = anchor.closest('[id^="block-"]') as HTMLElement | null
+    const sourceId = sourceEl?.id.replace(/^block-/, '') ?? null
+    navigateToCard(cardId, sourceId)
+  }, [navigateToCard])
+
+  // Resolve a ?card=<id> deep link once the feed is ready, then clear the param.
+  // Defer briefly so saved filters and per-block properties settle first —
+  // otherwise the target can flash in (pre-filter) and be mistaken for visible.
+  const cardParamHandled = useRef(false)
+  useEffect(() => {
+    if (!initialised || cardParamHandled.current) return
+    const cardId = new URLSearchParams(window.location.search).get('card')
+    if (!cardId) { cardParamHandled.current = true; return }
+    cardParamHandled.current = true
+    const url = new URL(window.location.href)
+    url.searchParams.delete('card')
+    window.history.replaceState({}, '', url.toString())
+    navigateToCard(cardId, null, { ensurePersistent: true })
+  }, [initialised, navigateToCard])
 
   // On load, commit any blocks that have unsaved drafts from a previous session
   const draftRecoveryDone = useRef(false)
@@ -2074,6 +2203,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         <div
           className="flex-1 overflow-y-auto min-w-0 transition-colors duration-200"
           style={{ backgroundColor: isGlobalView ? '#FAFAF8' : (activeScheme?.muted ?? '#FAFAF8') }}
+          onClickCapture={handleFeedClickCapture}
         >
           <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-4">
             <ContextFilter
@@ -2081,6 +2211,39 @@ export function JournalPage({ userId, email, displayName }: Props) {
               active={contextFilter}
               onChange={setContextFilter}
             />
+
+            {/* Scratchpad — permanent, always-visible card for the active workspace */}
+            {scratchBlock && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !scratchBlock.scratch_collapsed
+                    setScratchBlock({ ...scratchBlock, scratch_collapsed: next })
+                    createClient().from('journal_blocks').update({ scratch_collapsed: next }).eq('id', scratchBlock.id).then(() => {})
+                  }}
+                  className="flex items-center gap-1.5 px-1 mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`transition-transform ${scratchBlock.scratch_collapsed ? '-rotate-90' : ''}`}><polyline points="6 9 12 15 18 9" /></svg>
+                  Scratchpad
+                </button>
+                {!scratchBlock.scratch_collapsed && (
+                  <div className="scratchpad-card">
+                    <JournalBlock
+                      key={scratchBlock.id}
+                      block={scratchBlock}
+                      onUpdate={(b) => setScratchBlock(b)}
+                      onRemove={() => {}}
+                      onSplitBlock={() => {}}
+                      autosaveInterval={autosaveInterval}
+                      formattingVisible={formattingVisible}
+                      onToggleFormatting={toggleFormatting}
+                      people={peopleList}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
             <JournalBlock
               userId={userId}
@@ -2110,6 +2273,9 @@ export function JournalPage({ userId, email, displayName }: Props) {
               onToggleFormatting={toggleFormatting}
               blockProperties={blockProperties}
               onBlockPropertiesChanged={handleBlockPropertiesChanged}
+              pulledInCards={pulledInCards}
+              onPulledInUpdate={(b) => setPulledInCards(prev => prev.map(p => p.block.id === b.id ? { ...p, block: b } : p))}
+              onPulledInRemove={(id) => setPulledInCards(prev => prev.filter(p => p.block.id !== id))}
               searchHighlight={(aiParsedInfo?.searchTerms || debouncedSearch) || undefined}
               similarityScores={searchMode === 'smart' ? smartSearchScores : undefined}
               matchedChunks={searchMode === 'smart' ? smartSearchChunks : undefined}
@@ -2193,37 +2359,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
               !!filterAssignee ||
               filterMcp !== 'any'
             }
-            onTaskClick={async (blockId) => {
-              let el = document.getElementById(`block-${blockId}`)
-              if (!el) {
-                // Block not yet loaded — fetch it and inject into the list
-                const supabase = createClient()
-                const { data } = await supabase
-                  .from('journal_blocks')
-                  .select('*')
-                  .eq('id', blockId)
-                  .single()
-                if (data) {
-                  setBlocks((prev) => {
-                    if (prev.some(b => b.id === blockId)) return prev
-                    // Insert in chronological order (descending by created_at)
-                    const idx = prev.findIndex(b => b.created_at < data.created_at)
-                    if (idx === -1) return [...prev, data as Block]
-                    const next = [...prev]
-                    next.splice(idx, 0, data as Block)
-                    return next
-                  })
-                  // Wait for React to render the new block
-                  await new Promise(r => setTimeout(r, 50))
-                  el = document.getElementById(`block-${blockId}`)
-                }
-              }
-              if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                el.classList.add('ring-2', 'ring-amber-400')
-                setTimeout(() => el.classList.remove('ring-2', 'ring-amber-400'), 1500)
-              }
-            }}
+            onTaskClick={(blockId) => navigateToCard(blockId)}
           />
         )}
       </div>

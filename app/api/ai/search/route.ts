@@ -76,6 +76,7 @@ export async function POST(request: Request) {
       .select('*')
       .in('id', blockIds)
       .eq('user_id', user.id)
+      .eq('is_scratch', false)
       .is('deleted_at', null)
 
     if (workspaceId) {

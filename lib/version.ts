@@ -1,8 +1,8 @@
 export const APP_VERSION = {
   major: 0,
   minor: 2,
-  build: 125,
-  buildDate: '2026-05-28T15:02:32-07:00',
+  build: 130,
+  buildDate: '2026-06-04T19:27:29-05:00',
 }
 
 export function versionString() {

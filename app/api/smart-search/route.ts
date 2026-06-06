@@ -312,6 +312,7 @@ async function runExactSearch(
     .select('*')
     .eq('user_id', userId)
     .eq('status', 'active')
+    .eq('is_scratch', false)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
     .limit(limit)
@@ -378,6 +379,7 @@ async function runSemanticSearch(
       .select('*')
       .in('id', blockIds)
       .eq('user_id', userId)
+      .eq('is_scratch', false)
       .is('deleted_at', null)
 
     if (workspaceId) blockQuery = blockQuery.eq('workspace_id', workspaceId)
@@ -416,6 +418,7 @@ async function runFilteredExactSearch(
     .from('journal_blocks')
     .select('*')
     .eq('user_id', userId)
+    .eq('is_scratch', false)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
     .limit(limit)

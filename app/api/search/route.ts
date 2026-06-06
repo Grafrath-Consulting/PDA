@@ -54,6 +54,7 @@ export async function POST(request: Request) {
     .from('journal_blocks')
     .select('id, content, entry_type, status, task_status, workspace_id, created_at, due_date, due_date_type, owner_id')
     .eq('user_id', user.id)
+    .eq('is_scratch', false)
     .ilike('content', `%${query}%`)
     .order('created_at', { ascending: false })
     .limit(20)

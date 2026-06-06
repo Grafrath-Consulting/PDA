@@ -150,7 +150,7 @@ export async function POST(request: Request) {
   if (!body.summaryOnly || body.includeAiSummary) {
     let q = supabase.from('journal_blocks')
       .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
-      .eq('user_id', user.id).is('deleted_at', null)
+      .eq('user_id', user.id).eq('is_scratch', false).is('deleted_at', null)
       .or(`created_at.gte.${fromBound},updated_at.gte.${fromBound}`)
       .lte('created_at', toBound)
       .order('created_at', { ascending: false }).limit(30)

@@ -663,6 +663,25 @@ export function JournalBlock(props: Props) {
   const focusedRef = useRef(isNewEntry || focused)
   focusedRef.current = isNewEntry || focused
 
+  // A card is "multi-line" once it has a second line/block. Only multi-line cards
+  // get a header (Apple Notes style). Counts block-level elements + <br> in the
+  // HTML — textContent collapses block separators, so we can't count text lines.
+  const isMultiLineHtml = (html: string) => {
+    const blocks = (html.match(/<(p|h[1-6]|li|blockquote|pre|div|tr)\b/gi) || []).length
+    const brs = (html.match(/<br\b/gi) || []).length
+    return blocks + brs > 1
+  }
+  const [isMultiLine, setIsMultiLine] = useState(() => isMultiLineHtml(toEditorHTML(props.block?.content ?? '')))
+  const [linkCopied, setLinkCopied] = useState(false)
+  // Keep multi-line detection in sync when the block content changes externally
+  // (remote update, accept-summary, etc.) and the card isn't being edited.
+  useEffect(() => {
+    if (focusedRef.current) return
+    const ml = isMultiLineHtml(toEditorHTML(props.block?.content ?? ''))
+    setIsMultiLine(prev => (prev !== ml ? ml : prev))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.block?.content])
+
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1575,6 +1594,8 @@ export function JournalBlock(props: Props) {
   function handleEditorChange(html: string, text: string) {
     liveHTMLRef.current = html
     liveTextRef.current = text
+    const ml = isMultiLineHtml(html)
+    setIsMultiLine(prev => (prev !== ml ? ml : prev))
     const trimmed = text.trim()
     if (isNewEntry) {
       if (trimmed && !focused) setFocused(true)
@@ -1893,6 +1914,30 @@ export function JournalBlock(props: Props) {
     }
   }
 
+  // Copy a deep-link to this card. Pasting into a card yields a rich link titled
+  // by the card's header/first line; pasting into a browser yields the URL.
+  function copyLinkToBlock() {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    const plain = htmlToText(liveHTMLRef.current || toEditorHTML(p.block.content ?? ''))
+    const title = (plain.split('\n').map(l => l.trim()).find(Boolean) || 'Untitled card').slice(0, 200)
+    const url = `${window.location.origin}/?card=${p.block.id}`
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const anchor = `<a href="${esc(url)}">${esc(title)}</a>`
+    try {
+      navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([anchor], { type: 'text/html' }),
+          'text/plain': new Blob([url], { type: 'text/plain' }),
+        }),
+      ])
+    } catch {
+      navigator.clipboard.writeText(url)
+    }
+    setLinkCopied(true)
+    setTimeout(() => setLinkCopied(false), 1500)
+  }
+
   async function deleteBlock() {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
@@ -1930,6 +1975,16 @@ export function JournalBlock(props: Props) {
   async function saveAndPin() {
     if (!liveTextRef.current.trim()) return
     await saveNewEntry({ pinned: true })
+  }
+
+  // Toggle whether this card's first line renders as a header.
+  async function toggleHeader() {
+    const p = propsRef.current as ExistingBlockProps
+    if (!p.block) return
+    const newVal = !(p.block.header_enabled ?? true)
+    p.onUpdate({ ...p.block, header_enabled: newVal })
+    const supabase = createClient()
+    await supabase.from('journal_blocks').update({ header_enabled: newVal }).eq('id', p.block.id)
   }
 
   async function restoreBlock() {
@@ -2184,6 +2239,12 @@ export function JournalBlock(props: Props) {
   const contentHTML = block ? toEditorHTML(block.content) : ''
   const showToolbar = focused && formattingVisible
 
+  // Scratchpad card — a permanent, always-visible card with restricted actions.
+  const isScratch = !!block?.is_scratch
+  // Header: first line of a multi-line card renders as a header when enabled.
+  const headerEnabled = isNewEntry ? true : (block?.header_enabled ?? true)
+  const headerActive = headerEnabled && isMultiLine
+
   // Measure content height for collapse/expand using ResizeObserver
   // so we detect height after TipTap renders its content asynchronously
   const lineHeightPx = 24
@@ -2234,21 +2295,24 @@ export function JournalBlock(props: Props) {
 
   // Build popover menu items — shown for both new entry and existing blocks.
   const popoverItems: { key: string; label: string; shortcut?: string; shortcutTip?: string; icon: React.ReactNode; onClick: () => void; className?: string; separator?: boolean }[] = [
-    {
+    // Scratchpads have no type, can't be moved/cut/deleted — keep only AI, history, copy.
+    ...(!isScratch ? [{
       key: 'convert', label: isTask ? 'Convert to Info' : 'Convert to Task', shortcut: '⌥`', shortcutTip: 'Alt + Backtick', icon: convertIcon(),
       onClick: () => { setPopoverOpen(false); if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') } else { toggleEntryType() } },
-    },
+    }] : []),
     { key: 'ai', label: 'AI Summarize', shortcut: '⌥⇧S', shortcutTip: 'Alt + Shift + S', icon: robotIcon(), onClick: () => popoverAction({ type: 'summarize' }) },
     ...(block ? [
       { key: 'history', label: 'View History', shortcut: '⌥⇧H', shortcutTip: 'Alt + Shift + H', icon: historyIcon(), onClick: () => { setPopoverOpen(false); setShowHistory(true) } },
       { key: 'copyblock', label: 'Copy Block', shortcut: '⌥⇧C', shortcutTip: 'Alt + Shift + C', icon: copyIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard() } },
+    ] : []),
+    ...(block && !isScratch ? [
       { key: 'cutblock', label: 'Cut Block', shortcut: '⌥⇧X', shortcutTip: 'Alt + Shift + X', icon: cutIcon(), onClick: () => { setPopoverOpen(false); copyBlockToClipboard(); deleteBlock() } },
     ] : []),
-    ...(block && workspaces.length > 0 ? [{
+    ...(block && !isScratch && workspaces.length > 0 ? [{
       key: 'move', label: 'Move to…', icon: moveIcon(),
       onClick: () => setMoveMenuOpen(prev => !prev),
     }] : []),
-    { key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null); setEditorKey(k => k + 1) } else { deleteBlock() } }, separator: true, className: 'text-red-500 hover:bg-red-50' },
+    ...(!isScratch ? [{ key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null); setEditorKey(k => k + 1) } else { deleteBlock() } }, separator: true, className: 'text-red-500 hover:bg-red-50' }] : []),
   ]
 
   // Disable split when selection covers entire block content
@@ -2279,7 +2343,9 @@ export function JournalBlock(props: Props) {
   // Derive border left color for focused/workspace/lifecycle states
   let borderLeftColor: string | undefined
   if (!isDragOver) {
-    if (isInactive && !restoredLocally) {
+    if (isScratch) {
+      borderLeftColor = '#8B5CF6' // violet-500 — distinct scratchpad accent
+    } else if (isInactive && !restoredLocally) {
       // Lifecycle accent border for inactive entries
       if (isDeleted) borderLeftColor = '#F87171' // red-400
       else if (isCompleted) borderLeftColor = '#4ADE80' // green-400
@@ -2330,7 +2396,9 @@ export function JournalBlock(props: Props) {
       style={{
         ...(focused && !isDragOver
             ? { backgroundColor: activeScheme?.activeMuted ?? '#FEF3C7' }
-            : {}),
+            : isScratch
+              ? { backgroundColor: '#FAF5FF' } // violet-50 tint for the scratchpad
+              : {}),
         ...(borderLeftColor ? { borderLeftColor } : {}),
       }}
       onMouseDown={handleContentMouseDown}
@@ -2369,17 +2437,19 @@ export function JournalBlock(props: Props) {
       <div
         className="absolute top-0 left-4 right-14 -translate-y-1/2 z-10 flex items-center gap-1 pointer-events-none"
       >
-        {/* Entry type indicator — click to switch */}
-        <EntryTypeToggle
-          isTask={isTask}
-          isDueToday={isDueToday}
-          isPastDue={isPastDue}
-          isDone={block?.task_status === 'done'}
-          onClick={() => {
-            if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') }
-            else { toggleEntryType() }
-          }}
-        />
+        {/* Entry type indicator — click to switch (scratchpads have no type) */}
+        {!isScratch && (
+          <EntryTypeToggle
+            isTask={isTask}
+            isDueToday={isDueToday}
+            isPastDue={isPastDue}
+            isDone={block?.task_status === 'done'}
+            onClick={() => {
+              if (isNewEntry) { setPendingEntryType(prev => prev === 'info' ? 'task' : 'info') }
+              else { toggleEntryType() }
+            }}
+          />
+        )}
         {/* Status badge for inactive entries */}
         {isInactive && !restoredLocally && (
           <span className={`pointer-events-auto px-2 py-0.5 rounded-full text-[10px] font-medium leading-tight ${
@@ -2397,15 +2467,17 @@ export function JournalBlock(props: Props) {
             Restored
           </span>
         )}
-        <div className="flex items-center gap-1 overflow-hidden pointer-events-auto">
-          <PropertyBubbles
-            appliedValueIds={appliedProps}
-            properties={propertiesForWorkspace(propertyWorkspaceId)}
-            onClickValue={() => setPropertyEditorOpen(true)}
-          />
-        </div>
-        {/* Add-tag button — sits after last pill (hidden for inactive entries) */}
-        {!(isInactive && !restoredLocally) && <div className="relative pointer-events-auto">
+        {!isScratch && (
+          <div className="flex items-center gap-1 overflow-hidden pointer-events-auto">
+            <PropertyBubbles
+              appliedValueIds={appliedProps}
+              properties={propertiesForWorkspace(propertyWorkspaceId)}
+              onClickValue={() => setPropertyEditorOpen(true)}
+            />
+          </div>
+        )}
+        {/* Add-tag button — sits after last pill (hidden for inactive entries and scratchpads) */}
+        {!isScratch && !(isInactive && !restoredLocally) && <div className="relative pointer-events-auto">
           <button
             ref={addPropertyBtnRef}
             type="button"
@@ -2523,11 +2595,29 @@ export function JournalBlock(props: Props) {
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
             </button>
-            {/* Archive — only for existing blocks */}
-            {block && <ArchiveButton onClick={() => archiveBlock()} />}
+            {/* Copy link to this card — existing blocks only */}
+            {block && (
+              <button
+                type="button"
+                title={linkCopied ? 'Link copied!' : 'Copy link to card'}
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+                onClick={(e) => { e.stopPropagation(); copyLinkToBlock() }}
+                className={`w-6 h-6 flex items-center justify-center rounded-full bg-white border transition-colors ${
+                  linkCopied ? 'border-green-400 text-green-600' : 'border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-400'
+                }`}
+              >
+                {linkCopied ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                )}
+              </button>
+            )}
+            {/* Archive — only for existing blocks (not scratchpads) */}
+            {block && !isScratch && <ArchiveButton onClick={() => archiveBlock()} />}
           </div>
-          {/* Pin / Unpin — also shown on new entry; stays visible when pinned, highlighted amber like selected filters */}
-          <button
+          {/* Pin / Unpin — also shown on new entry; stays visible when pinned, highlighted amber like selected filters. Scratchpads are always-on and can't be pinned. */}
+          {!isScratch && <button
             type="button"
             title={(!isNewEntry && block?.pinned) ? 'Unpin' : 'Pin to top'}
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
@@ -2543,7 +2633,7 @@ export function JournalBlock(props: Props) {
             ) : (
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
             )}
-          </button>
+          </button>}
           {/* Actions menu (⋮) */}
           <button
             ref={triggerRef}
@@ -2622,6 +2712,23 @@ export function JournalBlock(props: Props) {
         onBlur={handleBlur}
         onContextMenu={handleContextMenu}
       >
+        {/* Header toggle — hover button in the left gutter next to the first line.
+            Only meaningful on multi-line existing cards. */}
+        {!isNewEntry && block && isMultiLine && !(isInactive && !restoredLocally) && (
+          <button
+            type="button"
+            title={headerEnabled ? 'Remove header from first line' : 'Use first line as header'}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onClick={(e) => { e.stopPropagation(); toggleHeader() }}
+            className={`absolute left-0 ${showToolbar ? 'top-1' : 'top-1.5'} z-[2] w-4 h-4 flex items-center justify-center rounded text-[9px] font-bold leading-none transition-all ${
+              headerEnabled
+                ? 'opacity-60 hover:opacity-100 text-amber-700'
+                : 'opacity-0 group-hover:opacity-60 hover:!opacity-100 text-gray-400 hover:text-gray-600'
+            }`}
+          >
+            H
+          </button>
+        )}
         {/* Fade overlay when collapsed */}
         {shouldCollapse && (
           <div
@@ -2647,6 +2754,9 @@ export function JournalBlock(props: Props) {
             searchHighlight={!isNewEntry && !focused ? (props as ExistingBlockProps).searchHighlight : undefined}
             matchedChunk={!isNewEntry && !focused ? (props as ExistingBlockProps).matchedChunk : undefined}
             people={props.people}
+            headerStyled={headerActive}
+            onToggleHeader={!isNewEntry && block ? toggleHeader : undefined}
+            headerActive={headerEnabled}
           />
         </div>
         {summarizing && !summaryPreview && (
@@ -3198,7 +3308,9 @@ export function JournalBlock(props: Props) {
       <div className="flex items-center px-4 pb-1.5 pt-0 select-none">
         <span className="text-[11px] text-gray-400 flex-1" suppressHydrationWarning>
           {block
-            ? <>Created {formatTimestamp(block.created_at, dateFormat, timeFormat, timezone)}{showModified && <span> · Modified {formatTimestamp(block.updated_at, dateFormat, timeFormat, timezone)}</span>}{isArchived && block.archived_at && !restoredLocally && <span> · Archived {formatTimestamp(block.archived_at, dateFormat, timeFormat, timezone)}</span>}{isCompleted && block.completed_at && !restoredLocally && <span> · Completed {formatTimestamp(block.completed_at, dateFormat, timeFormat, timezone)}</span>}{isDeleted && block.deleted_at && !restoredLocally && <span> · Deleted {formatTimestamp(block.deleted_at, dateFormat, timeFormat, timezone)}</span>}{(props as ExistingBlockProps).similarityScore != null && <span className="ml-1.5 px-1.5 py-0 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium">{Math.round((props as ExistingBlockProps).similarityScore! * 100)}% match</span>}</>
+            ? isScratch
+              ? <>Scratchpad{showModified && <span> · Modified {formatTimestamp(block.updated_at, dateFormat, timeFormat, timezone)}</span>}</>
+              : <>Created {formatTimestamp(block.created_at, dateFormat, timeFormat, timezone)}{showModified && <span> · Modified {formatTimestamp(block.updated_at, dateFormat, timeFormat, timezone)}</span>}{isArchived && block.archived_at && !restoredLocally && <span> · Archived {formatTimestamp(block.archived_at, dateFormat, timeFormat, timezone)}</span>}{isCompleted && block.completed_at && !restoredLocally && <span> · Completed {formatTimestamp(block.completed_at, dateFormat, timeFormat, timezone)}</span>}{isDeleted && block.deleted_at && !restoredLocally && <span> · Deleted {formatTimestamp(block.deleted_at, dateFormat, timeFormat, timezone)}</span>}{(props as ExistingBlockProps).similarityScore != null && <span className="ml-1.5 px-1.5 py-0 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium">{Math.round((props as ExistingBlockProps).similarityScore! * 100)}% match</span>}</>
             : (() => {
                 if (activeWorkspace) return `New ${activeWorkspace.name} Entry`
                 const defaultWs = workspaces.find(w => w.is_default)

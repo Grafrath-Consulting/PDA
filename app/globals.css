@@ -128,6 +128,20 @@ body {
 /* Shared paragraph styles for display (.tiptap-content) and editor (.ProseMirror) */
 .tiptap-content,
 .ProseMirror { font-size: 0.875rem; line-height: 1.5rem; color: #1f2937; }
+
+/* Card header (Apple Notes style): when a multi-line card has headers enabled,
+   its first block renders bold, ~2pt larger, with a faint divider below it.
+   Applied as a wrapper class so it works in both the editor and the read-only
+   highlight layer, and never mutates the document. */
+.tiptap-header-on .ProseMirror > :first-child,
+.tiptap-header-on .tiptap-content > :first-child {
+  font-size: 1.0625rem;
+  line-height: 1.6rem;
+  font-weight: 700;
+  padding-bottom: 0.35rem;
+  margin-bottom: 0.35rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
 .tiptap-content p,
 .ProseMirror p { margin: 0; line-height: 1.5rem; }
 .tiptap-content p:empty,

@@ -138,12 +138,25 @@ export async function updateBlockFromMcp(
   // Verify ownership before any update.
   const { data: existing } = await svc
     .from('journal_blocks')
-    .select('id, user_id')
+    .select('id, user_id, is_scratch')
     .eq('id', input.blockId)
     .eq('user_id', input.userId)
     .is('deleted_at', null)
     .maybeSingle()
   if (!existing) return { ok: false, error: 'block_not_found' }
+
+  // Scratchpads accept content edits only — never status/lifecycle/task changes.
+  if (existing.is_scratch) {
+    if (
+      input.status !== undefined ||
+      input.taskStatus !== undefined ||
+      input.dueDate !== undefined ||
+      input.dueDateType !== undefined ||
+      input.startDate !== undefined
+    ) {
+      return { ok: false, error: 'scratch_immutable_field' }
+    }
+  }
 
   // Build the patch from only the fields the caller actually provided.
   const patch: Record<string, unknown> = {}

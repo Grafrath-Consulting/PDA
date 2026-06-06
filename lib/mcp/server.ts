@@ -44,7 +44,7 @@ interface ToolDeps {
 function registerListWorkspaces(server: McpServer, deps: ToolDeps) {
   server.registerTool('list_workspaces', {
     description:
-      'List the user\'s workspaces. Call this before create_block so you can ask the user which workspace to put the entry in.',
+      'List the user\'s workspaces. Call this before create_block so you can ask the user which workspace to put the entry in. Each workspace also has a permanent "scratchpad" card (scratch_block_id) — a free-form note that cannot be archived, deleted, moved, typed, or tagged. Edit it with update_scratchpad, not update_block.',
     inputSchema: {},
   }, async () => {
     const { data, error } = await deps.svc
@@ -54,7 +54,16 @@ function registerListWorkspaces(server: McpServer, deps: ToolDeps) {
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true })
     if (error) return err(error.message)
-    return ok({ workspaces: data ?? [] })
+
+    // Attach each workspace's scratchpad block id.
+    const { data: scratch } = await deps.svc
+      .from('journal_blocks')
+      .select('id, workspace_id')
+      .eq('user_id', deps.userId)
+      .eq('is_scratch', true)
+    const scratchByWs = new Map((scratch ?? []).map((s: { id: string; workspace_id: string }) => [s.workspace_id, s.id]))
+    const workspaces = (data ?? []).map((w: { id: string }) => ({ ...w, scratch_block_id: scratchByWs.get(w.id) ?? null }))
+    return ok({ workspaces })
   })
 }
 
@@ -131,7 +140,7 @@ function registerCreateBlock(server: McpServer, deps: ToolDeps) {
 function registerUpdateBlock(server: McpServer, deps: ToolDeps) {
   server.registerTool('update_block', {
     description:
-      'Edit an existing journal entry. Use this to: change content, mark a task as in_progress or done (task_status), set or clear a due date, or archive/restore a block (status). Only the fields you pass are updated; omit fields you want to leave alone. Pass null to clear an optional field.',
+      'Edit an existing journal entry. Use this to: change content, mark a task as in_progress or done (task_status), set or clear a due date, or archive/restore a block (status). Only the fields you pass are updated; omit fields you want to leave alone. Pass null to clear an optional field. Do not use this on a scratchpad card (it cannot be archived/typed/etc.) — use update_scratchpad instead.',
     inputSchema: {
       id: z.string().uuid().describe('Block UUID, from search_blocks, get_block, or create_block.'),
       content: z.string().min(1).optional().describe('New body. Plain text or simple HTML; line breaks become paragraphs. Re-fires the semantic search index.'),
@@ -200,6 +209,7 @@ function registerSearchBlocks(server: McpServer, deps: ToolDeps) {
         .select('id, content, entry_type, status, workspace_id, created_at')
         .in('id', ranked.map(([id]) => id))
         .eq('user_id', deps.userId)
+        .eq('is_scratch', false)
         .is('deleted_at', null)
       if (workspace_id) blockQuery = blockQuery.eq('workspace_id', workspace_id)
 
@@ -229,6 +239,7 @@ function registerSearchBlocks(server: McpServer, deps: ToolDeps) {
       .from('journal_blocks')
       .select('id, content, entry_type, status, workspace_id, created_at')
       .eq('user_id', deps.userId)
+      .eq('is_scratch', false)
       .is('deleted_at', null)
       .ilike('content', `%${query}%`)
       .order('created_at', { ascending: false })
@@ -299,6 +310,43 @@ function registerGetBlock(server: McpServer, deps: ToolDeps) {
   })
 }
 
+function registerUpdateScratchpad(server: McpServer, deps: ToolDeps) {
+  server.registerTool('update_scratchpad', {
+    description:
+      'Edit a workspace\'s permanent scratchpad card — a free-form note that is always visible and cannot be archived, deleted, moved, typed, or tagged. Use mode="append" to add to the existing note (default) or mode="replace" to overwrite it. Get scratch_block_id / workspace_id from list_workspaces.',
+    inputSchema: {
+      workspace_id: z.string().uuid().describe('UUID of the workspace whose scratchpad to edit, from list_workspaces.'),
+      content: z.string().min(1).describe('Text to write. Plain text or simple HTML; line breaks become paragraphs.'),
+      mode: z.enum(['append', 'replace']).optional().describe('"append" (default) adds to the existing note; "replace" overwrites it.'),
+    },
+  }, async ({ workspace_id, content, mode }) => {
+    const { data: scratch } = await deps.svc
+      .from('journal_blocks')
+      .select('id, content')
+      .eq('user_id', deps.userId)
+      .eq('workspace_id', workspace_id)
+      .eq('is_scratch', true)
+      .maybeSingle()
+    if (!scratch) return err('scratchpad_not_found')
+
+    const htmlify = (s: string) => s.trim().startsWith('<')
+      ? s
+      : `<p>${s.split(/\n{2,}/).map(p => p.replace(/\n/g, '<br>')).join('</p><p>')}</p>`
+    const addition = htmlify(content)
+    const newContent = (mode ?? 'append') === 'append'
+      ? `${scratch.content ?? ''}${addition}`
+      : addition
+
+    const result = await updateBlockFromMcp(deps.svc, {
+      userId: deps.userId,
+      blockId: scratch.id,
+      content: newContent,
+    })
+    if (!result.ok) return err(result.error)
+    return ok({ block: result.block })
+  })
+}
+
 export function buildMcpServer(userId: string): McpServer {
   const server = new McpServer(
     { name: 'pda', version: versionString() },
@@ -311,5 +359,6 @@ export function buildMcpServer(userId: string): McpServer {
   registerUpdateBlock(server, deps)
   registerSearchBlocks(server, deps)
   registerGetBlock(server, deps)
+  registerUpdateScratchpad(server, deps)
   return server
 }

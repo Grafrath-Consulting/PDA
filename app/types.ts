@@ -25,6 +25,9 @@ export interface Block {
   position: number
   sort_order: number
   via_mcp: boolean
+  header_enabled: boolean
+  is_scratch: boolean
+  scratch_collapsed: boolean
 }
 
 export interface Context {
