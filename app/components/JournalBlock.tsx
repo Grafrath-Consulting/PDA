@@ -2344,7 +2344,7 @@ export function JournalBlock(props: Props) {
   let borderLeftColor: string | undefined
   if (!isDragOver) {
     if (isScratch) {
-      borderLeftColor = '#8B5CF6' // violet-500 — distinct scratchpad accent
+      borderLeftColor = activeScheme?.swatch ?? '#8B5CF6' // saturated theme accent
     } else if (isInactive && !restoredLocally) {
       // Lifecycle accent border for inactive entries
       if (isDeleted) borderLeftColor = '#F87171' // red-400
