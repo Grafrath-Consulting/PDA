@@ -924,23 +924,41 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setPulledInCards([])
   }, [activeWorkspaceId])
 
-  // Handle an in-app card link click anywhere in the feed (capture phase so we
-  // intercept before TipTap's link handler opens it in a new tab). Skipped while
-  // the click is inside an editable card so cursor placement still works.
-  const handleFeedClickCapture = useCallback((e: React.MouseEvent) => {
-    const targetEl = e.target as HTMLElement
-    if (targetEl.closest('.ProseMirror[contenteditable="true"]')) return
-    const anchor = targetEl.closest('a[href*="card="]') as HTMLAnchorElement | null
-    if (!anchor) return
-    let cardId: string | null = null
-    try { cardId = new URL(anchor.href, window.location.origin).searchParams.get('card') } catch { cardId = null }
-    if (!cardId) return
-    e.preventDefault()
-    e.stopPropagation()
-    const sourceEl = anchor.closest('[id^="block-"]') as HTMLElement | null
-    const sourceId = sourceEl?.id.replace(/^block-/, '') ?? null
-    navigateToCard(cardId, sourceId)
-  }, [navigateToCard])
+  // Intercept in-app card-link clicks anywhere in the feed. TipTap's Link
+  // extension opens links via a NATIVE click handler (window.open with
+  // target=_blank) — which, in an installed PWA, launches the system browser.
+  // A React onClickCapture can't stop that (its stopPropagation only affects
+  // React's synthetic handlers), so we attach a native capture-phase listener
+  // and stopImmediatePropagation before ProseMirror ever sees the click.
+  const feedScrollRef = useRef<HTMLDivElement>(null)
+  const navigateToCardRef = useRef(navigateToCard)
+  navigateToCardRef.current = navigateToCard
+  useEffect(() => {
+    const el = feedScrollRef.current
+    if (!el) return
+    const onClick = (e: MouseEvent) => {
+      const targetEl = e.target as HTMLElement
+      // Don't hijack clicks while editing a card (cursor placement, etc.)
+      if (targetEl.closest('.ProseMirror[contenteditable="true"]')) return
+      const anchor = targetEl.closest('a') as HTMLAnchorElement | null
+      if (!anchor) return
+      let cardId: string | null = null
+      try {
+        const u = new URL(anchor.href, window.location.origin)
+        if (u.origin !== window.location.origin) return // leave external links alone
+        cardId = u.searchParams.get('card')
+      } catch { return }
+      if (!cardId) return
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+      const sourceEl = anchor.closest('[id^="block-"]') as HTMLElement | null
+      const sourceId = sourceEl?.id.replace(/^block-/, '') ?? null
+      navigateToCardRef.current(cardId, sourceId)
+    }
+    el.addEventListener('click', onClick, true) // capture phase
+    return () => el.removeEventListener('click', onClick, true)
+  }, [])
 
   // Resolve a ?card=<id> deep link once the feed is ready, then clear the param.
   // Defer briefly so saved filters and per-block properties settle first —
@@ -2201,9 +2219,9 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
       <div className="flex-1 flex overflow-hidden">
         <div
+          ref={feedScrollRef}
           className="flex-1 overflow-y-auto min-w-0 transition-colors duration-200"
           style={{ backgroundColor: isGlobalView ? '#FAFAF8' : (activeScheme?.muted ?? '#FAFAF8') }}
-          onClickCapture={handleFeedClickCapture}
         >
           <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-4">
             <ContextFilter

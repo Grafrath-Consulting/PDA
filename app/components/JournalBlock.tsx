@@ -1919,8 +1919,16 @@ export function JournalBlock(props: Props) {
   function copyLinkToBlock() {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    const plain = htmlToText(liveHTMLRef.current || toEditorHTML(p.block.content ?? ''))
-    const title = (plain.split('\n').map(l => l.trim()).find(Boolean) || 'Untitled card').slice(0, 200)
+    // Use the header / first line only — the first block-level element's text.
+    // (htmlToText collapses all blocks onto one line, so parse the HTML instead.)
+    const html = liveHTMLRef.current || toEditorHTML(p.block.content ?? '')
+    let title = 'Untitled card'
+    if (typeof document !== 'undefined') {
+      const div = document.createElement('div')
+      div.innerHTML = html
+      const t = (div.firstElementChild?.textContent ?? div.textContent ?? '').trim()
+      if (t) title = t.slice(0, 200)
+    }
     const url = `${window.location.origin}/?card=${p.block.id}`
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
     const anchor = `<a href="${esc(url)}">${esc(title)}</a>`
@@ -2391,7 +2399,7 @@ export function JournalBlock(props: Props) {
             ? `border-l-[3px] border border-[#E5E0D0] ${focused ? 'shadow-md' : 'hover:border-[#D5D0C0]'}`
             : focused
               ? 'border-l-[3px] border border-[#E5E0D0] shadow-md'
-              : 'border-l-[3px] border-l-[#E5E0D0] border border-[#E5E0D0] hover:border-[#D5D0C0]'
+              : 'card-hover-accent border-l-[3px] border-l-[#E5E0D0] border border-[#E5E0D0] hover:border-[#D5D0C0]'
       } ${isDragOver ? '' : focused ? '' : 'bg-white'} ${isDeleted && !restoredLocally ? 'opacity-60' : hasFutureStart && !focused ? 'opacity-50' : ''}`}
       style={{
         ...(focused && !isDragOver
@@ -2402,6 +2410,8 @@ export function JournalBlock(props: Props) {
         // Scratchpad: colour the whole outline to match its accent border (same width).
         ...(isScratch && activeScheme?.swatch ? { borderColor: activeScheme.swatch } : {}),
         ...(borderLeftColor ? { borderLeftColor } : {}),
+        // Hover preview of the focus accent on the left edge (see .card-hover-accent).
+        ['--ws-accent' as string]: activeScheme?.primary ?? '#F59E0B',
       }}
       onMouseDown={handleContentMouseDown}
       onDrop={(e) => { setIsDragOver(false); handleDrop(e) }}

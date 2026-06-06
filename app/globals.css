@@ -125,6 +125,11 @@ body {
   font-weight: 600;
 }
 
+/* Feed cards: on hover, preview the focus accent on the 3px left edge while the
+   rest of the outline darkens slightly. --ws-accent is set inline per card to the
+   workspace's primary colour. !important beats the hover:border utility's shorthand. */
+.card-hover-accent:hover { border-left-color: var(--ws-accent, #F59E0B) !important; }
+
 /* Shared paragraph styles for display (.tiptap-content) and editor (.ProseMirror) */
 .tiptap-content,
 .ProseMirror { font-size: 0.875rem; line-height: 1.5rem; color: #1f2937; }
