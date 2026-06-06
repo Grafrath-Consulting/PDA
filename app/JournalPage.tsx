@@ -924,20 +924,20 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setPulledInCards([])
   }, [activeWorkspaceId])
 
-  // Intercept in-app card-link clicks anywhere in the feed. TipTap's Link
-  // extension opens links via a NATIVE click handler (window.open with
-  // target=_blank) — which, in an installed PWA, launches the system browser.
-  // A React onClickCapture can't stop that (its stopPropagation only affects
-  // React's synthetic handlers), so we attach a native capture-phase listener
-  // and stopImmediatePropagation before ProseMirror ever sees the click.
-  const feedScrollRef = useRef<HTMLDivElement>(null)
+  // Intercept in-app card-link clicks. TipTap's Link extension opens links via a
+  // NATIVE click handler (window.open with target=_blank) — which, in an installed
+  // PWA, launches the system browser. A React onClickCapture can't stop that (its
+  // stopPropagation only affects React's synthetic handlers), so we attach a
+  // native capture-phase listener at the DOCUMENT level (catches links anywhere —
+  // feed, scratchpad, modals, history view — and never depends on a ref existing
+  // at mount) and stopImmediatePropagation before ProseMirror ever sees the click.
   const navigateToCardRef = useRef(navigateToCard)
   navigateToCardRef.current = navigateToCard
   useEffect(() => {
-    const el = feedScrollRef.current
-    if (!el) return
     const onClick = (e: MouseEvent) => {
-      const targetEl = e.target as HTMLElement
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      const targetEl = e.target as HTMLElement | null
+      if (!targetEl) return
       // Don't hijack clicks while editing a card (cursor placement, etc.)
       if (targetEl.closest('.ProseMirror[contenteditable="true"]')) return
       const anchor = targetEl.closest('a') as HTMLAnchorElement | null
@@ -956,8 +956,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
       const sourceId = sourceEl?.id.replace(/^block-/, '') ?? null
       navigateToCardRef.current(cardId, sourceId)
     }
-    el.addEventListener('click', onClick, true) // capture phase
-    return () => el.removeEventListener('click', onClick, true)
+    document.addEventListener('click', onClick, true) // capture phase, document-wide
+    return () => document.removeEventListener('click', onClick, true)
   }, [])
 
   // Resolve a ?card=<id> deep link once the feed is ready, then clear the param.
@@ -2219,7 +2219,6 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
       <div className="flex-1 flex overflow-hidden">
         <div
-          ref={feedScrollRef}
           className="flex-1 overflow-y-auto min-w-0 transition-colors duration-200"
           style={{ backgroundColor: isGlobalView ? '#FAFAF8' : (activeScheme?.muted ?? '#FAFAF8') }}
         >
