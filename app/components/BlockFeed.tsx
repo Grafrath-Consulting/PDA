@@ -165,7 +165,7 @@ export function BlockFeed({
     )
   }
 
-  if (blocks.length === 0 && (pinnedBlocks?.length ?? 0) === 0) {
+  if (blocks.length === 0 && (pinnedBlocks?.length ?? 0) === 0 && (pulledInCards?.length ?? 0) === 0) {
     // If filters/search reduced results to zero but there are blocks in the workspace
     if (hasActiveFilters && (totalUnfilteredCount ?? 0) > 0) {
       return (
@@ -218,13 +218,25 @@ export function BlockFeed({
     )
   }
 
-  // Cards pulled into the feed via an in-app link, rendered indented below their
-  // source card (or at the top when sourceId is null), bypassing filters/sort.
-  function renderPulled(sourceId: string | null) {
-    const items = (pulledInCards ?? []).filter(p => p.sourceId === sourceId)
-    if (items.length === 0) return null
-    return items.map((p) => (
+  // Cards pulled into the feed by following a link or selecting a not-currently-
+  // visible card (e.g. from the Focus panel). Shown indented with an amber bar and
+  // a "Pulled in" header so it's clear they're a temporary peek, with a Dismiss
+  // button to remove them.
+  function renderPulledItem(p: { sourceId: string | null; block: Block }) {
+    return (
       <div key={`pulled-${p.block.id}`} className="ml-4 border-l-2 border-amber-300 pl-3">
+        <div className="flex items-center justify-between pr-1 pb-1">
+          <span className="text-[10px] uppercase tracking-wide text-amber-600 font-medium">Pulled in · not in current view</span>
+          <button
+            type="button"
+            onClick={() => onPulledInRemove?.(p.block.id)}
+            title="Dismiss"
+            className="flex items-center gap-1 text-[11px] text-amber-600 hover:text-amber-800 transition-colors"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+            Dismiss
+          </button>
+        </div>
         <JournalBlock
           block={p.block}
           onUpdate={(b) => onPulledInUpdate?.(b)}
@@ -239,14 +251,29 @@ export function BlockFeed({
           collapseLines={collapseLines}
         />
       </div>
-    ))
+    )
+  }
+
+  // Pulled cards shown directly below a given source card.
+  function renderPulledBelow(sourceId: string) {
+    const items = (pulledInCards ?? []).filter(p => p.sourceId === sourceId)
+    return items.length ? items.map(renderPulledItem) : null
+  }
+
+  // Pulled cards with no source, or whose source card isn't currently rendered
+  // (e.g. opened from the Focus panel or the scratchpad), shown at the top so
+  // they're never orphaned/invisible.
+  function renderPulledTop() {
+    const rendered = new Set([...(pinnedBlocks ?? []).map(b => b.id), ...blocks.map(b => b.id)])
+    const items = (pulledInCards ?? []).filter(p => p.sourceId === null || !rendered.has(p.sourceId))
+    return items.length ? items.map(renderPulledItem) : null
   }
 
   return (
     <>
-      {/* Pulled-in cards with no source (deep link / cross-workspace) render at top */}
-      {renderPulled(null) && (
-        <div className="space-y-[14px] mb-[14px]">{renderPulled(null)}</div>
+      {/* Pulled-in cards with no source / orphaned source render at the top */}
+      {renderPulledTop() && (
+        <div className="space-y-[14px] mb-[14px]">{renderPulledTop()}</div>
       )}
 
       {/* Pinned cards — always at the top, below the new-entry card. Ignore filters, search, and sort. */}
@@ -255,7 +282,7 @@ export function BlockFeed({
           {pinnedBlocks!.map((block) => (
             <Fragment key={block.id}>
               {renderBlock(block)}
-              {renderPulled(block.id)}
+              {renderPulledBelow(block.id)}
             </Fragment>
           ))}
         </div>
@@ -275,7 +302,7 @@ export function BlockFeed({
                   <SortableBlock block={block} isDragActive={!!activeBlock}>
                     {renderBlock(block)}
                   </SortableBlock>
-                  {renderPulled(block.id)}
+                  {renderPulledBelow(block.id)}
                 </Fragment>
               ))}
             </div>
@@ -293,7 +320,7 @@ export function BlockFeed({
           {blocks.map((block) => (
             <Fragment key={block.id}>
               {renderBlock(block)}
-              {renderPulled(block.id)}
+              {renderPulledBelow(block.id)}
             </Fragment>
           ))}
         </div>

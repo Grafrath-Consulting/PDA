@@ -889,6 +889,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     setPulledInCards([])
   }, [activeWorkspaceId])
 
+
   // Intercept in-app card-link clicks so they navigate in-app instead of opening
   // a tab (which, in an installed PWA, launches the system browser).
   //
