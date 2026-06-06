@@ -2712,23 +2712,6 @@ export function JournalBlock(props: Props) {
         onBlur={handleBlur}
         onContextMenu={handleContextMenu}
       >
-        {/* Header toggle — hover button in the left gutter next to the first line.
-            Only meaningful on multi-line existing cards. */}
-        {!isNewEntry && block && isMultiLine && !(isInactive && !restoredLocally) && (
-          <button
-            type="button"
-            title={headerEnabled ? 'Remove header from first line' : 'Use first line as header'}
-            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
-            onClick={(e) => { e.stopPropagation(); toggleHeader() }}
-            className={`absolute left-0 ${showToolbar ? 'top-1' : 'top-1.5'} z-[2] w-4 h-4 flex items-center justify-center rounded text-[9px] font-bold leading-none transition-all ${
-              headerEnabled
-                ? 'opacity-60 hover:opacity-100 text-amber-700'
-                : 'opacity-0 group-hover:opacity-60 hover:!opacity-100 text-gray-400 hover:text-gray-600'
-            }`}
-          >
-            H
-          </button>
-        )}
         {/* Fade overlay when collapsed */}
         {shouldCollapse && (
           <div
