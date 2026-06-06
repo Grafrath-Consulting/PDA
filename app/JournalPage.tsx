@@ -19,6 +19,7 @@ import { PeopleModal } from './components/PeopleModal'
 import { useWorkspace, Workspace } from '@/context/WorkspaceContext'
 import { useProperties } from '@/context/PropertiesContext'
 import { useDateFormat } from '@/context/DateFormatContext'
+import { useActionHistory, type ActionEntry } from '@/context/ActionHistoryContext'
 import { zonedToUtcIso } from '@/lib/date-format'
 import { formatDatePart } from '@/lib/date-format'
 import workspaceColorSchemes, { type WorkspaceColorScheme } from '@/constants/workspaceColorSchemes'
@@ -89,6 +90,9 @@ interface Props {
 export function JournalPage({ userId, email, displayName }: Props) {
   const { activeWorkspace, activeWorkspaceId, activeScheme, isGlobalView, hydrated, workspaces, setActiveWorkspace, refreshWorkspaces, reorderWorkspaces } = useWorkspace()
   const { propertiesForWorkspace, allProperties, refetch: refetchProperties } = useProperties()
+  const { entries: actionEntries, markUndone, toastId: undoToastId, dismissToast: dismissUndoToast } = useActionHistory()
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const historyWrapRef = useRef<HTMLDivElement>(null)
   const { dateFormat, timezone, tzNotice, dismissTzNotice } = useDateFormat()
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
@@ -1183,6 +1187,47 @@ export function JournalPage({ userId, email, displayName }: Props) {
     )
   }
 
+  // Reverse a feed-affecting action from the history. Writes the inverse to
+  // Supabase, then re-surfaces the affected card (via navigateToCard) so the
+  // change is visible — even if it's filtered out or in another workspace.
+  async function performUndo(entry: ActionEntry) {
+    if (entry.undone) return
+    const supabase = createClient()
+    try {
+      if (entry.type === 'delete') {
+        await supabase.from('journal_blocks').update({ deleted_at: null }).eq('id', entry.blockId)
+        navigateToCard(entry.blockId)
+      } else if (entry.type === 'archive') {
+        await supabase.from('journal_blocks').update({ status: 'active', is_archived: false, archived_at: null }).eq('id', entry.blockId)
+        navigateToCard(entry.blockId)
+      } else if (entry.type === 'move') {
+        await supabase.from('journal_blocks').update({ workspace_id: entry.fromWorkspaceId }).eq('id', entry.blockId)
+        navigateToCard(entry.blockId)
+      } else if (entry.type === 'pin') {
+        await supabase.from('journal_blocks').update({ pinned: entry.prev }).eq('id', entry.blockId)
+        const { data } = await supabase.from('journal_blocks').select('*').eq('id', entry.blockId).maybeSingle()
+        if (data) handleBlockUpdate(data as Block)
+      } else if (entry.type === 'property') {
+        const before = new Set(entry.before)
+        const after = new Set(entry.after)
+        const toDelete = entry.after.filter(x => !before.has(x))   // values that were added
+        const toInsert = entry.before.filter(x => !after.has(x))   // values that were removed
+        if (toDelete.length) {
+          await supabase.from('entry_properties').delete().eq('entry_id', entry.blockId).in('property_value_id', toDelete)
+        }
+        if (toInsert.length) {
+          await supabase.from('entry_properties').insert(toInsert.map(pvId => ({ entry_id: entry.blockId, property_value_id: pvId })))
+        }
+        setBlockProperties(prev => { const next = new Map(prev); next.set(entry.blockId, new Set(entry.before)); return next })
+        navigateToCard(entry.blockId)
+      }
+    } catch (e) {
+      console.error('[undo] failed', e)
+    }
+    markUndone(entry.id)
+    setHistoryOpen(false)
+  }
+
   function handleSplitBlock(newBlock: Block, updatedSourceBlock: Block) {
     setBlocks((prev) => {
       const withUpdatedSource = prev.map((b) =>
@@ -1489,6 +1534,33 @@ export function JournalPage({ userId, email, displayName }: Props) {
           </button>
         </div>
       )}
+      {/* Action history dropdown — fixed panel so it works on mobile + desktop */}
+      {historyOpen && (
+        <ActionHistoryDropdown
+          entries={actionEntries}
+          onUndo={performUndo}
+          onJump={(blockId) => { navigateToCard(blockId); setHistoryOpen(false) }}
+          onClose={() => setHistoryOpen(false)}
+          containerRef={historyWrapRef}
+        />
+      )}
+      {/* Undo toast after a destructive action (delete/archive) */}
+      {undoToastId && (() => {
+        const entry = actionEntries.find(e => e.id === undoToastId)
+        if (!entry || entry.undone) return null
+        const verb = entry.type === 'archive' ? 'archived' : 'deleted'
+        return (
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 bg-stone-800 text-white text-sm rounded-lg shadow-lg px-4 py-2.5 animate-fade-in">
+            <span>Card {verb}</span>
+            <button onClick={() => performUndo(entry)} className="font-semibold text-amber-300 hover:text-amber-200 transition-colors">Undo</button>
+            <button onClick={dismissUndoToast} className="text-white/60 hover:text-white transition-colors" title="Dismiss">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        )
+      })()}
       <header
         className="h-14 border-b flex items-center justify-between px-3 sm:px-6 flex-shrink-0 transition-colors duration-200 relative"
         style={{
@@ -1627,6 +1699,23 @@ export function JournalPage({ userId, email, displayName }: Props) {
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
           </button>
+          {/* Action history (desktop only) */}
+          <div ref={historyWrapRef} className="relative hidden sm:block">
+            <button
+              onClick={() => setHistoryOpen(prev => !prev)}
+              title="Recent actions"
+              className={`relative p-1.5 rounded-lg transition-colors ${btnInactiveClass}`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 3v5h5" />
+                <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+                <path d="M12 7v5l4 2" />
+              </svg>
+              {actionEntries.some(e => !e.undone) && (
+                <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
+              )}
+            </button>
+          </div>
           {/* User / Account button (desktop only) */}
           <button
             onClick={() => setPrefsOpen(true)}
@@ -1681,6 +1770,15 @@ export function JournalPage({ userId, email, displayName }: Props) {
                     <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                   </svg>
                   People
+                </button>
+                <button
+                  onClick={() => { setHistoryOpen(true); setMobileMenuOpen(false) }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-[#FFFEF7] whitespace-nowrap"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 3v5h5" /><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" /><path d="M12 7v5l4 2" />
+                  </svg>
+                  Recent actions
                 </button>
                 <div className="border-t border-[#E5E0D0] my-1" />
                 <button
@@ -2435,6 +2533,105 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
       <PeopleModal open={peopleModalOpen} onClose={() => { setPeopleModalOpen(false); fetchPeople() }} userId={userId} />
 
+    </div>
+  )
+}
+
+// ── Action History Dropdown ──────────────────────────────────────────
+
+function actionIcon(type: ActionEntry['type']) {
+  const common = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
+  switch (type) {
+    case 'delete': return <svg {...common}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
+    case 'archive': return <svg {...common}><polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></svg>
+    case 'move': return <svg {...common}><polyline points="5 9 2 12 5 15" /><polyline points="9 5 12 2 15 5" /><polyline points="15 19 12 22 9 19" /><polyline points="19 9 22 12 19 15" /><line x1="2" y1="12" x2="22" y2="12" /><line x1="12" y1="2" x2="12" y2="22" /></svg>
+    case 'pin': return <svg {...common}><path d="M12 17v5" /><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" /></svg>
+    case 'property': return <svg {...common}><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
+  }
+}
+
+function describeAction(e: ActionEntry): string {
+  switch (e.type) {
+    case 'delete': return 'Deleted'
+    case 'archive': return 'Archived'
+    case 'move': return `Moved to ${e.toWorkspaceName}`
+    case 'pin': return e.prev ? 'Unpinned' : 'Pinned'
+    case 'property': return e.label
+  }
+}
+
+function timeAgo(at: number): string {
+  const s = Math.floor((Date.now() - at) / 1000)
+  if (s < 60) return 'just now'
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+function ActionHistoryDropdown({ entries, onUndo, onJump, onClose, containerRef }: {
+  entries: ActionEntry[]
+  onUndo: (entry: ActionEntry) => void
+  onJump: (blockId: string) => void
+  onClose: () => void
+  containerRef?: React.RefObject<HTMLDivElement | null>
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node
+      if (ref.current && ref.current.contains(target)) return
+      if (containerRef?.current && containerRef.current.contains(target)) return
+      onClose()
+    }
+    function handleKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [onClose, containerRef])
+
+  return (
+    <div ref={ref} className="fixed top-14 right-2 z-[70] w-[92vw] max-w-sm bg-white rounded-xl shadow-xl border border-[#E5E0D0] overflow-hidden">
+      <div className="px-3 py-2 border-b border-[#E5E0D0] flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Recent actions</span>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+        </button>
+      </div>
+      {entries.length === 0 ? (
+        <div className="px-3 py-6 text-center text-sm text-gray-400">No recent actions</div>
+      ) : (
+        <div className="max-h-[60vh] overflow-y-auto py-1">
+          {entries.map(e => (
+            <div key={e.id} className="px-3 py-2 flex items-start gap-2.5 hover:bg-[#FFFEF7] transition-colors">
+              <span className="mt-0.5 text-gray-400 flex-shrink-0">{actionIcon(e.type)}</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-gray-700 truncate">{describeAction(e)}</div>
+                <button
+                  onClick={() => onJump(e.blockId)}
+                  className="text-xs text-amber-700 hover:underline truncate block max-w-full text-left"
+                  title={`Jump to “${e.blockTitle}”`}
+                >
+                  {e.blockTitle}
+                </button>
+                <div className="text-[10px] text-gray-400">{timeAgo(e.at)}</div>
+              </div>
+              {e.undone ? (
+                <span className="text-[11px] text-gray-400 flex-shrink-0 mt-0.5">Undone</span>
+              ) : (
+                <button
+                  onClick={() => onUndo(e)}
+                  className="text-xs font-medium text-gray-600 hover:text-amber-700 border border-gray-200 hover:border-amber-300 rounded px-2 py-0.5 flex-shrink-0 transition-colors"
+                >
+                  Undo
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

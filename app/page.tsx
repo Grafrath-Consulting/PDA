@@ -4,6 +4,7 @@ import { JournalPage } from './JournalPage'
 import { WorkspaceProvider } from '@/context/WorkspaceContext'
 import { PropertiesProvider } from '@/context/PropertiesContext'
 import { DateFormatProvider } from '@/context/DateFormatContext'
+import { ActionHistoryProvider } from '@/context/ActionHistoryContext'
 
 export default async function Journal() {
   const supabase = createClient()
@@ -18,9 +19,11 @@ export default async function Journal() {
     <WorkspaceProvider userId={user.id}>
       <PropertiesProvider userId={user.id}>
         <DateFormatProvider userId={user.id}>
-          <div className="flex h-screen overflow-x-hidden bg-[#FFFEF7] font-[family-name:var(--font-geist-sans)]">
-            <JournalPage userId={user.id} email={email} displayName={displayName} />
-          </div>
+          <ActionHistoryProvider>
+            <div className="flex h-screen overflow-x-hidden bg-[#FFFEF7] font-[family-name:var(--font-geist-sans)]">
+              <JournalPage userId={user.id} email={email} displayName={displayName} />
+            </div>
+          </ActionHistoryProvider>
         </DateFormatProvider>
       </PropertiesProvider>
     </WorkspaceProvider>

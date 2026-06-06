@@ -9,6 +9,8 @@ import { SelectionMenu } from './SelectionMenu'
 import { HistoryModal } from './HistoryModal'
 import type { TipTapEditorHandle } from './TipTapEditor'
 import { useWorkspace } from '@/context/WorkspaceContext'
+import { useActionHistory } from '@/context/ActionHistoryContext'
+import { blockTitle } from '@/lib/block-title'
 import { useDateFormat } from '@/context/DateFormatContext'
 import {
   formatTimestamp, formatDatePart, zonedParts, zonedDateStr, zonedToUtcIso,
@@ -562,6 +564,7 @@ export function JournalBlock(props: Props) {
   const currentUserId = isNewEntry ? (props as NewEntryProps).userId : props.block!.user_id
   const { activeWorkspace, activeScheme, activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
   const { propertiesForWorkspace } = useProperties()
+  const { record: recordAction } = useActionHistory()
   const { dateFormat, timeFormat, timezone } = useDateFormat()
   const timezoneRef = useRef(timezone)
   timezoneRef.current = timezone
@@ -1919,16 +1922,8 @@ export function JournalBlock(props: Props) {
   function copyLinkToBlock() {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    // Use the header / first line only — the first block-level element's text.
-    // (htmlToText collapses all blocks onto one line, so parse the HTML instead.)
-    const html = liveHTMLRef.current || toEditorHTML(p.block.content ?? '')
-    let title = 'Untitled card'
-    if (typeof document !== 'undefined') {
-      const div = document.createElement('div')
-      div.innerHTML = html
-      const t = (div.firstElementChild?.textContent ?? div.textContent ?? '').trim()
-      if (t) title = t.slice(0, 200)
-    }
+    // Use the header / first line only (the first block-level element's text).
+    const title = blockTitle(liveHTMLRef.current || toEditorHTML(p.block.content ?? ''))
     const url = `${window.location.origin}/?card=${p.block.id}`
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
     const anchor = `<a href="${esc(url)}">${esc(title)}</a>`
@@ -1956,6 +1951,7 @@ export function JournalBlock(props: Props) {
     await supabase.from('journal_blocks').update({ deleted_at: deletedAt }).eq('id', p.block.id)
     p.onRemove(p.block.id)
     p.onBlockArchived?.({ ...p.block, deleted_at: deletedAt })
+    recordAction({ type: 'delete', blockId: p.block.id, blockTitle: blockTitle(p.block.content), block: p.block }, { toast: true })
   }
 
   async function archiveBlock() {
@@ -1968,6 +1964,7 @@ export function JournalBlock(props: Props) {
     await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true, archived_at: archivedAt }).eq('id', p.block.id)
     p.onRemove(p.block.id)
     p.onBlockArchived?.({ ...p.block, status: 'archived', is_archived: true, archived_at: archivedAt })
+    recordAction({ type: 'archive', blockId: p.block.id, blockTitle: blockTitle(p.block.content), block: p.block }, { toast: true })
   }
 
   async function togglePin() {
@@ -1978,6 +1975,7 @@ export function JournalBlock(props: Props) {
     p.onUpdate({ ...p.block, pinned: newPinned })
     const supabase = createClient()
     await supabase.from('journal_blocks').update({ pinned: newPinned }).eq('id', p.block.id)
+    recordAction({ type: 'pin', blockId: p.block.id, blockTitle: blockTitle(p.block.content), prev: p.block.pinned })
   }
 
   async function saveAndPin() {
@@ -2059,6 +2057,7 @@ export function JournalBlock(props: Props) {
     if (!p.block) return
     setMoveMenuOpen(false)
     setPopoverOpen(false)
+    const fromWorkspaceId = p.block.workspace_id
     const supabase = createClient()
     await supabase.from('journal_blocks').update({ workspace_id: targetWsId }).eq('id', p.block.id)
     // In single-workspace view, block has left this workspace — remove it from feed
@@ -2067,6 +2066,49 @@ export function JournalBlock(props: Props) {
     } else {
       p.onUpdate({ ...p.block, workspace_id: targetWsId })
     }
+    recordAction({
+      type: 'move', blockId: p.block.id, blockTitle: blockTitle(p.block.content),
+      fromWorkspaceId,
+      toWorkspaceName: workspaces.find(w => w.id === targetWsId)?.name ?? 'another workspace',
+    })
+  }
+
+  // Record a property change (add/remove/clear/set) before forwarding it on, so it
+  // can be undone from the action history. Diffs the applied set vs the new set.
+  function handlePropertyChange(newIds: Set<string>) {
+    const p = propsRef.current as ExistingBlockProps
+    if (p.block) {
+      const before = appliedProps
+      const added = Array.from(newIds).filter(x => !before.has(x))
+      const removed = Array.from(before).filter(x => !newIds.has(x))
+      if (added.length || removed.length) {
+        const propsList = propertiesForWorkspace(propertyWorkspaceId)
+        const labelFor = (vid: string) => {
+          for (const pr of propsList) {
+            const v = pr.values.find(vv => vv.id === vid)
+            if (v) return `${pr.name}: ${v.label}`
+          }
+          return 'property'
+        }
+        const propNameFor = (vid: string) => {
+          for (const pr of propsList) if (pr.values.some(vv => vv.id === vid)) return pr.name
+          return 'property'
+        }
+        let label: string
+        if (added.length === 1 && removed.length === 0) label = `Added ${labelFor(added[0])}`
+        else if (added.length === 0 && removed.length === 1) label = `Removed ${labelFor(removed[0])}`
+        else if (added.length === 0 && removed.length > 1) {
+          const names = new Set(removed.map(propNameFor))
+          label = names.size === 1 ? `Cleared ${Array.from(names)[0]}` : `Removed ${removed.length} properties`
+        } else if (added.length === 1) label = `Set ${labelFor(added[0])}`
+        else label = 'Changed properties'
+        recordAction({
+          type: 'property', blockId: p.block.id, blockTitle: blockTitle(p.block.content),
+          before: Array.from(before), after: Array.from(newIds), label,
+        })
+      }
+    }
+    p.onPropertyChanged?.(newIds)
   }
 
   // Load people for assignee dropdown
@@ -2509,7 +2551,7 @@ export function JournalBlock(props: Props) {
                 blockId={block.id}
                 appliedValueIds={appliedProps}
                 properties={propertiesForWorkspace(propertyWorkspaceId)}
-                onChanged={(newIds) => (props as ExistingBlockProps).onPropertyChanged?.(newIds)}
+                onChanged={handlePropertyChange}
                 onClose={() => setPropertyEditorOpen(false)}
                 anchorRef={addPropertyBtnRef}
               />
