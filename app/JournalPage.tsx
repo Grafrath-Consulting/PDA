@@ -517,6 +517,15 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
   // `offset` is the number of rows already loaded for this query context. undefined
   // means a fresh load (page 0); a number triggers an appended next-page fetch.
+  // Id of the block created by the New Entry card's autosave-in-place before the
+  // user has formally saved it. The sync poll re-pulls the whole feed window and
+  // would otherwise surface this row as a duplicate of the still-open card, so we
+  // exclude it from fetched results until it's committed (handleNewBlock adds it).
+  const pendingNewEntryIdRef = useRef<string | null>(null)
+  const handleAutosaveDraft = useCallback((id: string | null) => {
+    pendingNewEntryIdRef.current = id
+  }, [])
+
   const fetchBlocks = useCallback(async (offset?: number, refresh?: boolean) => {
     // `refresh` re-pulls the whole loaded window (see range calc below). Like an
     // append, skip it while another fetch is in flight to avoid a setBlocks race.
@@ -744,7 +753,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const { data, error } = await query
     if (error) { console.error(error); setLoading(false); return }
 
-    const rows = (data ?? []) as Block[]
+    // Drop the in-progress New Entry autosave block — it belongs to the open card,
+    // not the feed, until the user formally saves it.
+    const pendingId = pendingNewEntryIdRef.current
+    const rows = ((data ?? []) as Block[]).filter(b => b.id !== pendingId)
     if (isAppend) {
       // Dedupe by id: a concurrent insert/update can shift a row across the page
       // boundary, so guard against re-appending one already in the list.
@@ -2343,6 +2355,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
               userId={userId}
               contextId={contextFilter}
               onSaved={handleNewBlock}
+              onAutosaveDraft={handleAutosaveDraft}
               autosaveInterval={autosaveInterval}
               formattingVisible={formattingVisible}
               onToggleFormatting={toggleFormatting}

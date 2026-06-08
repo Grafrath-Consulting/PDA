@@ -144,6 +144,10 @@ interface NewEntryProps extends BaseProps {
   userId: string
   contextId: string | null
   onSaved: (block: Block, propertyValueIds?: Set<string>) => void
+  // Reports the id of a block created by autosave-in-place before it has been
+  // formally saved (null once committed/cleared), so the feed can exclude it
+  // from sync-poll results and avoid showing a duplicate of the open card.
+  onAutosaveDraft?: (blockId: string | null) => void
   onUpdate?: never
   onRemove?: never
   onSplitBlock?: never
@@ -1386,6 +1390,8 @@ export function JournalBlock(props: Props) {
     setFocused(false)
     setEditorKey(k => k + 1)
     if (saved) {
+      // Block is now in the feed via onSaved — stop excluding it from sync polls.
+      p.onAutosaveDraft?.(null)
       p.onSaved(saved, savedPropertyIds)
       // Fire-and-forget: embed block for semantic search
       fetch('/api/ai/embed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blockId: saved.id }) }).catch(() => {})
@@ -1533,6 +1539,7 @@ export function JournalBlock(props: Props) {
           .single()
         if (!error && data) {
           autosavedBlockIdRef.current = data.id
+          ;(propsRef.current as NewEntryProps).onAutosaveDraft?.(data.id)
         }
       }
       lastSavedHTMLRef.current = html
