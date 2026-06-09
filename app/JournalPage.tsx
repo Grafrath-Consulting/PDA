@@ -812,22 +812,26 @@ export function JournalPage({ userId, email, displayName }: Props) {
   // visible, excluded from the regular feed/search/pinned queries. In global
   // view there is no single workspace, so no scratchpad is shown.
   const [scratchBlock, setScratchBlock] = useState<Block | null>(null)
-  const fetchScratchBlock = useCallback(async () => {
-    if (!activeWorkspaceId || isGlobalView) { setScratchBlock(null); return }
+  useEffect(() => {
+    // Clear synchronously so the previous workspace's scratchpad never lingers
+    // under the new one while its row loads. The `cancelled` guard also stops a
+    // slow fetch from an earlier workspace overwriting a faster, later one.
+    setScratchBlock(null)
+    if (!activeWorkspaceId || isGlobalView) return
+    let cancelled = false
     const supabase = createClient()
-    const { data } = await supabase
+    supabase
       .from('journal_blocks')
       .select('*')
       .eq('user_id', userId)
       .eq('workspace_id', activeWorkspaceId)
       .eq('is_scratch', true)
       .maybeSingle()
-    setScratchBlock((data as Block) ?? null)
+      .then(({ data }) => {
+        if (!cancelled) setScratchBlock((data as Block) ?? null)
+      })
+    return () => { cancelled = true }
   }, [userId, activeWorkspaceId, isGlobalView])
-
-  useEffect(() => {
-    fetchScratchBlock()
-  }, [fetchScratchBlock])
 
   // Cards pulled into the feed by following an in-app card link. Each is shown
   // directly below its source card (or at the top when there's no source),
