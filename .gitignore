@@ -25,9 +25,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# local env files
-.env*.local
-.env.local
+# local env files (keep .env.example tracked)
+.env*
+!.env.example
 
 # vercel
 .vercel
@@ -52,8 +52,9 @@ supabase/.temp/
 console-log.txt
 console-trace.txt
 
-# test screenshots
+# test screenshots (app image assets in public/ stay tracked)
 *.png
+!public/*.png
 
 # test data scripts (keep locally, don't track)
 scripts/seed-test-data.js
