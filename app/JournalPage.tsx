@@ -142,6 +142,10 @@ export function JournalPage({ userId, email, displayName }: Props) {
   const [hasMore, setHasMore] = useState(true)
   const [loading, setLoading] = useState(false)
   const [initialised, setInitialised] = useState(false)
+  // Unlike `initialised` (set even on a failed fetch so retries stay unblocked),
+  // this only flips after a successful load — one-shot effects that consume
+  // state (card param, draft recovery) must not run against an empty feed.
+  const [loadedOnce, setLoadedOnce] = useState(false)
   const [panelOpen, setPanelOpen] = useState(true)
   const [autosaveInterval, setAutosaveInterval] = useState(DEFAULT_AUTOSAVE_INTERVAL)
   const [syncInterval, setSyncInterval] = useState(DEFAULT_SYNC_INTERVAL)
@@ -300,6 +304,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
   // Which workspace the live state currently represents (undefined until first load).
   const viewStateWsRef = useRef<string | null | undefined>(undefined)
+  // State mirror of viewStateWsRef, set after the restored filters are queued.
+  // The initial-fetch effect waits on this so the first fetch runs one render
+  // AFTER the restored filter/sort values have committed (and their refs have
+  // been reassigned) — fetching in the same flush would read the defaults.
+  const [viewStateRestoredWs, setViewStateRestoredWs] = useState<string | null | undefined>(undefined)
 
   // Restore a workspace's view on switch (and on initial hydration).
   useEffect(() => {
@@ -328,7 +337,14 @@ export function JournalPage({ userId, email, displayName }: Props) {
     // Search text is session-transient — clear on switch.
     setSearchText('')
     setDebouncedSearch('')
+    // AI-parsed search filters are transient; drop any pending snapshot so the
+    // clear-search effect below doesn't restore another workspace's filters.
+    // (aiSyncedRef is left alone here — it's reset by that effect once the
+    // cleared search commits, and nulling it now would let the AI-sync effect
+    // re-apply stale filters over this workspace's restored state.)
+    preAiFiltersRef.current = null
     viewStateWsRef.current = activeWorkspaceId
+    setViewStateRestoredWs(activeWorkspaceId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, activeWorkspaceId])
 
@@ -408,12 +424,35 @@ export function JournalPage({ userId, email, displayName }: Props) {
 
   // Sync AI-parsed filters to UI filter controls so the user can adjust them
   const aiSyncedRef = useRef<string | null>(null)
+  // The user's own filter state, captured before the first AI-parsed sync of a
+  // search session and restored when the search is cleared — otherwise a
+  // throwaway query would permanently overwrite the workspace's saved filters
+  // (the view-state effect persists every filter change to localStorage).
+  const preAiFiltersRef = useRef<{
+    entryTypes: Set<string>
+    statuses: Set<string>
+    dateFrom: string
+    dateTo: string
+    propertyFilters: Set<string>
+  } | null>(null)
   useEffect(() => {
     if (!aiParsedInfo || !aiParsedInfo.filters) return
     // Only sync once per unique search (avoid re-syncing on re-renders)
     const key = JSON.stringify(aiParsedInfo.filters)
     if (aiSyncedRef.current === key) return
     aiSyncedRef.current = key
+
+    // Snapshot the pre-search filters once per search session (via the always-
+    // current refs, so this effect's deps stay unchanged).
+    if (!preAiFiltersRef.current) {
+      preAiFiltersRef.current = {
+        entryTypes: new Set(filterEntryTypesRef.current),
+        statuses: new Set(filterStatusesRef.current),
+        dateFrom: filterDateFromRef.current,
+        dateTo: filterDateToRef.current,
+        propertyFilters: new Set(activePropertyFiltersRef.current),
+      }
+    }
 
     const f = aiParsedInfo.filters
     if (f.entryTypes && f.entryTypes.length > 0) {
@@ -444,6 +483,22 @@ export function JournalPage({ userId, email, displayName }: Props) {
       localStorage.setItem(PANEL_MODE_KEY, 'expanded')
     }
   }, [aiParsedInfo, propertiesForWorkspace, activeWorkspaceId, panelMode])
+
+  // When the search is cleared, put back the filters the AI sync overwrote.
+  // (A workspace switch clears the snapshot instead — the restore effect above
+  // has already applied the new workspace's saved filters.)
+  useEffect(() => {
+    if (debouncedSearch) return
+    aiSyncedRef.current = null
+    const snap = preAiFiltersRef.current
+    if (!snap) return
+    preAiFiltersRef.current = null
+    setFilterEntryTypes(new Set(snap.entryTypes))
+    setFilterStatuses(new Set(snap.statuses))
+    setFilterDateFrom(snap.dateFrom)
+    setFilterDateTo(snap.dateTo)
+    setActivePropertyFilters(new Set(snap.propertyFilters))
+  }, [debouncedSearch])
 
   function toggleFormatting() {
     setFormattingVisible(prev => {
@@ -526,10 +581,17 @@ export function JournalPage({ userId, email, displayName }: Props) {
     pendingNewEntryIdRef.current = id
   }, [])
 
+  // Monotonic fetch generation: each call bumps it, and only the latest call may
+  // apply its results. Fresh loads aren't guarded by `loading` (a workspace
+  // switch must supersede whatever is in flight), so without this a slower stale
+  // fetch could land last and overwrite the feed with the wrong query's rows.
+  const fetchSeqRef = useRef(0)
+
   const fetchBlocks = useCallback(async (offset?: number, refresh?: boolean) => {
     // `refresh` re-pulls the whole loaded window (see range calc below). Like an
     // append, skip it while another fetch is in flight to avoid a setBlocks race.
     if ((offset !== undefined || refresh) && loading) return
+    const seq = ++fetchSeqRef.current
     setLoading(true)
 
     const isSearching = !!debouncedSearchRef.current
@@ -716,6 +778,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         let allowed = idSets[0]
         for (let i = 1; i < idSets.length; i++) allowed = new Set(Array.from(allowed).filter(id => idSets[i].has(id)))
         if (allowed.size === 0) {
+          if (seq !== fetchSeqRef.current) return // superseded by a newer fetch
           // No block can satisfy the positive filters — short-circuit to an empty feed.
           if (offset === undefined || isSearching) { setBlocks([]); serverLoadedRef.current = 0 }
           setHasMore(false)
@@ -751,12 +814,26 @@ export function JournalPage({ userId, email, displayName }: Props) {
     query = query.range(from, from + span - 1)
 
     const { data, error } = await query
-    if (error) { console.error(error); setLoading(false); return }
+    if (seq !== fetchSeqRef.current) return // superseded by a newer fetch
+    if (error) {
+      console.error(error)
+      // Still leave the loading/switching states so the feed isn't stuck on
+      // skeletons, and mark initialised so the filter effect and sync poll can
+      // retry — otherwise a failed first load blocks every future fetch.
+      setLoading(false)
+      setSwitching(false)
+      setInitialised(true)
+      return
+    }
 
     // Drop the in-progress New Entry autosave block — it belongs to the open card,
-    // not the feed, until the user formally saves it.
+    // not the feed, until the user formally saves it. Pagination bookkeeping uses
+    // the raw server count: the filtered-out draft still occupies a row in the
+    // server window, so judging hasMore by the filtered length would end paging
+    // one row early ("No more entries" with more left).
     const pendingId = pendingNewEntryIdRef.current
-    const rows = ((data ?? []) as Block[]).filter(b => b.id !== pendingId)
+    const raw = (data ?? []) as Block[]
+    const rows = raw.filter(b => b.id !== pendingId)
     if (isAppend) {
       // Dedupe by id: a concurrent insert/update can shift a row across the page
       // boundary, so guard against re-appending one already in the list.
@@ -764,22 +841,29 @@ export function JournalPage({ userId, email, displayName }: Props) {
         const seen = new Set(prev.map(b => b.id))
         return [...prev, ...rows.filter(b => !seen.has(b.id))]
       })
-      serverLoadedRef.current = from + rows.length
+      serverLoadedRef.current = from + raw.length
     } else {
       setBlocks(rows)
-      serverLoadedRef.current = rows.length
+      serverLoadedRef.current = raw.length
     }
-    setHasMore(!isSearching && rows.length === span)
+    setHasMore(!isSearching && raw.length === span)
     setLoading(false)
     setSwitching(false)
     setInitialised(true)
+    setLoadedOnce(true)
   }, [userId, loading])
 
+  // Initial load. Waits for the per-workspace view-state restore to commit so
+  // the first fetch reads the saved filters/sort — not the defaults the filter
+  // refs still hold while the restore's setStates are pending. Runs exactly
+  // once; workspace switches and filter changes are handled by the effect below.
+  const initialFetchDoneRef = useRef(false)
   useEffect(() => {
-    if (!hydrated) return
+    if (!hydrated || viewStateRestoredWs === undefined || initialFetchDoneRef.current) return
+    initialFetchDoneRef.current = true
     fetchBlocks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, hydrated])
+  }, [userId, hydrated, viewStateRestoredWs])
 
   // Always reach the latest fetchBlocks from interval/event closures below
   // (its identity changes whenever `loading` flips).
@@ -787,7 +871,9 @@ export function JournalPage({ userId, email, displayName }: Props) {
   fetchBlocksRef.current = fetchBlocks
 
   // Fetch pinned blocks for the active workspace, ignoring all filters/search/sort.
+  const pinnedSeqRef = useRef(0)
   const fetchPinnedBlocks = useCallback(async () => {
+    const seq = ++pinnedSeqRef.current
     const supabase = createClient()
     let query = supabase
       .from('journal_blocks')
@@ -799,10 +885,15 @@ export function JournalPage({ userId, email, displayName }: Props) {
       .order('created_at', { ascending: true })
     if (activeWorkspaceId) {
       query = query.eq('workspace_id', activeWorkspaceId)
+    } else if (isGlobalView && selectedWsIds) {
+      // Multi-select global view — mirror the feed's workspace scoping so pinned
+      // cards from deselected workspaces don't leak in.
+      query = query.in('workspace_id', Array.from(selectedWsIds))
     }
     const { data } = await query
+    if (seq !== pinnedSeqRef.current) return // superseded by a newer fetch
     setPinnedBlocks((data ?? []) as Block[])
-  }, [userId, activeWorkspaceId])
+  }, [userId, activeWorkspaceId, isGlobalView, selectedWsIds])
 
   useEffect(() => {
     fetchPinnedBlocks()
@@ -961,7 +1052,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
   // otherwise the target can flash in (pre-filter) and be mistaken for visible.
   const cardParamHandled = useRef(false)
   useEffect(() => {
-    if (!initialised || cardParamHandled.current) return
+    if (!loadedOnce || cardParamHandled.current) return
     const cardId = new URLSearchParams(window.location.search).get('card')
     if (!cardId) { cardParamHandled.current = true; return }
     cardParamHandled.current = true
@@ -969,12 +1060,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
     url.searchParams.delete('card')
     window.history.replaceState({}, '', url.toString())
     navigateToCard(cardId, null, { ensurePersistent: true })
-  }, [initialised, navigateToCard])
+  }, [loadedOnce, navigateToCard])
 
   // On load, commit any blocks that have unsaved drafts from a previous session
   const draftRecoveryDone = useRef(false)
   useEffect(() => {
-    if (!initialised || draftRecoveryDone.current) return
+    if (!loadedOnce || draftRecoveryDone.current) return
     draftRecoveryDone.current = true
     const drafty = blocks.filter(b => b.draft_content != null)
     if (drafty.length === 0) return
@@ -994,7 +1085,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
         fetch('/api/ai/embed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blockId: b.id }) }).catch(() => {})
       }
     })
-  }, [initialised, blocks])
+  }, [loadedOnce, blocks])
 
   // Track previous workspace to detect workspace switches
   const prevWorkspaceRef = useRef(activeWorkspaceId)
@@ -1238,16 +1329,31 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const [moved] = reordered.splice(oldIdx, 1)
     reordered.splice(newIdx, 0, moved)
 
-    // Reassign sequential sort_order values for all visible blocks
+    // Place the moved block midway between its new neighbors' sort_order values.
+    // The visible window excludes pinned, filtered, and not-yet-paged-in blocks,
+    // so renumbering the whole window from 1 would collide with the orders those
+    // hidden blocks keep — corrupting the arrangement once they reappear.
+    // sort_order is a float, so midpoints stay representable for ~50 consecutive
+    // drops into the same gap; on precision exhaustion fall back to spreading the
+    // visible window (the rare worst case, no worse than the old behaviour).
+    const prevOrder = newIdx > 0 ? reordered[newIdx - 1].sort_order : null
+    const nextOrder = newIdx < reordered.length - 1 ? reordered[newIdx + 1].sort_order : null
+    const midOrder =
+      prevOrder !== null && nextOrder !== null ? (prevOrder + nextOrder) / 2
+      : prevOrder !== null ? prevOrder + 1
+      : nextOrder !== null ? nextOrder - 1
+      : moved.sort_order
+    const exhausted = midOrder === prevOrder || midOrder === nextOrder
+
     const updates: { id: string; sort_order: number }[] = []
-    const updatedBlocks = new Map<string, number>()
-    reordered.forEach((b, i) => {
-      const newOrder = i + 1
-      if (b.sort_order !== newOrder) {
-        updates.push({ id: b.id, sort_order: newOrder })
-      }
-      updatedBlocks.set(b.id, newOrder)
-    })
+    if (!exhausted) {
+      updates.push({ id: moved.id, sort_order: midOrder })
+    } else {
+      reordered.forEach((b, i) => {
+        if (b.sort_order !== i + 1) updates.push({ id: b.id, sort_order: i + 1 })
+      })
+    }
+    const updatedBlocks = new Map(updates.map(u => [u.id, u.sort_order]))
 
     // Update local state
     setBlocks(prev => prev.map(b => {
@@ -1402,9 +1508,17 @@ export function JournalPage({ userId, email, displayName }: Props) {
     if (filterEntryTypes.size > 0 && filterEntryTypes.size < 2) {
       results = results.filter(b => filterEntryTypes.has(b.entry_type ?? 'info'))
     }
-    // Status filter
-    if (filterStatuses.size > 0) {
-      results = results.filter(b => filterStatuses.has(b.status))
+    // Status filter — same bucket semantics as the server query in fetchBlocks:
+    // "active" = status active & not deleted; "archived" = archived OR complete
+    // & not deleted; "deleted" = deleted_at set (no row has status 'deleted').
+    if (filterStatuses.size === 0) {
+      results = []
+    } else {
+      results = results.filter(b => {
+        if (b.deleted_at != null) return filterStatuses.has('deleted')
+        if (b.status === 'active') return filterStatuses.has('active')
+        return filterStatuses.has('archived')
+      })
     }
     // Date-range filters compare instants; bounds are the user's local day in UTC.
     const fromMs = (d: string) => new Date(zonedToUtcIso(d, '00:00:00', timezone)).getTime()
@@ -1435,6 +1549,49 @@ export function JournalPage({ userId, email, displayName }: Props) {
     if (filterDueTo) {
       const to = toMs(filterDueTo)
       results = results.filter(b => b.due_date != null && new Date(b.due_date).getTime() <= to)
+    }
+    // Start date range filters
+    if (filterStartFrom) {
+      const from = fromMs(filterStartFrom)
+      results = results.filter(b => b.start_date != null && new Date(b.start_date).getTime() >= from)
+    }
+    if (filterStartTo) {
+      const to = toMs(filterStartTo)
+      results = results.filter(b => b.start_date != null && new Date(b.start_date).getTime() <= to)
+    }
+    // Archived/Done date range — archived_at OR completed_at (mirrors fetchBlocks)
+    if (filterArchivedFrom) {
+      const from = fromMs(filterArchivedFrom)
+      results = results.filter(b =>
+        (b.archived_at != null && new Date(b.archived_at).getTime() >= from) ||
+        (b.completed_at != null && new Date(b.completed_at).getTime() >= from))
+    }
+    if (filterArchivedTo) {
+      const to = toMs(filterArchivedTo)
+      results = results.filter(b =>
+        (b.archived_at != null && new Date(b.archived_at).getTime() <= to) ||
+        (b.completed_at != null && new Date(b.completed_at).getTime() <= to))
+    }
+    // Deleted date range
+    if (filterDeletedFrom) {
+      const from = fromMs(filterDeletedFrom)
+      results = results.filter(b => b.deleted_at != null && new Date(b.deleted_at).getTime() >= from)
+    }
+    if (filterDeletedTo) {
+      const to = toMs(filterDeletedTo)
+      results = results.filter(b => b.deleted_at != null && new Date(b.deleted_at).getTime() <= to)
+    }
+    // Assignee filter (mirrors fetchBlocks: 'me' = unassigned rows)
+    if (filterAssignee === 'me') {
+      results = results.filter(b => b.owner_id == null)
+    } else if (filterAssignee === 'others') {
+      results = results.filter(b => b.owner_id != null)
+    } else if (filterAssignee) {
+      results = results.filter(b => b.owner_id === filterAssignee)
+    }
+    // Context filter
+    if (contextFilter) {
+      results = results.filter(b => b.context_id === contextFilter)
     }
     // Source filter — MCP-touched vs. manual
     if (filterMcp === 'mcp') {
@@ -2236,6 +2393,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
           if (filterModifiedTo) count++
           if (filterDueFrom) count++
           if (filterDueTo) count++
+          if (filterStartFrom) count++
+          if (filterStartTo) count++
           if (filterArchivedFrom) count++
           if (filterArchivedTo) count++
           if (filterDeletedFrom) count++
@@ -2443,6 +2602,12 @@ export function JournalPage({ userId, email, displayName }: Props) {
             userId={userId}
             refreshKey={focusPanelKey}
             onClose={() => setPanelOpen(false)}
+            onTaskCompleted={(blockId) => {
+              const markDone = (list: Block[]) =>
+                list.map(b => b.id === blockId ? { ...b, task_status: 'done' as Block['task_status'] } : b)
+              setBlocks(markDone)
+              setPinnedBlocks(markDone)
+            }}
             activePropertyFilters={activePropertyFilters}
             filterEntryTypes={filterEntryTypes}
             filterAssignee={filterAssignee}
@@ -2668,7 +2833,7 @@ function WorkspaceSwitcherDropdown({
       document.removeEventListener('mousedown', handleClick)
       document.removeEventListener('keydown', handleKey)
     }
-  }, [onClose])
+  }, [onClose, containerRef])
 
   return (
     <div
@@ -2830,6 +2995,7 @@ function CreateWorkspaceModal({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const currentDefault = allWorkspaces?.find(w => w.is_default && w.id !== editingWorkspace?.id)
   const otherWorkspaces = allWorkspaces?.filter(w => w.id !== editingWorkspace?.id) ?? []
   const inputRef = useRef<HTMLInputElement>(null)
@@ -2915,14 +3081,19 @@ function CreateWorkspaceModal({
   async function handleDelete() {
     if (!editingWorkspace || !deleteTargetId || deleting) return
     setDeleting(true)
+    setDeleteError(null)
     const supabase = createClient()
 
-    // Move all entries to target workspace
+    // Move all entries to target workspace — except the scratchpad: a DB trigger
+    // forbids moving it between workspaces (each workspace has exactly one), and
+    // its raise would abort the whole multi-row update. It's removed by the
+    // workspace_id ON DELETE CASCADE when the workspace row is deleted below.
     const { error: moveBlocksErr } = await supabase
       .from('journal_blocks')
       .update({ workspace_id: deleteTargetId })
       .eq('workspace_id', editingWorkspace.id)
-    if (moveBlocksErr) { console.error(moveBlocksErr); setDeleting(false); return }
+      .eq('is_scratch', false)
+    if (moveBlocksErr) { console.error(moveBlocksErr); setDeleteError('Failed to move entries to the target workspace.'); setDeleting(false); return }
 
     // Move workspace-scoped properties, renaming on collision
     const { data: srcProps } = await supabase
@@ -2940,7 +3111,7 @@ function CreateWorkspaceModal({
         updates.name = `${prop.name} (From ${editingWorkspace.name})`
       }
       const { error } = await supabase.from('properties').update(updates).eq('id', prop.id)
-      if (error) { console.error(error); setDeleting(false); return }
+      if (error) { console.error(error); setDeleteError('Failed to move custom properties to the target workspace.'); setDeleting(false); return }
     }
 
     // If this was the default workspace, make the target the default
@@ -2953,7 +3124,7 @@ function CreateWorkspaceModal({
       .from('workspaces')
       .delete()
       .eq('id', editingWorkspace.id)
-    if (deleteErr) { console.error(deleteErr); setDeleting(false); return }
+    if (deleteErr) { console.error(deleteErr); setDeleteError('Failed to delete the workspace.'); setDeleting(false); return }
 
     onDeleted?.(editingWorkspace.id, deleteTargetId)
   }
@@ -3051,7 +3222,7 @@ function CreateWorkspaceModal({
         {isEditing && otherWorkspaces.length > 0 && (
           <div className="px-5 pb-1">
             <button
-              onClick={() => { setDeleteTargetId(otherWorkspaces[0]?.id ?? null); setShowDeleteConfirm(true) }}
+              onClick={() => { setDeleteTargetId(otherWorkspaces[0]?.id ?? null); setDeleteError(null); setShowDeleteConfirm(true) }}
               className="text-xs text-red-400 hover:text-red-600 transition-colors"
             >
               Delete this workspace...
@@ -3132,6 +3303,9 @@ function CreateWorkspaceModal({
                   </option>
                 ))}
               </select>
+              {deleteError && (
+                <p className="text-xs text-red-600 mt-2">{deleteError}</p>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">

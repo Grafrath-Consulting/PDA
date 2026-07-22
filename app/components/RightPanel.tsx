@@ -100,6 +100,7 @@ interface Props {
   filterStartFrom?: string
   filterStartTo?: string
   hasActiveFilters?: boolean
+  onTaskCompleted?: (blockId: string) => void
 }
 
 export function RightPanel({
@@ -121,6 +122,7 @@ export function RightPanel({
   filterStartFrom,
   filterStartTo,
   hasActiveFilters,
+  onTaskCompleted,
 }: Props) {
   const { activeWorkspaceId, isGlobalView, workspaces } = useWorkspace()
   const { allProperties, propertiesForWorkspace } = useProperties()
@@ -332,7 +334,10 @@ export function RightPanel({
     setDueTasks(prev => prev.filter(t => t.id !== taskId))
     setFutureTasks(prev => prev.filter(t => t.id !== taskId))
     const supabase = createClient()
-    await supabase.from('journal_blocks').update({ status: 'complete' }).eq('id', taskId)
+    // Match the card UI's completion semantics: task_status drives the done
+    // styling and status stays active — no auto-archive.
+    await supabase.from('journal_blocks').update({ task_status: 'done' }).eq('id', taskId)
+    onTaskCompleted?.(taskId)
   }
 
   function wsColor(workspaceId: string | null): string | null {

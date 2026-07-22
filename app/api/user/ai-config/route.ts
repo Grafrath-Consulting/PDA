@@ -76,7 +76,7 @@ export async function DELETE() {
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const svc = getServiceSupabase()
-  await svc
+  const { error } = await svc
     .from('user_ai_config')
     .upsert({
       user_id: user.id,
@@ -84,6 +84,11 @@ export async function DELETE() {
       api_key_hint: null,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'user_id' })
+
+  if (error) {
+    console.error('[ai-config] Delete error:', error)
+    return Response.json({ error: 'Failed to remove API key' }, { status: 500 })
+  }
 
   return Response.json({ ok: true })
 }

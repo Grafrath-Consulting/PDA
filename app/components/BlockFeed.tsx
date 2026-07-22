@@ -254,9 +254,16 @@ export function BlockFeed({
     )
   }
 
+  // Ids already rendered as pinned/feed cards. A pulled-in copy of the same
+  // block would mount a second live editor for one row (duplicate DOM ids,
+  // divergent edits), so those entries are suppressed — the feed card is the
+  // primary render once the block pages in or matches the active filters.
+  const feedIds = new Set([...(pinnedBlocks ?? []).map(b => b.id), ...blocks.map(b => b.id)])
+  const visiblePulled = (pulledInCards ?? []).filter(p => !feedIds.has(p.block.id))
+
   // Pulled cards shown directly below a given source card.
   function renderPulledBelow(sourceId: string) {
-    const items = (pulledInCards ?? []).filter(p => p.sourceId === sourceId)
+    const items = visiblePulled.filter(p => p.sourceId === sourceId)
     return items.length ? items.map(renderPulledItem) : null
   }
 
@@ -264,8 +271,7 @@ export function BlockFeed({
   // (e.g. opened from the Focus panel or the scratchpad), shown at the top so
   // they're never orphaned/invisible.
   function renderPulledTop() {
-    const rendered = new Set([...(pinnedBlocks ?? []).map(b => b.id), ...blocks.map(b => b.id)])
-    const items = (pulledInCards ?? []).filter(p => p.sourceId === null || !rendered.has(p.sourceId))
+    const items = visiblePulled.filter(p => p.sourceId === null || !feedIds.has(p.sourceId))
     return items.length ? items.map(renderPulledItem) : null
   }
 

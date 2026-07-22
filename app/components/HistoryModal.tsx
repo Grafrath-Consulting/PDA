@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { sanitizeHtml } from '@/lib/sanitize'
 import { BlockVersion } from '../types'
 
 interface AttachmentEvent {
@@ -123,7 +124,7 @@ export function HistoryModal({ blockId, onClose, onRevert }: Props) {
                     </button>
                   </div>
                   {v.content
-                    ? <div className="tiptap-content text-gray-700" dangerouslySetInnerHTML={{ __html: v.content }} />
+                    ? <div className="tiptap-content text-gray-700" dangerouslySetInnerHTML={{ __html: sanitizeHtml(v.content) }} />
                     : <p className="text-gray-300 italic text-sm">(empty)</p>
                   }
                 </div>

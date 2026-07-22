@@ -102,6 +102,6 @@ export async function POST(request: Request) {
     return Response.json({ results, scores, matchedChunks })
   } catch (err) {
     console.error('[ai-search] Error:', err)
-    return Response.json({ error: err instanceof Error ? err.message : 'Search failed' }, { status: 500 })
+    return Response.json({ error: 'Search failed' }, { status: 500 })
   }
 }

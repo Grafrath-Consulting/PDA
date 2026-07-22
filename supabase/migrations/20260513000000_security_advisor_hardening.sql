@@ -70,4 +70,13 @@ $$;
 
 revoke execute on function public.handle_new_user()     from public, anon, authenticated;
 revoke execute on function public.handle_block_update() from public, anon, authenticated;
-revoke execute on function public.rls_auto_enable()     from public, anon, authenticated;
+
+-- rls_auto_enable exists only on the original project (created outside the
+-- migration chain); guard the revoke so fresh databases don't fail on 42883.
+do $$
+begin
+  if to_regprocedure('public.rls_auto_enable()') is not null then
+    revoke execute on function public.rls_auto_enable() from public, anon, authenticated;
+  end if;
+end;
+$$;

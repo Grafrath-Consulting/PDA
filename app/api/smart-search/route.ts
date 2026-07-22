@@ -180,7 +180,7 @@ export async function POST(request: Request) {
     })
   } catch (err) {
     console.error('[smart-search] Error:', err)
-    return Response.json({ error: err instanceof Error ? err.message : 'Search failed' }, { status: 500 })
+    return Response.json({ error: 'Search failed' }, { status: 500 })
   }
 }
 
@@ -284,13 +284,15 @@ function extractSearchWords(query: string): string[] {
 }
 
 function wordFilter(w: string): string {
-  if (w.length <= 4) {
+  // Strip PostgREST filter delimiters so a word can't corrupt the .or() group
+  const word = w.replace(/[,()"\\]/g, '')
+  if (word.length <= 4) {
     // Use PostgreSQL word-boundary regex for short words to avoid
     // "mom" matching "moment", "to" matching "tomorrow", etc.
-    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     return `content.imatch.\\y${escaped}\\y`
   }
-  return `content.ilike.%${w}%`
+  return `content.ilike.%${word}%`
 }
 
 function buildOrFilter(words: string[]): string {
@@ -419,9 +421,13 @@ async function runFilteredExactSearch(
     .select('*')
     .eq('user_id', userId)
     .eq('is_scratch', false)
-    .is('deleted_at', null)
     .order('created_at', { ascending: false })
     .limit(limit)
+
+  // Soft deletion is tracked by deleted_at, not status — exclude deleted rows
+  // unless the parsed query explicitly asked for the Deleted bucket.
+  const wantsDeleted = parsed.statuses?.includes('deleted') ?? false
+  if (!wantsDeleted) q = q.is('deleted_at', null)
 
   if (workspaceId) q = q.eq('workspace_id', workspaceId)
 
@@ -457,7 +463,13 @@ async function runFilteredExactSearch(
       if (s === 'active') dbStatuses.push('active')
       if (s === 'archived') dbStatuses.push('archived', 'complete')
     }
-    if (dbStatuses.length > 0) q = q.in('status', dbStatuses)
+    if (wantsDeleted && dbStatuses.length > 0) {
+      q = q.or(`and(status.in.(${dbStatuses.join(',')}),deleted_at.is.null),deleted_at.not.is.null`)
+    } else if (wantsDeleted) {
+      q = q.not('deleted_at', 'is', null)
+    } else if (dbStatuses.length > 0) {
+      q = q.in('status', dbStatuses)
+    }
   } else {
     q = q.eq('status', 'active')
   }

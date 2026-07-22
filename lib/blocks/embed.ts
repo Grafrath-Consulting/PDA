@@ -29,12 +29,17 @@ export async function embedBlock(
 
     const chunks = chunkText(block.content ?? '')
     if (chunks.length === 0) {
-      await svc.from('block_chunks').delete().eq('block_id', blockId)
+      const { error: deleteError } = await svc.from('block_chunks').delete().eq('block_id', blockId)
+      if (deleteError) {
+        console.error('[embedBlock] chunk delete error:', deleteError)
+        return { ok: false, error: 'chunk_delete_failed' }
+      }
       return { ok: true, chunks: 0 }
     }
 
+    // Embed first: old chunks are only removed once the new embeddings
+    // exist, so a Voyage failure can never leave the block with no index.
     const embeddings = await embedTexts(chunks)
-    await svc.from('block_chunks').delete().eq('block_id', blockId)
 
     const rows = chunks.map((text, i) => ({
       block_id: blockId,
@@ -43,7 +48,18 @@ export async function embedBlock(
       chunk_text: text,
       embedding: JSON.stringify(embeddings[i]),
     }))
-    await svc.from('block_chunks').insert(rows)
+
+    const { error: deleteError } = await svc.from('block_chunks').delete().eq('block_id', blockId)
+    if (deleteError) {
+      console.error('[embedBlock] chunk delete error:', deleteError)
+      return { ok: false, error: 'chunk_delete_failed' }
+    }
+
+    const { error: insertError } = await svc.from('block_chunks').insert(rows)
+    if (insertError) {
+      console.error('[embedBlock] chunk insert error:', insertError)
+      return { ok: false, error: 'chunk_insert_failed' }
+    }
 
     return { ok: true, chunks: chunks.length }
   } catch (err) {

@@ -203,6 +203,7 @@ export function McpSettingsPanel() {
   }
 
   async function handleCreate() {
+    if (creating) return
     const label = labelInput.trim()
     if (!label) return
     setCreating(true)

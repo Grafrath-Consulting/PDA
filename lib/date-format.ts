@@ -123,8 +123,9 @@ export function formatTimestamp(
 
 // Detection ignores seconds: the 30-minute picker can't produce 23:59 or
 // 00:00:30, so any UTC instant whose hour/minute matches the sentinel was
-// written as date-only intent — either by us (23:59:59Z / 00:00:00Z) or by
-// an MCP client that sent `T23:59:00-05:00` style "end of day" timestamps.
+// written as date-only intent. Offset variants like `T23:59:00-05:00` from
+// MCP clients are converted to the canonical UTC literal at save time (see
+// normaliseDueDate/normaliseStartDate in lib/blocks/save.ts).
 export function isDueDateOnly(iso: string): boolean {
   const d = new Date(iso)
   return d.getUTCHours() === 23 && d.getUTCMinutes() === 59

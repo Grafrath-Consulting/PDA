@@ -1,13 +1,28 @@
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createClient } from '@supabase/supabase-js'
 
+const EMAIL_RE = /^[^\s@,;<>"()]+@[^\s@,;<>"()]+\.[^\s@,;<>"()]+$/
+const MAX_RECIPIENTS = 20
+
+// Strip CR/LF so request-supplied values cannot inject additional MIME headers
+function stripHeaderBreaks(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ').trim()
+}
+
+// RFC 2047 encoded-word for non-ASCII subjects; plain ASCII passes through
+function encodeSubject(subject: string): string {
+  const clean = stripHeaderBreaks(subject)
+  if (/^[\x20-\x7e]*$/.test(clean)) return clean
+  return `=?UTF-8?B?${Buffer.from(clean, 'utf8').toString('base64')}?=`
+}
+
 // Build an RFC 2822 email and base64url-encode it for Gmail API
 function buildRawEmail(to: string[], subject: string, body: string, from: string): string {
   const toHeader = to.join(', ')
   const message = [
-    `From: ${from}`,
+    `From: ${stripHeaderBreaks(from)}`,
     `To: ${toHeader}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeSubject(subject)}`,
     'Content-Type: text/plain; charset=UTF-8',
     '',
     body,
@@ -72,11 +87,20 @@ export async function POST(request: Request) {
   let body: { to: string[]; subject: string; body: string }
   try {
     body = await request.json()
-    if (!body.to?.length || !body.subject || !body.body) {
+    if (!Array.isArray(body.to) || !body.to.length || !body.subject || !body.body) {
       return Response.json({ error: 'Missing required fields (to, subject, body)' }, { status: 400 })
     }
   } catch {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  if (body.to.length > MAX_RECIPIENTS) {
+    return Response.json({ error: `Too many recipients (max ${MAX_RECIPIENTS})` }, { status: 400 })
+  }
+  const recipients = body.to.map(r => String(r).trim())
+  const invalid = recipients.find(r => !EMAIL_RE.test(r))
+  if (invalid !== undefined) {
+    return Response.json({ error: 'Invalid recipient email address' }, { status: 400 })
   }
 
   // Retrieve the user's Google provider tokens from auth.users using the service role key.
@@ -116,7 +140,7 @@ export async function POST(request: Request) {
   }
 
   const senderEmail = user.email ?? 'noreply@example.com'
-  const rawEmail = buildRawEmail(body.to, body.subject, body.body, senderEmail)
+  const rawEmail = buildRawEmail(recipients, body.subject, body.body, senderEmail)
 
   // Attempt to send, refresh token on 401, retry once
   if (accessToken) {

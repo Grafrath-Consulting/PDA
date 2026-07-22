@@ -82,7 +82,7 @@ export async function POST(request: Request) {
   const { data: profileData } = await supabase.from('profiles').select('date_format, time_format, timezone').eq('id', user.id).single()
   const userDateFmt = (profileData?.date_format ?? 'MM/DD/YYYY') as DateFormatOption
   const userTimeFmt = (profileData?.time_format ?? '12h') as TimeFormatOption
-  const userTz = (profileData?.timezone as string | undefined) ?? 'America/Chicago'
+  const userTz = (profileData?.timezone as string | undefined) ?? 'UTC'
   // Local-day bounds (in the user's zone) as true-UTC instants for querying.
   const fromBound = zonedToUtcIso(dateFrom, '00:00:00', userTz)
   const toBound = zonedToUtcIso(dateTo, '23:59:59', userTz)
@@ -166,7 +166,9 @@ export async function POST(request: Request) {
   if (!body.summaryOnly || body.includeAiSummary) {
     let q = supabase.from('journal_blocks')
       .select('id, content, entry_type, status, task_status, owner_id, due_date, due_date_type, workspace_id')
-      .eq('user_id', user.id).eq('entry_type', 'task').eq('status', 'complete').is('deleted_at', null)
+      .eq('user_id', user.id).eq('entry_type', 'task').is('deleted_at', null)
+      // The card UI marks tasks done via task_status; MCP may still write status='complete'.
+      .or('status.eq.complete,task_status.eq.done')
       .gte('updated_at', fromBound).lte('updated_at', toBound)
       .order('updated_at', { ascending: false }).limit(20)
     q = applyFilters(q)

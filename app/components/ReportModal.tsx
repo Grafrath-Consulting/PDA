@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useWorkspace } from '@/context/WorkspaceContext'
+import { useDateFormat } from '@/context/DateFormatContext'
+import { zonedDateStr } from '@/lib/date-format'
 import { getScheme } from '@/constants/workspaceColorSchemes'
 
 interface ReportTemplate {
@@ -28,26 +30,33 @@ const DATE_RANGES = [
   { value: 'custom', label: 'Custom range' },
 ] as const
 
-function resolveDateRange(type: string, customFrom?: string | null, customTo?: string | null): { from: string; to: string } {
-  const today = new Date().toISOString().split('T')[0]
+// Today's calendar date in the user's zone — the server interprets the
+// range strings as dates in the profile timezone, so UTC dates are wrong
+// for evening use west of UTC.
+function zonedTodayStr(timeZone: string): string {
+  return zonedDateStr(new Date().toISOString(), timeZone)
+}
+
+function shiftDateStr(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + days)
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+}
+
+function resolveDateRange(type: string, timeZone: string, customFrom?: string | null, customTo?: string | null): { from: string; to: string } {
+  const today = zonedTodayStr(timeZone)
   switch (type) {
     case 'yesterday': {
-      const d = new Date(); d.setDate(d.getDate() - 1)
-      const y = d.toISOString().split('T')[0]
+      const y = shiftDateStr(today, -1)
       return { from: y, to: y }
     }
-    case 'last_7': {
-      const d = new Date(); d.setDate(d.getDate() - 6)
-      return { from: d.toISOString().split('T')[0], to: today }
-    }
-    case 'last_30': {
-      const d = new Date(); d.setDate(d.getDate() - 29)
-      return { from: d.toISOString().split('T')[0], to: today }
-    }
-    case 'last_90': {
-      const d = new Date(); d.setDate(d.getDate() - 89)
-      return { from: d.toISOString().split('T')[0], to: today }
-    }
+    case 'last_7':
+      return { from: shiftDateStr(today, -6), to: today }
+    case 'last_30':
+      return { from: shiftDateStr(today, -29), to: today }
+    case 'last_90':
+      return { from: shiftDateStr(today, -89), to: today }
     case 'custom':
       return { from: customFrom ?? today, to: customTo ?? today }
     default: // today
@@ -61,6 +70,7 @@ interface Props { userId: string; onClose: () => void }
 
 export function ReportModal({ userId, onClose }: Props) {
   const { workspaces, activeWorkspaceId } = useWorkspace()
+  const { timezone } = useDateFormat()
 
   const [step, setStep] = useState<Step>('menu')
   const [templates, setTemplates] = useState<ReportTemplate[]>([])
@@ -70,8 +80,8 @@ export function ReportModal({ userId, onClose }: Props) {
   const [templateId, setTemplateId] = useState<string | null>(null)
   const [templateName, setTemplateName] = useState('')
   const [dateRangeType, setDateRangeType] = useState('today')
-  const [customFrom, setCustomFrom] = useState(() => new Date().toISOString().split('T')[0])
-  const [customTo, setCustomTo] = useState(() => new Date().toISOString().split('T')[0])
+  const [customFrom, setCustomFrom] = useState(() => zonedTodayStr(timezone))
+  const [customTo, setCustomTo] = useState(() => zonedTodayStr(timezone))
   const [selectedWorkspaces, setSelectedWorkspaces] = useState<Set<string>>(new Set())
   const [includeAiSummary, setIncludeAiSummary] = useState(false)
   const [summaryOnly, setSummaryOnly] = useState(false)
@@ -118,8 +128,8 @@ export function ReportModal({ userId, onClose }: Props) {
     setTemplateId(null)
     setTemplateName('')
     setDateRangeType('today')
-    setCustomFrom(new Date().toISOString().split('T')[0])
-    setCustomTo(new Date().toISOString().split('T')[0])
+    setCustomFrom(zonedTodayStr(timezone))
+    setCustomTo(zonedTodayStr(timezone))
     setSelectedWorkspaces(activeWorkspaceId ? new Set([activeWorkspaceId]) : new Set())
     setIncludeAiSummary(false)
     setSummaryOnly(false)
@@ -167,7 +177,7 @@ export function ReportModal({ userId, onClose }: Props) {
     setGenerating(true)
     setError(null)
     try {
-      const { from, to } = resolveDateRange(dateRangeType, customFrom, customTo)
+      const { from, to } = resolveDateRange(dateRangeType, timezone, customFrom, customTo)
       const wsIds = Array.from(selectedWorkspaces)
       const res = await fetch('/api/report/generate', {
         method: 'POST',
@@ -208,7 +218,7 @@ export function ReportModal({ userId, onClose }: Props) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${(templateName || 'Report').replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toISOString().split('T')[0]}.txt`
+    a.download = `${(templateName || 'Report').replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toLocaleDateString('en-CA')}.txt`
     a.click()
     URL.revokeObjectURL(url)
   }

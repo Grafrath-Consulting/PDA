@@ -100,7 +100,11 @@ export function AiSettingsPanel({ userId, section }: { userId: string; section: 
     setKeySaving(true)
     setKeyMessage(null)
     try {
-      await fetch('/api/user/ai-config', { method: 'DELETE' })
+      const res = await fetch('/api/user/ai-config', { method: 'DELETE' })
+      if (!res.ok) {
+        setKeyMessage({ type: 'error', text: 'Failed to remove API key. Please try again.' })
+        return
+      }
       setKeyConfigured(false)
       setKeyHint(null)
       setKeyMessage({ type: 'success', text: 'API key removed.' })

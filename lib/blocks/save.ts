@@ -1,34 +1,33 @@
 import { SupabaseClient } from '@supabase/supabase-js'
+import { sanitizeHtml } from '@/lib/sanitize'
 import { embedBlock } from './embed'
 
 // MCP clients send wall-clock-with-offset timestamps like "T23:59:00-05:00"
-// to express "end of day" / "no specific time". Normalise those to the
-// canonical UTC-literal sentinel so detection works in any viewer's zone.
-// (See isDueDateOnly / isStartDateOnly in lib/date-format.ts.)
+// to express "end of day" / "no specific time". Detect that wall-clock time
+// on the literal ISO string — the UTC-converted instant lands on a different
+// hour for every non-zero offset — and normalise to the canonical UTC-literal
+// sentinel on the client's calendar date, so detection works in any viewer's
+// zone. (See isDueDateOnly / isStartDateOnly in lib/date-format.ts.)
 function normaliseDueDate(iso: string | null | undefined): string | null | undefined {
   if (iso == null) return iso
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  if (d.getUTCHours() === 23 && d.getUTCMinutes() === 59) {
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T23:59:59.000Z`
-  }
-  return iso
+  const m = /^(\d{4}-\d{2}-\d{2})T23:59(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/.exec(iso.trim())
+  return m ? `${m[1]}T23:59:59.000Z` : iso
 }
 
 function normaliseStartDate(iso: string | null | undefined): string | null | undefined {
   if (iso == null) return iso
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T00:00:00.000Z`
-  }
-  return iso
+  const m = /^(\d{4}-\d{2}-\d{2})(?:T00:00(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.exec(iso.trim())
+  return m ? `${m[1]}T00:00:00.000Z` : iso
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 export interface CreateBlockInput {
   userId: string
   workspaceId: string
-  content: string                // HTML or plain text; stored as-is
+  content: string                // HTML or plain text; sanitized before storage
   entryType?: 'info' | 'task'
   propertyValueIds?: string[]
   // Task-only fields. Ignored unless entryType === 'task'.
@@ -82,7 +81,7 @@ export async function createBlockFromMcp(
     .insert({
       user_id: input.userId,
       workspace_id: input.workspaceId,
-      content: input.content,
+      content: sanitizeHtml(input.content),
       status: 'active',
       entry_type: entryType,
       via_mcp: true,
@@ -110,7 +109,8 @@ export async function createBlockFromMcp(
       .map(pvId => ({ entry_id: block.id, property_value_id: pvId }))
 
     if (rows.length > 0) {
-      await svc.from('entry_properties').insert(rows)
+      const { error: propError } = await svc.from('entry_properties').insert(rows)
+      if (propError) console.error('[createBlockFromMcp] property attach error:', propError)
     }
   }
 
@@ -164,8 +164,8 @@ export async function updateBlockFromMcp(
   if (input.content !== undefined) {
     const html = input.content.trim().startsWith('<')
       ? input.content
-      : `<p>${input.content.split(/\n{2,}/).map(p => p.replace(/\n/g, '<br>')).join('</p><p>')}</p>`
-    patch.content = html
+      : `<p>${escapeHtml(input.content).split(/\n{2,}/).map(p => p.replace(/\n/g, '<br>')).join('</p><p>')}</p>`
+    patch.content = sanitizeHtml(html)
     contentChanged = true
   }
   if (input.taskStatus !== undefined) patch.task_status = input.taskStatus

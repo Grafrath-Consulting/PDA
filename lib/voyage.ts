@@ -17,6 +17,7 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({ input: batch, model }),
+      signal: AbortSignal.timeout(30_000),
     })
 
     if (!res.ok) {
@@ -24,10 +25,19 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
       throw new Error(`Voyage API error ${res.status}: ${body}`)
     }
 
-    const data = await res.json()
-    const embeddings = (data.data as { embedding: number[]; index: number }[])
+    const data = await res.json().catch(() => null)
+    const items = data?.data as { embedding: number[]; index: number }[] | undefined
+    if (!Array.isArray(items) || items.length !== batch.length) {
+      throw new Error(
+        `Voyage API returned unexpected response shape: expected ${batch.length} embeddings, got ${Array.isArray(items) ? items.length : 'none'}`
+      )
+    }
+    const embeddings = [...items]
       .sort((a, b) => a.index - b.index)
       .map(d => d.embedding)
+    if (embeddings.some(e => !Array.isArray(e) || e.length === 0)) {
+      throw new Error('Voyage API returned a malformed embedding in the batch')
+    }
     results.push(...embeddings)
   }
 

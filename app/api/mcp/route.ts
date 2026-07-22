@@ -13,7 +13,15 @@ async function handle(req: Request): Promise<Response> {
     ({ userId } = await validateBearer(req))
   } catch (e) {
     if (e instanceof McpAuthError) {
-      return Response.json({ error: e.message }, { status: e.status })
+      // RFC 6750 §3: 401s must carry a WWW-Authenticate challenge; the
+      // resource_metadata URI lets MCP clients discover the authorization
+      // server (RFC 9728).
+      const headers: Record<string, string> = {}
+      if (e.status === 401) {
+        const origin = new URL(req.url).origin
+        headers['WWW-Authenticate'] = `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`
+      }
+      return Response.json({ error: e.message }, { status: e.status, headers })
     }
     throw e
   }

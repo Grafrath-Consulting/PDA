@@ -81,7 +81,19 @@ export async function POST(request: Request) {
   if (codeRow.code_challenge_method !== 'S256') return err('invalid_grant', 'Unsupported PKCE method')
   if (!verifyPkceS256(codeVerifier, codeRow.code_challenge)) return err('invalid_grant', 'PKCE verification failed')
 
-  await svc.from('mcp_oauth_codes').update({ used_at: new Date().toISOString() }).eq('id', codeRow.id)
+  // Atomic single-use consume: the conditional update guarantees only one of
+  // two concurrent redemptions claims the code.
+  const { data: consumed, error: consumeErr } = await svc
+    .from('mcp_oauth_codes')
+    .update({ used_at: new Date().toISOString() })
+    .eq('id', codeRow.id)
+    .is('used_at', null)
+    .select('id')
+  if (consumeErr) {
+    console.error('[oauth/token] code consume error:', consumeErr)
+    return err('server_error', 'Failed to redeem code', 500)
+  }
+  if (!consumed || consumed.length === 0) return err('invalid_grant', 'Code already used')
 
   // Issue an access token. Reuses mcp_tokens so /api/mcp's bearer lookup
   // doesn't have to special-case OAuth-issued tokens.

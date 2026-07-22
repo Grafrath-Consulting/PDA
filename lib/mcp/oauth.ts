@@ -30,6 +30,36 @@ export function generateAuthCode(): { raw: string; hash: string } {
   return { raw, hash: hashToken(raw) }
 }
 
+// Signed, short-lived consent nonce binding the authorize consent form to the
+// user/client/redirect_uri it was rendered for, so a cross-site POST cannot
+// forge an approval. Keyed off the server-only service-role secret.
+const CONSENT_NONCE_TTL_MS = 10 * 60 * 1000
+
+function consentKey(): Buffer {
+  const secret = process.env.SUPABASE_SECRET_KEY
+  if (!secret) throw new Error('SUPABASE_SECRET_KEY is not set')
+  return crypto.createHash('sha256').update(`pda-oauth-consent:${secret}`).digest()
+}
+
+function consentSig(userId: string, clientId: string, redirectUri: string, exp: number): string {
+  return crypto.createHmac('sha256', consentKey())
+    .update(`${userId}\n${clientId}\n${redirectUri}\n${exp}`)
+    .digest('base64url')
+}
+
+export function createConsentNonce(userId: string, clientId: string, redirectUri: string): string {
+  const exp = Date.now() + CONSENT_NONCE_TTL_MS
+  return `${exp}.${consentSig(userId, clientId, redirectUri, exp)}`
+}
+
+export function verifyConsentNonce(nonce: string, userId: string, clientId: string, redirectUri: string): boolean {
+  const dot = nonce.indexOf('.')
+  if (dot === -1) return false
+  const exp = Number(nonce.slice(0, dot))
+  if (!Number.isFinite(exp) || exp < Date.now()) return false
+  return constantTimeEqual(nonce.slice(dot + 1), consentSig(userId, clientId, redirectUri, exp))
+}
+
 // Constant-time comparison to mitigate timing attacks on hash comparison.
 export function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false

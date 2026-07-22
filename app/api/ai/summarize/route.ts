@@ -51,7 +51,13 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const apiKey = await getUserApiKey(user.id)
+  let apiKey: string | null
+  try {
+    apiKey = await getUserApiKey(user.id)
+  } catch (err) {
+    console.error('[summarize] Failed to read API key:', err)
+    return Response.json({ error: 'key_decrypt_failed', message: 'Your stored API key could not be read. Re-enter it in Settings \u2192 AI.' }, { status: 402 })
+  }
   if (!apiKey) {
     return Response.json({ error: 'no_api_key', message: 'No API key configured. Add your Anthropic API key in Settings \u2192 AI.' }, { status: 402 })
   }
@@ -94,10 +100,6 @@ export async function POST(request: Request) {
     return Response.json({ summary })
   } catch (err: unknown) {
     console.error('Summarize API error:', err)
-    const apiErr = err as { status?: number; error?: { error?: { message?: string } } }
-    const message = apiErr?.error?.error?.message
-      ?? (err instanceof Error ? err.message : 'Summarization failed')
-    const status = apiErr?.status ?? 500
-    return Response.json({ error: true, message }, { status })
+    return Response.json({ error: true, message: 'Summarization failed' }, { status: 500 })
   }
 }

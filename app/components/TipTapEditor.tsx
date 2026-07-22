@@ -17,6 +17,7 @@ import type { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion
 import { MentionSuggestionList, MentionSuggestionHandle, MentionSuggestionItem } from './MentionSuggestion'
 import { useState, useEffect, useLayoutEffect, useImperativeHandle, useRef, forwardRef, useCallback, useMemo, lazy, Suspense } from 'react'
 import { highlightHTML } from '@/lib/highlight-html'
+import { sanitizeHtml } from '@/lib/sanitize'
 import { createPortal } from 'react-dom'
 import data from '@emoji-mart/data'
 
@@ -596,7 +597,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
   }, [editor, content, editable])
 
   const highlightedHTML = useMemo(
-    () => (searchHighlight || matchedChunk) && !editable ? highlightHTML(content, searchHighlight || '', matchedChunk) : '',
+    () => (searchHighlight || matchedChunk) && !editable ? highlightHTML(sanitizeHtml(content), searchHighlight || '', matchedChunk) : '',
     [searchHighlight, matchedChunk, editable, content]
   )
   // Only show the highlight layer if it actually contains highlights
@@ -776,7 +777,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
                 className="w-full px-2 py-1 text-xs text-gray-900 border border-gray-200 rounded outline-none focus:ring-1 focus:ring-amber-300"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { e.preventDefault(); applyLink(editor) }
-                  if (e.key === 'Escape') { setLinkEditing(false); editor.chain().focus().run() }
+                  if (e.key === 'Escape') { e.stopPropagation(); setLinkEditing(false); editor.chain().focus().run() }
                 }}
               />
             </div>
@@ -790,7 +791,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
                 className="w-full px-2 py-1 text-xs text-gray-900 border border-gray-200 rounded outline-none focus:ring-1 focus:ring-amber-300"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { e.preventDefault(); applyLink(editor) }
-                  if (e.key === 'Escape') { setLinkEditing(false); editor.chain().focus().run() }
+                  if (e.key === 'Escape') { e.stopPropagation(); setLinkEditing(false); editor.chain().focus().run() }
                 }}
               />
             </div>

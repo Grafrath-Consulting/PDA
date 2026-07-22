@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import workspaceColorSchemes, { getScheme, WorkspaceColorScheme } from '@/constants/workspaceColorSchemes'
+import { getScheme, WorkspaceColorScheme } from '@/constants/workspaceColorSchemes'
 
 export interface Workspace {
   id: string
@@ -73,18 +73,17 @@ export function WorkspaceProvider({ userId, children }: { userId: string; childr
   }, [])
 
   const reorderWorkspaces = useCallback((fromIndex: number, toIndex: number) => {
-    setWorkspaces(prev => {
-      const next = [...prev]
-      const [moved] = next.splice(fromIndex, 1)
-      next.splice(toIndex, 0, moved)
-      // Persist new order to DB (fire-and-forget)
-      const supabase = createClient()
-      next.forEach((ws, i) => {
-        supabase.from('workspaces').update({ sort_order: i + 1 }).eq('id', ws.id).then(() => {})
-      })
-      return next
+    const next = [...workspaces]
+    const [moved] = next.splice(fromIndex, 1)
+    if (!moved) return
+    next.splice(toIndex, 0, moved)
+    setWorkspaces(next)
+    // Persist new order to DB (fire-and-forget)
+    const supabase = createClient()
+    next.forEach((ws, i) => {
+      supabase.from('workspaces').update({ sort_order: i + 1 }).eq('id', ws.id).then(() => {})
     })
-  }, [])
+  }, [workspaces])
 
   const activeWorkspace = activeWorkspaceId
     ? workspaces.find(w => w.id === activeWorkspaceId) ?? null

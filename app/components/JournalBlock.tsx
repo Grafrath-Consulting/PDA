@@ -22,6 +22,7 @@ import { getPropertyColor } from '@/constants/propertyColors'
 import { useProperties } from '@/context/PropertiesContext'
 import { PropertyBubbles } from './PropertyBubbles'
 import { threeWayMerge } from '@/lib/three-way-merge'
+import { sanitizeHtml } from '@/lib/sanitize'
 import { PropertyEditor } from './PropertyEditor'
 import { AttachmentRow, Attachment } from './AttachmentRow'
 
@@ -208,10 +209,9 @@ function removeTextFromHTML(html: string, needle: string): string {
   }
 
   if (remaining.length > 0) {
-    const stripped = div.textContent ?? ''
-    const pos = stripped.indexOf(needle)
-    if (pos === -1) return html
-    return stripped.slice(0, pos) + stripped.slice(pos + needle.length)
+    // Couldn't match the needle across text nodes (e.g. a selection crossing an
+    // inline mark boundary) — bail out rather than flattening the block's markup.
+    return html
   }
 
   for (const { node, startIdx, endIdx } of nodesToProcess) {
@@ -236,10 +236,9 @@ function replaceTextInHTML(html: string, needle: string, replacement: string): s
       return div.innerHTML
     }
   }
-  const stripped = div.textContent ?? ''
-  const pos = stripped.indexOf(needle)
-  if (pos === -1) return html
-  return stripped.slice(0, pos) + replacement + stripped.slice(pos + needle.length)
+  // No single text node contains the needle (e.g. a selection spanning an
+  // inline mark boundary) — bail out rather than flattening the block's markup.
+  return html
 }
 
 function htmlToText(html: string): string {
@@ -262,6 +261,7 @@ async function generateThumbnail(file: File): Promise<Blob | null> {
   if (!file.type.startsWith('image/')) return null
   return new Promise((resolve) => {
     const img = new Image()
+    const objectUrl = URL.createObjectURL(file)
     img.onload = () => {
       const scale = Math.min(THUMB_SIZE / img.width, THUMB_SIZE / img.height, 1)
       const w = Math.round(img.width * scale)
@@ -270,12 +270,13 @@ async function generateThumbnail(file: File): Promise<Blob | null> {
       canvas.width = w
       canvas.height = h
       const ctx = canvas.getContext('2d')
-      if (!ctx) { resolve(null); return }
+      if (!ctx) { URL.revokeObjectURL(objectUrl); resolve(null); return }
       ctx.drawImage(img, 0, 0, w, h)
+      URL.revokeObjectURL(objectUrl)
       canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.7)
     }
-    img.onerror = () => resolve(null)
-    img.src = URL.createObjectURL(file)
+    img.onerror = () => { URL.revokeObjectURL(objectUrl); resolve(null) }
+    img.src = objectUrl
   })
 }
 
@@ -382,7 +383,7 @@ function AssigneeSelect({ value, people, userId, onChange, onPersonAdded }: {
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Escape') { setOpen(false); setSearch('') }
+                      if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); setSearch('') }
                       if (e.key === 'Enter' && filtered.length === 1) { onChange(filtered[0].id); setOpen(false); setSearch('') }
                     }}
                     placeholder="Search..."
@@ -430,21 +431,21 @@ function AssigneeSelect({ value, people, userId, onChange, onPersonAdded }: {
                 ref={addNameRef}
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setAdding(false) }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') { e.stopPropagation(); setAdding(false) } }}
                 placeholder="Name *"
                 className="w-full text-xs text-gray-900 border border-gray-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-amber-300"
               />
               <input
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setAdding(false) }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') { e.stopPropagation(); setAdding(false) } }}
                 placeholder="Email"
                 className="w-full text-xs text-gray-900 border border-gray-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-amber-300"
               />
               <input
                 value={newCompany}
                 onChange={(e) => setNewCompany(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setAdding(false) }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') { e.stopPropagation(); setAdding(false) } }}
                 placeholder="Company"
                 className="w-full text-xs text-gray-900 border border-gray-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-amber-300"
               />
@@ -648,6 +649,9 @@ export function JournalBlock(props: Props) {
   const suppressBlurRef = useRef(false)
   const datePickerOpenRef = useRef(false)
   const autosavedBlockIdRef = useRef<string | null>(null)
+  // Set when a new entry is discarded so an in-flight autosave insert
+  // deletes its row on arrival instead of resurrecting the ghost entry.
+  const newEntryDiscardedRef = useRef(false)
   const [pendingEntryType, setPendingEntryType] = useState<'info' | 'task'>('info')
   const pendingEntryTypeRef = useRef<'info' | 'task'>('info')
   pendingEntryTypeRef.current = pendingEntryType
@@ -694,6 +698,10 @@ export function JournalBlock(props: Props) {
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedHTMLRef = useRef(props.block?.content ?? '')
   const lastDraftHTMLRef = useRef<string | null>(null)
+  // Editor-normalised form of the content as it was when editing began, so the
+  // dirty check doesn't mistake TipTap's normalisation of externally-authored
+  // HTML (MCP writes, legacy plain text) for a user edit.
+  const editBaselineHTMLRef = useRef<string | null>(null)
   const accessTokenRef = useRef<string | null>(null)
 
 
@@ -760,14 +768,25 @@ export function JournalBlock(props: Props) {
     if (commitTimerRef.current) { clearTimeout(commitTimerRef.current); commitTimerRef.current = null }
   }
 
-  // Capture access token for beforeunload fetch with keepalive
+  // Track access token for beforeunload fetch with keepalive. Supabase rotates
+  // tokens (default 1h TTL), so subscribe to refreshes rather than capturing once.
   useEffect(() => {
-    createClient().auth.getSession().then(({ data }) => {
+    const supabase = createClient()
+    supabase.auth.getSession().then(({ data }) => {
       accessTokenRef.current = data.session?.access_token ?? null
     })
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      accessTokenRef.current = session?.access_token ?? null
+    })
+    return () => sub.subscription.unsubscribe()
   }, [])
 
-  useEffect(() => clearAutosaveTimer, [])
+  useEffect(() => () => {
+    clearAutosaveTimer()
+    clearDraftTimer()
+    clearCommitTimer()
+    if (dateWarningTimer.current) clearTimeout(dateWarningTimer.current)
+  }, [])
 
   // ── Sync content from props into the editor when block is updated externally ──
   // Reacts to both committed content and draft_content (whichever is fresher).
@@ -827,6 +846,11 @@ export function JournalBlock(props: Props) {
         const fragment = range.cloneContents()
         const tempDiv = document.createElement('div')
         tempDiv.appendChild(fragment)
+        // A selection made over the search-highlight overlay includes <mark>
+        // wrappers — unwrap them so they never persist into block content.
+        tempDiv.querySelectorAll('mark.search-highlight, mark.chunk-highlight').forEach(m => {
+          m.replaceWith(...Array.from(m.childNodes))
+        })
         const selHTML = tempDiv.innerHTML
 
         const menuX = rect.left + rect.width / 2
@@ -899,7 +923,7 @@ export function JournalBlock(props: Props) {
     // Directly deactivate the previously focused block (save + unfocus).
     // This is reliable regardless of DOM focus state — no blur chain dependency.
     deactivatePreviousBlock?.()
-    lastSavedHTMLRef.current = liveHTMLRef.current
+    captureEditBaseline()
     setFocused(true)
     // Quick sync check: fetch latest from DB on activation
     {
@@ -1004,6 +1028,18 @@ export function JournalBlock(props: Props) {
     lastSavedHTMLRef.current = html
   }
 
+  // Snapshot the editor's normalised HTML as the baseline for this edit session.
+  // Falls back to liveHTMLRef when the editor handle isn't ready yet.
+  function captureEditBaseline() {
+    const baselineHTML = getEditor()?.getHTML()
+    if (baselineHTML != null) {
+      liveHTMLRef.current = baselineHTML
+      liveTextRef.current = htmlToText(baselineHTML)
+    }
+    editBaselineHTMLRef.current = baselineHTML ?? null
+    lastSavedHTMLRef.current = liveHTMLRef.current
+  }
+
   // ── Deactivate (unfocus) an existing block ──────────────────────────
   function deactivate() {
     deactivatePreviousBlock = null
@@ -1027,7 +1063,7 @@ export function JournalBlock(props: Props) {
         getEditor()?.openLinkEditor(selectedText)
         suppressBlurRef.current = false
       } else {
-        lastSavedHTMLRef.current = liveHTMLRef.current
+        captureEditBaseline()
         setFocused(true)
         deactivatePreviousBlock = () => saveExistingBlock()
         // Double rAF: first for React re-render with editable=true,
@@ -1060,27 +1096,6 @@ export function JournalBlock(props: Props) {
     const currentContent = liveHTMLRef.current || toEditorHTML(block.content)
 
     const supabase = createClient()
-
-    if (action.type === 'create_task') {
-      const newContent = removeTextFromHTML(currentContent, selText)
-      const isEmpty = !htmlToText(newContent).trim()
-      const newStatus: BlockStatus = isEmpty ? 'archived' : 'active'
-      await supabase.from('journal_blocks')
-        .update({ content: newContent, status: newStatus, is_archived: isEmpty })
-        .eq('id', block.id)
-      await supabase.from('tasks').insert({
-        user_id: block.user_id,
-        context_id: block.context_id,
-        title: selText.slice(0, 500),
-        body: selText,
-        status: 'open',
-        task_type: action.taskType,
-        assignee_id: action.assigneeId ?? null,
-      })
-      if (isEmpty) { p.onRemove(block.id); p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true }) }
-      else { syncEditorContent(newContent); p.onUpdate({ ...block, content: newContent, status: newStatus }); deactivate() }
-      return
-    }
 
     if (action.type === 'split_block') {
       const now = new Date().toISOString()
@@ -1204,8 +1219,9 @@ export function JournalBlock(props: Props) {
           setErrorMessage("Couldn't summarize — try selecting more meaningful text.")
           return
         }
-        // Summary is now HTML — use directly for full block, or strip tags for partial replacement
-        const summaryHTML = json.summary
+        // Summary is now HTML — sanitize it (model output can carry injected
+        // markup), then use directly for full block or strip tags for partial replacement
+        const summaryHTML = sanitizeHtml(json.summary)
         const newContent = isFullBlock
           ? summaryHTML
           : replaceTextInHTML(currentContent, selText, summaryHTML.replace(/<[^>]*>/g, ''))
@@ -1223,12 +1239,36 @@ export function JournalBlock(props: Props) {
     }
 
     if (action.type === 'delete_selection') {
-      const newContent = removeTextFromHTML(currentContent, selText)
+      // Prefer deleting via ProseMirror positions (handles selections crossing
+      // mark boundaries); fall back to text-node surgery on the HTML string.
+      const editor = getEditor()
+      const from = menuStateRef.current?.editorFrom ?? 0
+      const to = menuStateRef.current?.editorTo ?? 0
+      let newContent: string
+      if (editor && from > 0 && to > from) {
+        newContent = editor.deleteRange(from, to)
+      } else {
+        newContent = removeTextFromHTML(currentContent, selText)
+      }
+      // Clean up empty list items left behind by deleteRange
+      newContent = newContent
+        .replace(/<li><p><br[^>]*><\/p><\/li>/g, '')
+        .replace(/<li><p>\s*<\/p><\/li>/g, '')
+        .replace(/<(ul|ol)>\s*<\/(ul|ol)>/g, '')
+      if (newContent === currentContent) {
+        setErrorMessage('Could not delete the selection — try editing the text directly.')
+        return
+      }
       const isEmpty = !htmlToText(newContent).trim()
       const newStatus: BlockStatus = isEmpty ? 'archived' : 'active'
-      await supabase.from('journal_blocks')
+      const { error } = await supabase.from('journal_blocks')
         .update({ content: newContent, status: newStatus, is_archived: isEmpty })
         .eq('id', block.id)
+      if (error) {
+        setErrorMessage(`Failed to save changes: ${error.message}`)
+        syncEditorContent(currentContent)
+        return
+      }
       if (isEmpty) { p.onRemove(block.id); p.onBlockArchived?.({ ...block, content: newContent, status: 'archived', is_archived: true }) }
       else { syncEditorContent(newContent); p.onUpdate({ ...block, content: newContent, status: newStatus }); deactivate() }
     }
@@ -1247,10 +1287,12 @@ export function JournalBlock(props: Props) {
     const html = liveHTMLRef.current
     if (html === lastSavedHTMLRef.current) return
     const supabase = createClient()
-    await supabase
+    const { error } = await supabase
       .from('journal_blocks')
       .update({ content: html })
       .eq('id', p.block.id)
+    // On failure keep lastSavedHTMLRef stale so a later save retries the content
+    if (error) { console.error(error); return }
     lastSavedHTMLRef.current = html
   }
 
@@ -1351,33 +1393,45 @@ export function JournalBlock(props: Props) {
       // Flush pending files
       const files = pendingFilesRef.current
       if (files.length > 0) {
+        const failedFiles: string[] = []
         for (const file of files) {
           const storagePath = `${saved.user_id}/${saved.id}/${file.name}`
           const { error: upErr } = await supabase.storage.from('attachments').upload(storagePath, file, { upsert: true })
-          if (!upErr) {
-            let thumbnailPath: string | null = null
-            const thumb = await generateThumbnail(file)
-            if (thumb) {
-              thumbnailPath = `${saved.user_id}/${saved.id}/.thumbs/${file.name}.jpg`
-              await supabase.storage.from('attachments').upload(thumbnailPath, thumb, { upsert: true, contentType: 'image/jpeg' })
-            }
-            await supabase.from('attachments').insert({
-              user_id: saved.user_id,
-              block_id: saved.id,
-              file_name: file.name,
-              file_path: storagePath,
-              file_size: file.size,
-              mime_type: file.type || null,
-              thumbnail_path: thumbnailPath,
-            })
-            await supabase.from('attachment_events').insert({
-              block_id: saved.id,
-              user_id: saved.user_id,
-              event_type: 'added',
-              filename: file.name,
-              file_size: file.size,
-            })
+          if (upErr) {
+            console.error('Upload failed:', upErr)
+            failedFiles.push(file.name)
+            continue
           }
+          let thumbnailPath: string | null = null
+          const thumb = await generateThumbnail(file)
+          if (thumb) {
+            thumbnailPath = `${saved.user_id}/${saved.id}/.thumbs/${file.name}.jpg`
+            await supabase.storage.from('attachments').upload(thumbnailPath, thumb, { upsert: true, contentType: 'image/jpeg' })
+          }
+          const { error: insErr } = await supabase.from('attachments').insert({
+            user_id: saved.user_id,
+            block_id: saved.id,
+            file_name: file.name,
+            file_path: storagePath,
+            file_size: file.size,
+            mime_type: file.type || null,
+            thumbnail_path: thumbnailPath,
+          })
+          if (insErr) {
+            console.error('Insert failed:', insErr)
+            failedFiles.push(file.name)
+            continue
+          }
+          await supabase.from('attachment_events').insert({
+            block_id: saved.id,
+            user_id: saved.user_id,
+            event_type: 'added',
+            filename: file.name,
+            file_size: file.size,
+          })
+        }
+        if (failedFiles.length > 0) {
+          setErrorMessage(`Failed to attach ${failedFiles.map(n => `"${n}"`).join(', ')} — please re-add the file${failedFiles.length > 1 ? 's' : ''} to the saved entry.`)
         }
       }
     }
@@ -1399,6 +1453,8 @@ export function JournalBlock(props: Props) {
     return saved
   }, [])
 
+  const pendingExistingSaveRef = useRef(false)
+  const saveFailedRef = useRef(false)
   const saveExistingBlock = useCallback(async (opts?: { keepFocus?: boolean }) => {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
@@ -1409,7 +1465,12 @@ export function JournalBlock(props: Props) {
     // Only deactivate when explicitly leaving the block, not on background save
     if (!opts?.keepFocus) setFocused(false)
 
-    if (savingRef.current) return
+    if (savingRef.current) {
+      // A save is in flight — queue this one so trailing edits aren't dropped
+      pendingExistingSaveRef.current = true
+      return
+    }
+    pendingExistingSaveRef.current = false
 
     const html = liveHTMLRef.current
     const text = liveTextRef.current.trim()
@@ -1421,33 +1482,55 @@ export function JournalBlock(props: Props) {
 
     const oldText = htmlToText(block.content ?? '').trim()
     const oldHtml = block.content ?? ''
-    if (text === oldText && html === oldHtml) {
+    // Also treat the editor-normalised form of the stored content as unchanged,
+    // so click-through of externally-authored blocks doesn't create a spurious save.
+    if (text === oldText && (html === oldHtml || html === editBaselineHTMLRef.current)) {
       savingRef.current = false
+      if (saveFailedRef.current) { saveFailedRef.current = false; setErrorMessage(null) }
       return
     }
 
     if (!text) {
-      await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
+      const { error } = await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true }).eq('id', block.id)
+      savingRef.current = false
+      if (error) { setErrorMessage(`Failed to archive entry: ${error.message}`); return }
       p.onRemove(block.id)
       p.onBlockArchived?.({ ...block, status: 'archived', is_archived: true })
-      savingRef.current = false
       return
     }
 
     // Version history is handled by the handle_block_update trigger,
     // which inserts the old content into block_versions before any update.
-    const { data: saved } = await supabase
+    const { data: saved, error } = await supabase
       .from('journal_blocks')
       .update({ content: html, draft_content: null })
       .eq('id', block.id)
       .select()
       .single()
+    savingRef.current = false
+    if (error) {
+      // Leave all refs untouched so the edits stay dirty, surface the failure,
+      // and retry in the background — the content is still in liveHTMLRef.
+      saveFailedRef.current = true
+      setErrorMessage('Failed to save changes — retrying…')
+      clearCommitTimer()
+      commitTimerRef.current = setTimeout(() => saveExistingBlock({ keepFocus: true }), 5000)
+      return
+    }
+    if (saveFailedRef.current) {
+      saveFailedRef.current = false
+      setErrorMessage(null)
+    }
     lastSavedHTMLRef.current = html
     lastDraftHTMLRef.current = null
     const savedBlock = (saved as Block) ?? { ...block, content: html, draft_content: null }
     lastSyncedContentRef.current = savedBlock.content
     p.onUpdate(savedBlock)
-    savingRef.current = false
+    // Re-run a save that was queued while this one was in flight
+    if (pendingExistingSaveRef.current) {
+      pendingExistingSaveRef.current = false
+      if (liveHTMLRef.current !== html) saveExistingBlock({ keepFocus: true })
+    }
     // Fire-and-forget: embed block for semantic search
     fetch('/api/ai/embed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blockId: block.id }) }).catch(() => {})
   }, [])
@@ -1538,8 +1621,13 @@ export function JournalBlock(props: Props) {
           .select('id')
           .single()
         if (!error && data) {
-          autosavedBlockIdRef.current = data.id
-          ;(propsRef.current as NewEntryProps).onAutosaveDraft?.(data.id)
+          if (newEntryDiscardedRef.current) {
+            // Entry was discarded while this insert was in flight — remove the row
+            supabase.from('journal_blocks').delete().eq('id', data.id).then(() => {})
+          } else {
+            autosavedBlockIdRef.current = data.id
+            ;(propsRef.current as NewEntryProps).onAutosaveDraft?.(data.id)
+          }
         }
       }
       lastSavedHTMLRef.current = html
@@ -1601,6 +1689,26 @@ export function JournalBlock(props: Props) {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [isNewEntry])
 
+  // Discard a new entry: clear all local state and remove the row the in-place
+  // autosave may already have created, so no ghost entry survives a reload.
+  function discardNewEntry() {
+    newEntryDiscardedRef.current = true
+    liveHTMLRef.current = ''
+    liveTextRef.current = ''
+    clearAutosaveTimer()
+    setPendingPropertyIds(new Set())
+    setPendingFiles([])
+    setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null)
+    setEditorKey(k => k + 1)
+    const p = propsRef.current as NewEntryProps
+    const autosavedId = autosavedBlockIdRef.current
+    autosavedBlockIdRef.current = null
+    p.onAutosaveDraft?.(null)
+    if (autosavedId) {
+      createClient().from('journal_blocks').delete().eq('id', autosavedId).then(() => {})
+    }
+  }
+
   function handleEditorChange(html: string, text: string) {
     liveHTMLRef.current = html
     liveTextRef.current = text
@@ -1611,6 +1719,7 @@ export function JournalBlock(props: Props) {
       if (trimmed && !focused) setFocused(true)
       if (!trimmed && !hasPendingData) { setFocused(false); clearAutosaveTimer(); return }
       // New entries: autosave after inactivity
+      newEntryDiscardedRef.current = false
       clearAutosaveTimer()
       autosaveTimerRef.current = setTimeout(() => autosaveRef.current(), autosaveInterval * 1000)
     } else if (focusedRef.current) {
@@ -1625,128 +1734,81 @@ export function JournalBlock(props: Props) {
     }
   }
 
+  // Save the pending entry through the normal save flow (workspace routing,
+  // autosave reuse, pending property/file flush), then run the follow-up
+  // action on the saved block. Only AI summarize is routed here.
   async function handleNewEntryShortcut(action: SelectionAction) {
-    const p = propsRef.current as NewEntryProps
-    if (savingRef.current) return
-    const html = liveHTMLRef.current
-    const text = liveTextRef.current.trim()
-    if (!text) return
+    if (action.type !== 'summarize') return
+    const saved = await saveNewEntryWithFilterPrompt()
+    if (!saved) return
+    const fullText = htmlToText(saved.content ?? '')
 
-    savingRef.current = true
-    clearAutosaveTimer()
-    const supabase = createClient()
-    const { data, error } = await supabase
-      .from('journal_blocks')
-      .insert({
-        user_id: p.userId,
-        context_id: p.contextId ?? null,
-        content: html,
-        status: 'active',
+    setSummarizing(true)
+    setErrorMessage(null)
+    try {
+      const res = await fetch('/api/ai/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: fullText }),
       })
-      .select()
-      .single()
-
-    savingRef.current = false
-    if (error || !data) { console.error(error); return }
-
-    liveHTMLRef.current = ''
-    liveTextRef.current = ''
-    setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null)
-    setFocused(false)
-    setEditorKey(k => k + 1)
-    p.onSaved(data as Block)
-
-    const saved = data as Block
-    const fullText = htmlToText(html)
-    const supabase2 = createClient()
-
-    if (action.type === 'create_task') {
-      await supabase2.from('journal_blocks')
-        .update({ status: 'archived', is_archived: true })
-        .eq('id', saved.id)
-      await supabase2.from('tasks').insert({
-        user_id: saved.user_id,
-        context_id: saved.context_id,
-        title: fullText.slice(0, 500),
-        body: fullText,
-        status: 'open',
-        task_type: action.taskType,
-        assignee_id: null,
-      })
-      return
-    }
-
-    if (action.type === 'mark_done') {
-      await supabase2.from('tasks').insert({
-        user_id: saved.user_id,
-        context_id: saved.context_id,
-        title: fullText.slice(0, 500),
-        body: fullText,
-        status: 'done',
-        task_type: 'my_task',
-        assignee_id: null,
-      })
-      await supabase2.from('journal_blocks')
-        .update({ status: 'archived', is_archived: true })
-        .eq('id', saved.id)
-      return
-    }
-
-    if (action.type === 'summarize') {
-      setSummarizing(true)
-      setErrorMessage(null)
-      try {
-        const res = await fetch('/api/ai/summarize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: fullText }),
-        })
-        if (!res.ok) {
-          try {
-            const errJson = await res.json()
-            if (errJson.error === 'no_api_key') {
-              setErrorMessage('AI features require an API key. Add yours in Settings \u2192 AI.')
-            } else {
-              setErrorMessage(errJson.message ?? 'Summarization failed')
-            }
-          } catch {
-            setErrorMessage('Summarization failed')
+      if (!res.ok) {
+        try {
+          const errJson = await res.json()
+          if (errJson.error === 'no_api_key') {
+            setErrorMessage('AI features require an API key. Add yours in Settings \u2192 AI.')
+          } else {
+            setErrorMessage(errJson.message ?? 'Summarization failed')
           }
-          return
+        } catch {
+          setErrorMessage('Summarization failed')
         }
-        const json = await res.json()
-        if (!json.summary) return
-        if (isSummaryRefusal(json.summary)) {
-          setErrorMessage("Couldn't summarize — try selecting more meaningful text.")
-          return
-        }
-        await supabase2.from('journal_blocks')
-          .update({ content: json.summary, status: 'active' })
-          .eq('id', saved.id)
-      } finally {
-        setSummarizing(false)
+        return
       }
+      const json = await res.json()
+      if (!json.summary) return
+      if (isSummaryRefusal(json.summary)) {
+        setErrorMessage("Couldn't summarize — try selecting more meaningful text.")
+        return
+      }
+      await createClient().from('journal_blocks')
+        .update({ content: sanitizeHtml(json.summary), status: 'active' })
+        .eq('id', saved.id)
+    } finally {
+      setSummarizing(false)
     }
+  }
+
+  // Cancel editing an existing block: confirm if dirty, revert the editor to
+  // the last saved content, clear any persisted draft, and deactivate.
+  function cancelEdits() {
+    const hasUnsavedChanges = liveHTMLRef.current !== lastSavedHTMLRef.current
+    if (hasUnsavedChanges && !window.confirm('Discard unsaved changes?')) {
+      return
+    }
+    const revertTo = lastSavedHTMLRef.current
+    editorRef.current?.setContent(revertTo)
+    liveHTMLRef.current = revertTo
+    liveTextRef.current = htmlToText(revertTo)
+    // Clear any saved draft since we're reverting
+    const blockId = (propsRef.current as ExistingBlockProps).block?.id
+    if (blockId && lastDraftHTMLRef.current !== null) {
+      lastDraftHTMLRef.current = null
+      createClient().from('journal_blocks').update({ draft_content: null }).eq('id', blockId).then(() => {})
+    }
+    deactivate()
   }
 
   function handleEditorKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Escape' && !isNewEntry && focused) {
       e.preventDefault()
-      const hasUnsavedChanges = liveHTMLRef.current !== lastSavedHTMLRef.current
-      if (hasUnsavedChanges && !window.confirm('Discard unsaved changes?')) {
-        return
-      }
-      const revertTo = lastSavedHTMLRef.current
-      editorRef.current?.setContent(revertTo)
-      liveHTMLRef.current = revertTo
-      liveTextRef.current = htmlToText(revertTo)
-      // Clear any saved draft since we're reverting
-      const blockId = (propsRef.current as ExistingBlockProps).block?.id
-      if (blockId && lastDraftHTMLRef.current !== null) {
-        lastDraftHTMLRef.current = null
-        createClient().from('journal_blocks').update({ draft_content: null }).eq('id', blockId).then(() => {})
-      }
-      deactivate()
+      cancelEdits()
+      return
+    }
+
+    if (e.key === 'Escape' && isNewEntry) {
+      e.preventDefault()
+      if (liveTextRef.current.trim() && !window.confirm('Discard unsaved changes?')) return
+      discardNewEntry()
       return
     }
 
@@ -1767,21 +1829,6 @@ export function JournalBlock(props: Props) {
     }
 
     if (isNewEntry && isAltShift) {
-      if (e.key === 'T') {
-        e.preventDefault()
-        handleNewEntryShortcut({ type: 'create_task', taskType: 'my_task' })
-        return
-      }
-      if (e.key === 'W') {
-        e.preventDefault()
-        handleNewEntryShortcut({ type: 'create_task', taskType: 'waiting_on' })
-        return
-      }
-      if (e.key === 'D') {
-        e.preventDefault()
-        handleNewEntryShortcut({ type: 'mark_done' })
-        return
-      }
       if (e.key === 'S') {
         e.preventDefault()
         handleNewEntryShortcut({ type: 'summarize' })
@@ -1792,27 +1839,11 @@ export function JournalBlock(props: Props) {
     if (isNewEntry && isCtrlOnly && e.key === 'Delete') {
       e.preventDefault()
       e.stopPropagation()
-      liveHTMLRef.current = ''
-      liveTextRef.current = ''
-      clearAutosaveTimer()
-      setPendingPropertyIds(new Set())
-      setPendingFiles([])
-      setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null)
-      setEditorKey(k => k + 1)
+      discardNewEntry()
       return
     }
 
     if (!isNewEntry && focused && isAltShift) {
-      if (e.key === 'T') {
-        e.preventDefault()
-        handleToolbarAction({ type: 'create_task', taskType: 'my_task' })
-        return
-      }
-      if (e.key === 'W') {
-        e.preventDefault()
-        handleToolbarAction({ type: 'create_task', taskType: 'waiting_on' })
-        return
-      }
       if (e.key === 'D') {
         e.preventDefault()
         archiveBlock()
@@ -1955,7 +1986,8 @@ export function JournalBlock(props: Props) {
     deactivate()
     const supabase = createClient()
     const deletedAt = new Date().toISOString()
-    await supabase.from('journal_blocks').update({ deleted_at: deletedAt }).eq('id', p.block.id)
+    const { error } = await supabase.from('journal_blocks').update({ deleted_at: deletedAt }).eq('id', p.block.id)
+    if (error) { setErrorMessage(`Failed to delete entry: ${error.message}`); return }
     p.onRemove(p.block.id)
     p.onBlockArchived?.({ ...p.block, deleted_at: deletedAt })
     recordAction({ type: 'delete', blockId: p.block.id, blockTitle: blockTitle(p.block.content), block: p.block }, { toast: true })
@@ -1968,7 +2000,8 @@ export function JournalBlock(props: Props) {
     deactivate()
     const supabase = createClient()
     const archivedAt = new Date().toISOString()
-    await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true, archived_at: archivedAt }).eq('id', p.block.id)
+    const { error } = await supabase.from('journal_blocks').update({ status: 'archived', is_archived: true, archived_at: archivedAt }).eq('id', p.block.id)
+    if (error) { setErrorMessage(`Failed to archive entry: ${error.message}`); return }
     p.onRemove(p.block.id)
     p.onBlockArchived?.({ ...p.block, status: 'archived', is_archived: true, archived_at: archivedAt })
     recordAction({ type: 'archive', blockId: p.block.id, blockTitle: blockTitle(p.block.content), block: p.block }, { toast: true })
@@ -2044,27 +2077,38 @@ export function JournalBlock(props: Props) {
     })
   }
 
-  function updateTaskField(field: string, value: unknown) {
+  // Monotonic counter so a stale task-field refresh response can never
+  // overwrite a newer optimistic update.
+  const taskFieldReqIdRef = useRef(0)
+
+  function updateTaskFields(patch: Record<string, unknown>) {
     const p = propsRef.current as ExistingBlockProps
     if (!p.block) return
-    const before = (p.block as unknown as Record<string, unknown>)[field]
-    if (before !== value) {
-      const fieldLabels: Record<string, [string, string]> = {
-        owner_id: ['Changed assignee', 'Cleared assignee'],
-        due_date: ['Changed due date', 'Cleared due date'],
-        due_date_type: ['Changed due-date type', 'Cleared due-date type'],
-        start_date: ['Changed start date', 'Cleared start date'],
-      }
-      const [setL, clearL] = fieldLabels[field] ?? [`Changed ${field}`, `Cleared ${field}`]
-      recordAction({
-        type: 'field', blockId: p.block.id, blockTitle: blockTitle(p.block.content),
-        patch: { [field]: before }, label: value == null || value === '' ? clearL : setL,
-      })
+    const fieldLabels: Record<string, [string, string]> = {
+      owner_id: ['Changed assignee', 'Cleared assignee'],
+      due_date: ['Changed due date', 'Cleared due date'],
+      due_date_type: ['Changed due-date type', 'Cleared due-date type'],
+      start_date: ['Changed start date', 'Cleared start date'],
     }
-    p.onUpdate({ ...p.block, [field]: value })
+    for (const [field, value] of Object.entries(patch)) {
+      const before = (p.block as unknown as Record<string, unknown>)[field]
+      if (before !== value) {
+        const [setL, clearL] = fieldLabels[field] ?? [`Changed ${field}`, `Cleared ${field}`]
+        recordAction({
+          type: 'field', blockId: p.block.id, blockTitle: blockTitle(p.block.content),
+          patch: { [field]: before }, label: value == null || value === '' ? clearL : setL,
+        })
+      }
+    }
+    p.onUpdate({ ...p.block, ...patch } as Block)
+    const reqId = ++taskFieldReqIdRef.current
     const supabase = createClient()
-    supabase.from('journal_blocks').update({ [field]: value }).eq('id', p.block.id).select('*').single()
-      .then(({ data }) => { if (data) p.onUpdate(data as Block) })
+    supabase.from('journal_blocks').update(patch).eq('id', p.block.id).select('*').single()
+      .then(({ data }) => { if (data && reqId === taskFieldReqIdRef.current) p.onUpdate(data as Block) })
+  }
+
+  function updateTaskField(field: string, value: unknown) {
+    updateTaskFields({ [field]: value })
   }
 
   function handlePersonAdded(person: Person) {
@@ -2083,9 +2127,10 @@ export function JournalBlock(props: Props) {
     }
     // Keep status active — task_status drives strikethrough/grey styling, no auto-archive
     p.onUpdate({ ...p.block, task_status: taskStatus })
+    const reqId = ++taskFieldReqIdRef.current
     const supabase = createClient()
     supabase.from('journal_blocks').update({ task_status: taskStatus }).eq('id', p.block.id).select('*').single()
-      .then(({ data }) => { if (data) p.onUpdate(data as Block) })
+      .then(({ data }) => { if (data && reqId === taskFieldReqIdRef.current) p.onUpdate(data as Block) })
   }
 
   async function moveToWorkspace(targetWsId: string | null) {
@@ -2398,7 +2443,7 @@ export function JournalBlock(props: Props) {
       key: 'move', label: 'Move to…', icon: moveIcon(),
       onClick: () => setMoveMenuOpen(prev => !prev),
     }] : []),
-    ...(!isScratch ? [{ key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { liveHTMLRef.current = ''; liveTextRef.current = ''; clearAutosaveTimer(); setPendingPropertyIds(new Set()); setPendingFiles([]); setPendingEntryType('info'); setPendingTaskStatus('not_started'); setPendingOwnerId(null); setPendingDueDate(null); setPendingDueDateType(null); setPendingStartDate(null); setEditorKey(k => k + 1) } else { deleteBlock() } }, separator: true, className: 'text-red-500 hover:bg-red-50' }] : []),
+    ...(!isScratch ? [{ key: 'delete', label: 'Delete', shortcut: '⌃⌦', shortcutTip: 'Ctrl + Delete', icon: trashIcon(), onClick: () => { setPopoverOpen(false); if (isNewEntry) { discardNewEntry() } else { deleteBlock() } }, separator: true, className: 'text-red-500 hover:bg-red-50' }] : []),
   ]
 
   // Disable split when selection covers entire block content
@@ -2859,13 +2904,13 @@ export function JournalBlock(props: Props) {
                 <div>
                   <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Original</p>
                   <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 max-h-[35vh] overflow-y-auto tiptap-content text-sm text-gray-600 leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: summaryPreview.original }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(summaryPreview.original) }}
                   />
                 </div>
                 <div>
                   <p className="text-[10px] font-semibold text-green-600 uppercase tracking-wide mb-1.5">Summary</p>
                   <div className="bg-green-50 rounded-lg p-4 border border-green-200 tiptap-content text-sm text-gray-800 leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: summaryPreview.summary }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(summaryPreview.summary) }}
                   />
                 </div>
               </div>
@@ -3156,7 +3201,7 @@ export function JournalBlock(props: Props) {
           onBlur={handleBlur}
           onKeyDown={(e) => {
             if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveExistingBlock() }
-            if (e.key === 'Escape') { e.preventDefault(); deactivate() }
+            if (e.key === 'Escape') { e.preventDefault(); cancelEdits() }
           }}
         >
           <div className="flex items-center gap-0.5">
@@ -3282,8 +3327,7 @@ export function JournalBlock(props: Props) {
 
             function onDateChange(newDate: string) {
               if (!newDate) {
-                updateTaskField('due_date', null)
-                updateTaskField('due_date_type', null)
+                updateTaskFields({ due_date: null, due_date_type: null })
                 return
               }
               // Prevent due date before start_date
@@ -3302,8 +3346,7 @@ export function JournalBlock(props: Props) {
             }
 
             function clearDueDate() {
-              updateTaskField('due_date', null)
-              updateTaskField('due_date_type', null)
+              updateTaskFields({ due_date: null, due_date_type: null })
             }
 
             const datePickerId = `datepicker-${block?.id ?? 'new'}`
@@ -3585,11 +3628,14 @@ export function JournalBlock(props: Props) {
                 edited_at: new Date().toISOString(),
               })
             }
-            await supabase.from('journal_blocks').update({ content }).eq('id', p.block.id)
+            // Also clear draft_content so a stale draft can't overwrite the
+            // restored version on next page load.
+            await supabase.from('journal_blocks').update({ content, draft_content: null }).eq('id', p.block.id)
             liveHTMLRef.current = content
             liveTextRef.current = htmlToText(content)
             lastSavedHTMLRef.current = content
-            p.onUpdate({ ...p.block, content })
+            lastDraftHTMLRef.current = null
+            p.onUpdate({ ...p.block, content, draft_content: null })
             setShowHistory(false)
           }}
         />

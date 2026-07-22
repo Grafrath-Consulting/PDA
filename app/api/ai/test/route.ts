@@ -6,7 +6,13 @@ export async function POST() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const apiKey = await getUserApiKey(user.id)
+  let apiKey: string | null
+  try {
+    apiKey = await getUserApiKey(user.id)
+  } catch (err) {
+    console.error('[ai-test] Failed to read API key:', err)
+    return Response.json({ error: 'Your stored API key could not be read. Re-enter it in Settings → AI.' }, { status: 402 })
+  }
   if (!apiKey) {
     return Response.json({ error: 'no_api_key', message: 'No API key configured.' }, { status: 402 })
   }
@@ -34,8 +40,7 @@ export async function POST() {
 
     return Response.json({ ok: true })
   } catch (err) {
-    return Response.json({
-      error: err instanceof Error ? err.message : 'Connection failed',
-    }, { status: 200 })
+    console.error('[ai-test] Connection error:', err)
+    return Response.json({ error: 'Connection failed' }, { status: 200 })
   }
 }

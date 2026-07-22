@@ -1,6 +1,8 @@
 {
-  "name": "pda-temp",
+  "name": "pda",
   "version": "0.1.0",
+  "description": "PDA — a multi-workspace journaling app with rich-text blocks, tasks, custom properties, semantic search, AI summaries, and an MCP server. Next.js 14 + Supabase.",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "dev": "node scripts/bump-build.js && next dev",
@@ -19,6 +21,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.99.0",
+    "@tiptap/core": "^3.20.4",
     "@tiptap/extension-highlight": "^3.20.4",
     "@tiptap/extension-link": "^3.20.4",
     "@tiptap/extension-mention": "^3.20.4",
@@ -32,9 +35,11 @@
     "@tiptap/react": "^3.20.1",
     "@tiptap/starter-kit": "^3.20.1",
     "@tiptap/suggestion": "^3.20.4",
+    "isomorphic-dompurify": "^3.19.0",
     "next": "14.2.35",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^20",

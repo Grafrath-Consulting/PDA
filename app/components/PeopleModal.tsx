@@ -192,7 +192,7 @@ function AddPersonForm({ userId, onSaved, onCancel }: { userId: string; onSaved:
   useEffect(() => { nameRef.current?.focus() }, [])
 
   async function save() {
-    if (!name.trim()) return
+    if (saving || !name.trim()) return
     setSaving(true)
     const supabase = createClient()
     const { data, error } = await supabase.from('people').insert({ user_id: userId, name: name.trim(), email: email.trim() || null, company: company.trim() || null }).select().single()
