@@ -632,7 +632,24 @@ export function JournalBlock(props: Props) {
   const [filterPromptOpen, setFilterPromptOpen] = useState(false)
   const [filterPromptValues, setFilterPromptValues] = useState<Set<string>>(new Set())  // options shown
   const [filterPromptChecked, setFilterPromptChecked] = useState<Set<string>>(new Set())  // user selection
-  const filterPromptResolveRef = useRef<((selectedIds: Set<string>) => void) | null>(null)
+  // Resolves with the selected value ids, or null when the user cancels the save
+  const filterPromptResolveRef = useRef<((selectedIds: Set<string> | null) => void) | null>(null)
+
+  // Escape cancels the filter prompt (capture phase, so the editor's own
+  // Escape-to-save shortcut doesn't fire while the prompt is open)
+  useEffect(() => {
+    if (!filterPromptOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setFilterPromptOpen(false)
+      filterPromptResolveRef.current?.(null)
+      filterPromptResolveRef.current = null
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [filterPromptOpen])
 
   const editorRef = useRef<TipTapEditorHandle>(null)
   // Fallback handle from onReady callback — next/dynamic doesn't always forward refs
@@ -1571,9 +1588,17 @@ export function JournalBlock(props: Props) {
     setFilterPromptValues(missing)
     setFilterPromptChecked(initialChecked)
     setFilterPromptOpen(true)
-    const selected = await new Promise<Set<string>>(resolve => {
+    const selected = await new Promise<Set<string> | null>(resolve => {
       filterPromptResolveRef.current = resolve
     })
+    if (selected === null) {
+      // Cancelled — return to editing so the user can adjust properties first
+      setFocused(true)
+      requestAnimationFrame(() => {
+        if (!cardRef.current?.contains(document.activeElement)) editorRef.current?.focus()
+      })
+      return
+    }
     // Merge selected values into pending properties before saving
     if (selected.size > 0) {
       const merged = new Set(pendingPropertyIdsRef.current)
@@ -3547,13 +3572,13 @@ export function JournalBlock(props: Props) {
               return n
             })
           }
-          const resolve = (ids: Set<string>) => {
+          const resolve = (ids: Set<string> | null) => {
             setFilterPromptOpen(false)
             filterPromptResolveRef.current?.(ids)
             filterPromptResolveRef.current = null
           }
           return (
-            <div className="fixed inset-0 bg-black/30 z-[100000] flex items-center justify-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) resolve(new Set()) }}>
+            <div className="fixed inset-0 bg-black/30 z-[100000] flex items-center justify-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) resolve(null) }}>
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm" onMouseDown={(e) => e.stopPropagation()}>
                 <div className="px-5 pt-5 pb-2">
                   <p className="text-sm font-semibold text-gray-900">Apply property filters?</p>
@@ -3583,7 +3608,11 @@ export function JournalBlock(props: Props) {
                     )
                   })}
                 </div>
-                <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">
+                <div className="flex items-center gap-2 px-5 py-3 border-t border-gray-100">
+                  <button onClick={() => resolve(null)} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
+                    Cancel
+                  </button>
+                  <div className="flex-1" />
                   <button onClick={() => resolve(new Set())} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
                     Skip
                   </button>
