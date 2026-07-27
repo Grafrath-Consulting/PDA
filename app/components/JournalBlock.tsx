@@ -3617,7 +3617,7 @@ export function JournalBlock(props: Props) {
                     Skip
                   </button>
                   <button onClick={() => resolve(checked)} className="px-3 py-1.5 text-xs text-white bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors">
-                    {checked.size === filterPromptValues.size ? 'Apply All' : checked.size > 0 ? `Apply Selected (${checked.size})` : 'Skip'}
+                    {checked.size === filterPromptValues.size ? 'Apply All' : checked.size > 0 ? `Apply Selected (${checked.size})` : 'Save without filters'}
                   </button>
                 </div>
               </div>
