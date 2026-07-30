@@ -36,10 +36,17 @@
     "@tiptap/starter-kit": "^3.20.1",
     "@tiptap/suggestion": "^3.20.4",
     "isomorphic-dompurify": "^3.19.0",
+    "jsdom": "~27.3.0",
     "next": "14.2.35",
     "react": "^18",
     "react-dom": "^18",
     "zod": "^4.3.6"
+  },
+  "overridesNote": {
+    "jsdom": "jsdom is pulled in transitively by isomorphic-dompurify (lib/sanitize) and must stay below 27.4: from 27.4 on, jsdom requires the ESM-only @exodus/bytes from its own CommonJS files, which relies on Node's require(ESM) support that the Next.js server runtime on Vercel does not implement. Every server route reaching jsdom then threw ERR_REQUIRE_ESM at import time and returned 500 — most visibly /api/mcp. isomorphic-dompurify only ever calls `new JSDOM('<!DOCTYPE html>')`, so the older major is a drop-in. It is also declared as a direct dependency so npm hoists it to the top level: nested under isomorphic-dompurify it no longer matches Next's server-external-packages list, and webpack bundles it into the route, where jsdom's readFileSync of default-stylesheet.css fails the build. Remove both once the Next runtime supports require(ESM)."
+  },
+  "overrides": {
+    "jsdom": "~27.3.0"
   },
   "devDependencies": {
     "@types/node": "^20",
