@@ -7,6 +7,25 @@ export const runtime = 'nodejs'
 // MCP servers are dynamic per-request.
 export const dynamic = 'force-dynamic'
 
+// Streamable HTTP lets a client open a long-lived server->client notification
+// stream with GET, and end a session with DELETE. This deployment is stateless
+// and serverless: there is no session to end, nothing ever pushes a
+// notification, and a Vercel function cannot hold a stream open — it just hangs
+// until the gateway gives up and returns 504, which the client reports as
+// "Failed to open SSE stream: Gateway Timeout" and treats as the connection
+// dropping. 405 is the spec's signal for "no stream at this endpoint"; the
+// client SDK handles it by continuing without one (and explicitly allows it for
+// DELETE too), so request/response over POST keeps working.
+//
+// Auth still runs first, so an unauthenticated GET returns 401 with the
+// WWW-Authenticate challenge that OAuth discovery depends on.
+function methodNotAllowed(): Response {
+  return Response.json(
+    { error: 'This endpoint is stateless; use POST for JSON-RPC requests.' },
+    { status: 405, headers: { Allow: 'POST' } }
+  )
+}
+
 async function handle(req: Request): Promise<Response> {
   let userId: string
   try {
@@ -25,6 +44,8 @@ async function handle(req: Request): Promise<Response> {
     }
     throw e
   }
+
+  if (req.method !== 'POST') return methodNotAllowed()
 
   const server = buildMcpServer(userId)
   const transport = new WebStandardStreamableHTTPServerTransport({
