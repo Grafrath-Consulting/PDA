@@ -11,6 +11,7 @@ import type { TipTapEditorHandle } from './TipTapEditor'
 import { useWorkspace } from '@/context/WorkspaceContext'
 import { useActionHistory } from '@/context/ActionHistoryContext'
 import { blockTitle } from '@/lib/block-title'
+import { htmlToPlainText } from '@/lib/blocks/content-html'
 import { useDateFormat } from '@/context/DateFormatContext'
 import {
   formatTimestamp, formatDatePart, zonedParts, zonedDateStr, zonedToUtcIso,
@@ -1965,7 +1966,14 @@ export function JournalBlock(props: Props) {
 
   function copyBlockToClipboard() {
     const html = liveHTMLRef.current || toEditorHTML(props.block?.content ?? '')
-    const plain = htmlToText(html)
+    // The plain-text flavour is what a text editor receives, so it has to be
+    // serialised rather than flattened. htmlToText walks the DOM for textContent,
+    // which concatenates text nodes with no separator at all: every paragraph,
+    // list item and table cell arrived as one run-on line. htmlToPlainText is the
+    // same Markdown the MCP read tools return, so a pasted card keeps its line
+    // breaks and its tables.
+    const plain = htmlToPlainText(html)
+    const writePlain = () => navigator.clipboard.writeText(plain)
     // Write both HTML and plain text so pasting into rich editors preserves formatting
     try {
       navigator.clipboard.write([
@@ -1973,10 +1981,10 @@ export function JournalBlock(props: Props) {
           'text/html': new Blob([html], { type: 'text/html' }),
           'text/plain': new Blob([plain], { type: 'text/plain' }),
         }),
-      ])
+      ]).catch(writePlain) // write() rejects asynchronously; catch alone never sees it
     } catch {
       // Fallback for browsers that don't support ClipboardItem
-      navigator.clipboard.writeText(plain)
+      writePlain()
     }
   }
 
@@ -1996,7 +2004,7 @@ export function JournalBlock(props: Props) {
           'text/html': new Blob([anchor], { type: 'text/html' }),
           'text/plain': new Blob([url], { type: 'text/plain' }),
         }),
-      ])
+      ]).catch(() => navigator.clipboard.writeText(url)) // same async-rejection path
     } catch {
       navigator.clipboard.writeText(url)
     }
