@@ -39,13 +39,71 @@ function projectBlock(block: {
 }
 
 // Shared across every tool that accepts a block body, so clients get one
-// consistent account of the format. See lib/blocks/content-html.ts.
+// consistent account of the format even if they surface tool descriptions but
+// not the server instructions below. See lib/blocks/content-html.ts.
 const CONTENT_FORMAT =
-  'The body of the entry. Plain text, where blank lines separate paragraphs. ' +
-  'Markdown pipe tables (a header row, a |---|---| delimiter row, then body rows) ' +
-  'render as real tables. Wrap code in `backticks` for monospace, or fence a block ' +
-  'with ``` for a code block. HTML is also accepted and passed through. ' +
-  'Literal < and > are preserved, so text like <<VLSMOTHR>> stays intact.'
+  'Written in Markdown: **bold**, *italic*, ~~struck~~, `code`, ``` fences, ' +
+  '- bullets, 1. numbered, > quotes, [links](url), --- section breaks, and ' +
+  '| pipe | tables | with a |---|---| delimiter row. Blank lines separate ' +
+  'paragraphs. Underline is the one thing Markdown cannot express: use <u>text</u>. ' +
+  'Literal < and > are preserved, so <<VLSMOTHR>> and DHDDTI\'<DU86733I are safe ' +
+  'to type directly. Do not HTML-escape them.'
+
+// Sent to the client as MCP server instructions, which well-behaved clients put
+// in front of the model before it calls anything. The formatting vocabulary is
+// the expensive thing to get wrong: a model that guesses will reach for
+// "## Heading" and "**bold**" and, before this was documented, got literal text.
+const INSTRUCTIONS = [
+  'PDA is a personal journal. Entries ("blocks") are cards that live in a workspace.',
+  'Call list_workspaces first and ask which workspace to use before creating anything.',
+  '',
+  '# Formatting block content',
+  '',
+  'Block bodies are Markdown. Write Markdown directly - do not convert it to HTML,',
+  'and do not escape it expecting it to show literally, because it is rendered.',
+  '',
+  '  **bold**               bold',
+  '  *italic*               italic',
+  '  ~~struck~~             strikethrough',
+  '  `code`                 inline monospace',
+  '  ```                    fenced code block - put M-code, SQL and log output here',
+  '  - item                 bullet list; indent two spaces to nest',
+  '  1. item                numbered list',
+  '  > quoted               block quote',
+  '  [text](https://...)    hyperlink',
+  '  ---                    section break',
+  '  | a | b |              table: header row, then a |---|---| delimiter row,',
+  '  | --- | --- |          then one line per body row',
+  '  | 1 | 2 |',
+  '',
+  'Emoji are plain Unicode - type them directly.',
+  '',
+  'Underline is the only formatting Markdown cannot express, so use the HTML tag:',
+  '<u>text</u>. Highlighting is the same: <mark>text</mark>. Those two tags aside,',
+  'do not write HTML - it is accepted for backward compatibility, not preferred.',
+  '',
+  '# Where this differs from standard Markdown',
+  '',
+  'Headings (# through ######) render as bold text, not as heading elements. A card',
+  'already styles its first line as the title, so prefer a plain first line to "# Title".',
+  '',
+  'Underscores are never emphasis, so identifiers like DB_NAME_01 are safe to type.',
+  'Use * and ** for emphasis.',
+  '',
+  'Emphasis has to sit on a word boundary, so M-code such as A*B*C is left alone.',
+  'Put code in backticks regardless and it is never interpreted.',
+  '',
+  'Literal < and > are preserved. FACS letter insertions (<<VLSMOTHR>>) and',
+  'comparisons (DHDDTI\'<DU86733I) can be typed as-is; do not HTML-escape them.',
+  '',
+  'A backslash escapes a character you want shown literally: \\*not italic\\*.',
+  '',
+  '# Reading back',
+  '',
+  'get_block and search_blocks return each body as `text` in exactly this Markdown,',
+  'so you can read a card, edit the text, and write it back with update_block',
+  'without formatting decaying.',
+].join('\n')
 
 function ok(payload: unknown) {
   return {
@@ -371,7 +429,7 @@ function registerUpdateScratchpad(server: McpServer, deps: ToolDeps) {
 export function buildMcpServer(userId: string): McpServer {
   const server = new McpServer(
     { name: 'pda', version: versionString() },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {} }, instructions: INSTRUCTIONS }
   )
   const deps: ToolDeps = { svc: getServiceClient(), userId }
   registerListWorkspaces(server, deps)
