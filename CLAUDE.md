@@ -85,6 +85,8 @@ Users store their own Anthropic API key encrypted with AES-256-GCM (`lib/ai-key-
 
 **Critical invariant**: MCP requests run outside any user JWT context and use the service-role client, so RLS does NOT protect these paths. Every query in every MCP tool must be manually scoped with `.eq('user_id', userId)` from the validated token.
 
+**Block content conversion**: `lib/blocks/content-html.ts` owns both directions of the MCP content boundary — `toStorageHtml()` on the way in (called once, inside the `save.ts` helpers) and `htmlToPlainText()` on the way out (the `text` field every read tool returns). Input is parsed per block, not per document: Markdown pipe tables become real `<table>` elements, ``` fences and `` `backticks` `` become code, and block-level HTML is passed through, so prose and a table can coexist in one payload. A `<` is only treated as markup when it starts a recognised tag, which is what keeps FACS content like `<<VLSMOTHR>>` and `DHDDTI'<DU86733I` from being eaten by DOMPurify. Emitted HTML stays inside the TipTap schema (cells wrap their text in `<p>` because TableCell is `block+`; no headings, since StarterKit runs with `heading: false`), and the two functions are inverses — write → read → write is a fixed point. `toStorageHtml()` is idempotent on its own output, which `update_scratchpad` relies on when appending to stored HTML.
+
 ### Semantic Search Pipeline
 
 1. On block save: `chunkText()` splits content into ~120-word overlapping windows

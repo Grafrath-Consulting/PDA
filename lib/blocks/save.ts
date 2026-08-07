@@ -1,5 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import { sanitizeHtml } from '@/lib/sanitize'
+import { toStorageHtml } from './content-html'
 import { embedBlock } from './embed'
 
 // MCP clients send wall-clock-with-offset timestamps like "T23:59:00-05:00"
@@ -20,14 +21,10 @@ function normaliseStartDate(iso: string | null | undefined): string | null | und
   return m ? `${m[1]}T00:00:00.000Z` : iso
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
 export interface CreateBlockInput {
   userId: string
   workspaceId: string
-  content: string                // HTML or plain text; sanitized before storage
+  content: string                // Markdown-ish text or HTML; converted and sanitized before storage
   entryType?: 'info' | 'task'
   propertyValueIds?: string[]
   // Task-only fields. Ignored unless entryType === 'task'.
@@ -81,7 +78,7 @@ export async function createBlockFromMcp(
     .insert({
       user_id: input.userId,
       workspace_id: input.workspaceId,
-      content: sanitizeHtml(input.content),
+      content: sanitizeHtml(toStorageHtml(input.content)),
       status: 'active',
       entry_type: entryType,
       via_mcp: true,
@@ -162,10 +159,7 @@ export async function updateBlockFromMcp(
   const patch: Record<string, unknown> = {}
   let contentChanged = false
   if (input.content !== undefined) {
-    const html = input.content.trim().startsWith('<')
-      ? input.content
-      : `<p>${escapeHtml(input.content).split(/\n{2,}/).map(p => p.replace(/\n/g, '<br>')).join('</p><p>')}</p>`
-    patch.content = sanitizeHtml(html)
+    patch.content = sanitizeHtml(toStorageHtml(input.content))
     contentChanged = true
   }
   if (input.taskStatus !== undefined) patch.task_status = input.taskStatus

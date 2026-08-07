@@ -3,24 +3,9 @@ import { z } from 'zod'
 import { SupabaseClient } from '@supabase/supabase-js'
 import { getServiceClient } from './auth'
 import { createBlockFromMcp, updateBlockFromMcp } from '@/lib/blocks/save'
+import { toStorageHtml, htmlToPlainText as htmlToText } from '@/lib/blocks/content-html'
 import { embedQuery } from '@/lib/voyage'
 import { versionString } from '@/lib/version'
-
-// Server-side HTML → plain text. Strips tags only; deliberately tiny.
-function htmlToText(html: string | null | undefined): string {
-  if (!html) return ''
-  return html.replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
 
 // Project a raw journal_blocks row (as returned by the save helpers) into the
 // same clean shape the read tools emit: HTML stripped to a `text` field, never
@@ -52,6 +37,15 @@ function projectBlock(block: {
     text: htmlToText(block.content),
   }
 }
+
+// Shared across every tool that accepts a block body, so clients get one
+// consistent account of the format. See lib/blocks/content-html.ts.
+const CONTENT_FORMAT =
+  'The body of the entry. Plain text, where blank lines separate paragraphs. ' +
+  'Markdown pipe tables (a header row, a |---|---| delimiter row, then body rows) ' +
+  'render as real tables. Wrap code in `backticks` for monospace, or fence a block ' +
+  'with ``` for a code block. HTML is also accepted and passed through. ' +
+  'Literal < and > are preserved, so text like <<VLSMOTHR>> stays intact.'
 
 function ok(payload: unknown) {
   return {
@@ -137,7 +131,7 @@ function registerCreateBlock(server: McpServer, deps: ToolDeps) {
     description:
       'Create a new journal entry (a "block") in the user\'s PDA. workspace_id is required — call list_workspaces first and ask the user which one to use. property_value_ids is optional; call list_properties to get available tag values. The task_*, due_*, and start_date fields are only honored when entry_type is "task".',
     inputSchema: {
-      content: z.string().min(1).describe('The body of the entry. Plain text or simple HTML; line breaks become paragraphs.'),
+      content: z.string().min(1).describe(CONTENT_FORMAT),
       workspace_id: z.string().uuid().describe('UUID of the workspace, from list_workspaces.'),
       entry_type: z.enum(['info', 'task']).optional().describe('"info" (default) for notes, "task" for actionable items.'),
       property_value_ids: z.array(z.string().uuid()).optional().describe('UUIDs of property values to attach as tags, from list_properties.'),
@@ -147,15 +141,10 @@ function registerCreateBlock(server: McpServer, deps: ToolDeps) {
       start_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone for when the task should begin. Only used when entry_type is "task".'),
     },
   }, async ({ content, workspace_id, entry_type, property_value_ids, task_status, due_date, due_date_type, start_date }) => {
-    // Promote plain-text input to minimal HTML so it renders in the TipTap editor.
-    const html = content.trim().startsWith('<')
-      ? content
-      : `<p>${content.split(/\n{2,}/).map(p => p.replace(/\n/g, '<br>')).join('</p><p>')}</p>`
-
     const result = await createBlockFromMcp(deps.svc, {
       userId: deps.userId,
       workspaceId: workspace_id,
-      content: html,
+      content,
       entryType: entry_type,
       propertyValueIds: property_value_ids,
       taskStatus: task_status,
@@ -174,7 +163,7 @@ function registerUpdateBlock(server: McpServer, deps: ToolDeps) {
       'Edit an existing journal entry. Use this to: change content, mark a task as in_progress or done (task_status), set or clear a due date, or archive/restore a block (status). Only the fields you pass are updated; omit fields you want to leave alone. Pass null to clear an optional field. Do not use this on a scratchpad card (it cannot be archived/typed/etc.) — use update_scratchpad instead.',
     inputSchema: {
       id: z.string().uuid().describe('Block UUID, from search_blocks, get_block, or create_block.'),
-      content: z.string().min(1).optional().describe('New body. Plain text or simple HTML; line breaks become paragraphs. Re-fires the semantic search index.'),
+      content: z.string().min(1).optional().describe(`New body. ${CONTENT_FORMAT} Re-fires the semantic search index.`),
       task_status: z.enum(['not_started', 'held', 'in_progress', 'done']).optional().describe('Task progress. Use "held" to pause (hides from the focus panel without losing the due date), or "done" to mark complete.'),
       due_date: z.string().datetime({ offset: true }).nullable().optional().describe('ISO 8601 timestamp with timezone, or null to clear.'),
       due_date_type: z.enum(['deadline', 'target']).nullable().optional().describe('"deadline" (hard) or "target" (soft), or null to clear.'),
@@ -347,7 +336,7 @@ function registerUpdateScratchpad(server: McpServer, deps: ToolDeps) {
       'Edit a workspace\'s permanent scratchpad card — a free-form note that is always visible and cannot be archived, deleted, moved, typed, or tagged. Use mode="append" to add to the existing note (default) or mode="replace" to overwrite it. Get scratch_block_id / workspace_id from list_workspaces.',
     inputSchema: {
       workspace_id: z.string().uuid().describe('UUID of the workspace whose scratchpad to edit, from list_workspaces.'),
-      content: z.string().min(1).describe('Text to write. Plain text or simple HTML; line breaks become paragraphs.'),
+      content: z.string().min(1).describe(`Text to write. ${CONTENT_FORMAT}`),
       mode: z.enum(['append', 'replace']).optional().describe('"append" (default) adds to the existing note; "replace" overwrites it.'),
     },
   }, async ({ workspace_id, content, mode }) => {
@@ -360,12 +349,13 @@ function registerUpdateScratchpad(server: McpServer, deps: ToolDeps) {
       .maybeSingle()
     if (!scratch) return err('scratchpad_not_found')
 
-    const htmlify = (s: string) => s.trim().startsWith('<')
-      ? s
-      : `<p>${s.split(/\n{2,}/).map(p => p.replace(/\n/g, '<br>')).join('</p><p>')}</p>`
-    const addition = htmlify(content)
+    // Convert before concatenating so the addition is not reinterpreted in the
+    // context of whatever HTML already sits in the scratchpad. toStorageHtml is
+    // idempotent on its own output, so the second pass inside
+    // updateBlockFromMcp leaves both halves unchanged.
+    const addition = toStorageHtml(content)
     const newContent = (mode ?? 'append') === 'append'
-      ? `${scratch.content ?? ''}${addition}`
+      ? `${scratch.content ?? ''}\n${addition}`
       : addition
 
     const result = await updateBlockFromMcp(deps.svc, {
