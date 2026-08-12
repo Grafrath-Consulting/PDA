@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState, useLayoutEffect } from 'react'
-import { SelectionAction } from '../types'
+import { SelectionAction, SelectionFormat } from '../types'
 
 // Project linking has been removed — project association is now handled via a
 // workspace-local "Project" property with user-defined values in the properties system.
@@ -59,6 +59,7 @@ export function SelectionMenu({ position, selectedText, onClose, onAction, disab
         <Item onClick={() => act({ type: 'insert_link' })}>
           <LinkIcon /> Insert Link
         </Item>
+        <FormattingItem onSelect={(format) => act({ type: 'format', format })} />
       </MenuSection>
       <Sep />
       <MenuSection>
@@ -82,6 +83,76 @@ function MenuSection({ children }: { children: React.ReactNode }) {
   return <div>{children}</div>
 }
 
+const FORMAT_ITEMS: { format: SelectionFormat; label: string; icon: React.ReactNode }[] = [
+  { format: 'bold', label: 'Bold', icon: <Glyph className="font-bold">B</Glyph> },
+  { format: 'italic', label: 'Italic', icon: <Glyph className="italic font-serif">I</Glyph> },
+  { format: 'underline', label: 'Underline', icon: <Glyph className="underline">U</Glyph> },
+  { format: 'strike', label: 'Strikethrough', icon: <Glyph className="line-through">S</Glyph> },
+  { format: 'highlight', label: 'Highlight', icon: <HighlightIcon /> },
+  { format: 'code', label: 'Code', icon: <CodeIcon /> },
+]
+
+// "Formatting >" row: hovering (or clicking) it opens a submenu of the inline
+// marks that can be applied to the selection. The submenu is a child of the
+// row's wrapper, so moving the pointer into it never fires mouseleave.
+function FormattingItem({ onSelect }: { onSelect: (format: SelectionFormat) => void }) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const subRef = useRef<HTMLDivElement>(null)
+  const [side, setSide] = useState<'right' | 'left'>('right')
+  const [flippedUp, setFlippedUp] = useState(false)
+
+  useLayoutEffect(() => {
+    if (!open || !wrapRef.current || !subRef.current) return
+    const anchor = wrapRef.current.getBoundingClientRect()
+    const sub = subRef.current.getBoundingClientRect()
+    setSide(anchor.right + sub.width > window.innerWidth - 8 ? 'left' : 'right')
+    setFlippedUp(anchor.top + sub.height > window.innerHeight - 8)
+  }, [open])
+
+  return (
+    <div
+      ref={wrapRef}
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <Item onClick={() => setOpen(o => !o)} aria-haspopup="menu" aria-expanded={open}>
+        <FormatIcon /> Formatting
+        <ChevronRightIcon />
+      </Item>
+      {open && (
+        <div
+          ref={subRef}
+          role="menu"
+          style={{
+            position: 'absolute',
+            left: side === 'right' ? '100%' : undefined,
+            right: side === 'left' ? '100%' : undefined,
+            top: flippedUp ? undefined : -4,
+            bottom: flippedUp ? -4 : undefined,
+          }}
+          className="bg-white border border-[#E5E0D0] rounded-lg shadow-xl py-1 min-w-[168px]"
+        >
+          {FORMAT_ITEMS.map(({ format, label, icon }) => (
+            <Item key={format} onClick={() => onSelect(format)}>
+              {icon} {label}
+            </Item>
+          ))}
+          <Sep />
+          <Item onClick={() => onSelect('clear')}>
+            <ClearFormatIcon /> Clear Formatting
+          </Item>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Glyph({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <span className={`w-[13px] text-center text-xs leading-none flex-shrink-0 ${className}`}>{children}</span>
+}
+
 function Sep() {
   return <div className="h-px bg-[#E5E0D0] my-1" />
 }
@@ -90,13 +161,17 @@ function Item({
   onClick,
   children,
   className = '',
+  ...aria
 }: {
   onClick: () => void
   children: React.ReactNode
   className?: string
+  'aria-haspopup'?: 'menu'
+  'aria-expanded'?: boolean
 }) {
   return (
     <button
+      {...aria}
       onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
       onClick={onClick}
       className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 text-left hover:bg-[#FFFEF7] transition-colors ${className}`}
@@ -118,6 +193,21 @@ function SplitIcon() {
 }
 function RobotIcon() {
   return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
+}
+function FormatIcon() {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><polyline points="4 7 4 4 20 4 20 7" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" /></svg>
+}
+function ChevronRightIcon() {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 ml-auto text-gray-400"><polyline points="9 18 15 12 9 6" /></svg>
+}
+function HighlightIcon() {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /><line x1="2" y1="20" x2="6" y2="20" stroke="#FBBF24" strokeWidth="3" /></svg>
+}
+function CodeIcon() {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
+}
+function ClearFormatIcon() {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><path d="M4 7V4h16v3" /><path d="M5 20h6" /><path d="M13 4 8 20" /><line x1="15" y1="15" x2="21" y2="21" /><line x1="21" y1="15" x2="15" y2="21" /></svg>
 }
 function LinkIcon() {
   return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>

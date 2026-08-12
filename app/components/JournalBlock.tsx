@@ -1074,6 +1074,39 @@ export function JournalBlock(props: Props) {
     const { selText } = menuState
     setMenuState(null)
 
+    if (action.type === 'format') {
+      const editor = getEditor()
+      const { editorFrom, editorTo } = menuState
+      if (!editor || editorTo <= editorFrom) {
+        setErrorMessage('Could not apply formatting — try selecting the text again.')
+        return
+      }
+      const previousContent = liveHTMLRef.current || toEditorHTML(props.block.content)
+      const newContent = editor.applyFormat(editorFrom, editorTo, action.format)
+      window.getSelection()?.removeAllRanges()
+      // A focused block is already inside the normal edit/save path — the
+      // editor's onTransaction has queued the draft and commit saves.
+      if (focusedRef.current) return
+      if (newContent === previousContent) return
+
+      // Read-only card: persist directly, the way delete_selection does.
+      const p = propsRef.current as ExistingBlockProps
+      const supabase = createClient()
+      // draft_content is cleared because the editor was showing it, so the
+      // formatted HTML already carries any uncommitted draft text.
+      const { error } = await supabase.from('journal_blocks')
+        .update({ content: newContent, draft_content: null })
+        .eq('id', props.block.id)
+      if (error) {
+        setErrorMessage(`Failed to save changes: ${error.message}`)
+        syncEditorContent(previousContent)
+        return
+      }
+      syncEditorContent(newContent)
+      p.onUpdate({ ...p.block, content: newContent, draft_content: null })
+      return
+    }
+
     if (action.type === 'insert_link') {
       const selectedText = selText
       suppressBlurRef.current = true

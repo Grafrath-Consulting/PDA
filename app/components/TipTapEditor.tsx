@@ -16,6 +16,7 @@ import { ReactRenderer } from '@tiptap/react'
 import type { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion'
 import { MentionSuggestionList, MentionSuggestionHandle, MentionSuggestionItem } from './MentionSuggestion'
 import { useState, useEffect, useLayoutEffect, useImperativeHandle, useRef, forwardRef, useCallback, useMemo, lazy, Suspense } from 'react'
+import { SelectionFormat } from '../types'
 import { highlightHTML } from '@/lib/highlight-html'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { createPortal } from 'react-dom'
@@ -54,6 +55,7 @@ export interface TipTapEditorHandle {
   focusAtCoords: (x: number, y: number) => void
   setContent: (html: string) => void
   openLinkEditor: (prefilledText?: string) => void
+  applyFormat: (from: number, to: number, format: SelectionFormat) => string
   getSelectionFrom: () => number
   getSelectionTo: () => number
   getDOMSelectionRange: () => { from: number; to: number }
@@ -177,6 +179,37 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       offset += child.nodeSize
     })
     return ed.state.doc.textBetween(start, end, '')
+  }
+
+  // Toggle an inline mark over an explicit range. The selection menu can fire
+  // this while the block is still read-only, so editability is toggled around
+  // the command the same way deleteRange does. Returns the resulting HTML.
+  function applyFormatToRange(
+    ed: NonNullable<typeof editor>,
+    from: number,
+    to: number,
+    format: SelectionFormat
+  ) {
+    const wasEditable = ed.isEditable
+    if (!wasEditable) ed.setEditable(true)
+    // Only pull DOM focus into the editor when the block was already being
+    // edited — focusing a read-only card would flip it into edit mode.
+    let chain = wasEditable ? ed.chain().focus() : ed.chain()
+    chain = chain.setTextSelection({ from, to })
+    switch (format) {
+      case 'bold': chain = chain.toggleBold(); break
+      case 'italic': chain = chain.toggleItalic(); break
+      case 'underline': chain = chain.toggleUnderline(); break
+      case 'strike': chain = chain.toggleStrike(); break
+      case 'code': chain = chain.toggleCode(); break
+      case 'highlight': chain = chain.toggleHighlight(); break
+      case 'clear': chain = chain.unsetAllMarks(); break
+    }
+    chain.run()
+    const html = ed.getHTML()
+    lastHTMLRef.current = html
+    if (!wasEditable) ed.setEditable(false)
+    return html
   }
 
   function openLinkEditor(ed: NonNullable<typeof editor>, prefilledText?: string) {
@@ -460,6 +493,10 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       if (!editor) return
       openLinkEditor(editor, prefilledText)
     },
+    applyFormat: (from: number, to: number, format: SelectionFormat) => {
+      if (!editor) return ''
+      return applyFormatToRange(editor, from, to, format)
+    },
     getSelectionFrom: () => editor?.state.selection.from ?? 0,
     getSelectionTo: () => editor?.state.selection.to ?? 0,
     getDOMSelectionRange: () => {
@@ -526,6 +563,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       },
       setContent: (html: string) => { lastHTMLRef.current = html; editor.commands.setContent(html); lastHTMLRef.current = editor.getHTML() },
       openLinkEditor: (prefilledText?: string) => openLinkEditor(editor, prefilledText),
+      applyFormat: (from: number, to: number, format: SelectionFormat) => applyFormatToRange(editor, from, to, format),
       getSelectionFrom: () => editor.state.selection.from,
       getSelectionTo: () => editor.state.selection.to,
       getDOMSelectionRange: () => {

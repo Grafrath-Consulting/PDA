@@ -45,6 +45,17 @@ export interface BlockVersion {
   edited_at: string
 }
 
+// Inline formatting that the selection menu can apply to the highlighted text.
+// 'clear' strips every mark from the selection.
+export type SelectionFormat =
+  | 'bold'
+  | 'italic'
+  | 'underline'
+  | 'strike'
+  | 'code'
+  | 'highlight'
+  | 'clear'
+
 export type SelectionAction =
   | { type: 'create_task'; taskType: 'my_task' | 'delegated' | 'waiting_on'; assigneeId?: string }
   | { type: 'split_block' }
@@ -52,3 +63,4 @@ export type SelectionAction =
   | { type: 'delete_selection' }
   | { type: 'insert_link' }
   | { type: 'mark_done' }
+  | { type: 'format'; format: SelectionFormat }
