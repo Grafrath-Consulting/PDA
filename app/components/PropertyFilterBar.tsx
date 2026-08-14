@@ -86,9 +86,7 @@ export function PropertyFilterBar({ properties, activeFilters, onToggleFilter, o
                 className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-all ${
                   isActive
                     ? 'border-amber-400 ring-1 ring-amber-300 shadow-sm'
-                    : val.archived
-                      ? 'border-dashed border-gray-300 hover:border-gray-400'
-                      : 'border-gray-200 hover:border-gray-300'
+                    : 'border-gray-200 hover:border-gray-300'
                 }`}
                 style={{
                   backgroundColor: isActive ? pc.bg : pc.bg,

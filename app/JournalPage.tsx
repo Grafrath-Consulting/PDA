@@ -355,8 +355,8 @@ export function JournalPage({ userId, email, displayName }: Props) {
   }, [buildViewState])
 
   // Drop property filters that fall out of scope when the workspace selection changes,
-  // or when a property is archived — archived properties leave the filter bar, so their
-  // filters have to go too or the feed stays narrowed with no pill explaining why.
+  // or when a property or value is archived — archived entries leave the filter bar, so
+  // their filters have to go too or the feed stays narrowed with no pill explaining why.
   // Global view (no active workspace, no narrowed multi-select) keeps all properties in scope.
   useEffect(() => {
     if (allProperties.length === 0) return
@@ -369,7 +369,7 @@ export function JournalPage({ userId, email, displayName }: Props) {
     const validPropIds = new Set<string>()
     for (const p of inScopeProps) {
       validPropIds.add(p.id)
-      for (const v of p.values) validValueIds.add(v.id)
+      for (const v of p.values) if (!v.archived) validValueIds.add(v.id)
     }
     setActivePropertyFilters(prev => {
       if (prev.size === 0) return prev
@@ -471,8 +471,9 @@ export function JournalPage({ userId, email, displayName }: Props) {
       const ids = new Set<string>()
       const targetLabels = new Set(f.propertyValues.map(v => v.toLowerCase()))
       for (const prop of props) {
+        if (prop.archived) continue
         for (const val of prop.values) {
-          if (targetLabels.has(val.label.toLowerCase())) {
+          if (!val.archived && targetLabels.has(val.label.toLowerCase())) {
             ids.add(val.id)
           }
         }
@@ -2125,10 +2126,14 @@ export function JournalPage({ userId, email, displayName }: Props) {
             <div className="basis-full sm:basis-0 sm:flex-1 min-w-0 order-3 sm:order-2">
               {(() => {
                 // In global/multi-workspace view, show all properties; in single workspace, show that workspace's.
-                // Archived properties drop out of the bar entirely.
+                // Archived properties and archived values drop out of the bar entirely, and a
+                // property left with no live values goes with them.
                 const allProps = (isGlobalView
                   ? allProperties
-                  : propertiesForWorkspace(activeWorkspaceId)).filter(p => !p.archived)
+                  : propertiesForWorkspace(activeWorkspaceId))
+                  .filter(p => !p.archived)
+                  .map(p => ({ ...p, values: p.values.filter(v => !v.archived) }))
+                  .filter(p => p.values.length > 0)
                 const props = panelMode === 'expanded'
                   ? allProps
                   : allProps.filter(p => p.pinned_in_filter_bar)
