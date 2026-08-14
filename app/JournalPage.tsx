@@ -354,15 +354,17 @@ export function JournalPage({ userId, email, displayName }: Props) {
     writeViewState(viewStateWsRef.current, buildViewState())
   }, [buildViewState])
 
-  // Drop property filters that fall out of scope when the workspace selection changes.
+  // Drop property filters that fall out of scope when the workspace selection changes,
+  // or when a property is archived — archived properties leave the filter bar, so their
+  // filters have to go too or the feed stays narrowed with no pill explaining why.
   // Global view (no active workspace, no narrowed multi-select) keeps all properties in scope.
   useEffect(() => {
     if (allProperties.length === 0) return
-    const inScopeProps = activeWorkspaceId
+    const inScopeProps = (activeWorkspaceId
       ? propertiesForWorkspace(activeWorkspaceId)
       : selectedWsIds && selectedWsIds.size > 0
         ? allProperties.filter(p => p.workspace_id === null || selectedWsIds.has(p.workspace_id))
-        : allProperties
+        : allProperties).filter(p => !p.archived)
     const validValueIds = new Set<string>()
     const validPropIds = new Set<string>()
     for (const p of inScopeProps) {
@@ -2122,10 +2124,11 @@ export function JournalPage({ userId, email, displayName }: Props) {
           {panelMode !== 'collapsed' && (
             <div className="basis-full sm:basis-0 sm:flex-1 min-w-0 order-3 sm:order-2">
               {(() => {
-                // In global/multi-workspace view, show all properties; in single workspace, show that workspace's
-                const allProps = isGlobalView
+                // In global/multi-workspace view, show all properties; in single workspace, show that workspace's.
+                // Archived properties drop out of the bar entirely.
+                const allProps = (isGlobalView
                   ? allProperties
-                  : propertiesForWorkspace(activeWorkspaceId)
+                  : propertiesForWorkspace(activeWorkspaceId)).filter(p => !p.archived)
                 const props = panelMode === 'expanded'
                   ? allProps
                   : allProps.filter(p => p.pinned_in_filter_bar)

@@ -54,7 +54,7 @@ export function PropertyFilterBar({ properties, activeFilters, onToggleFilter, o
               </svg>
             </button>
           )}
-          <span className={`text-[10px] font-medium mr-0.5 ${prop.archived ? 'text-gray-300 italic' : 'text-gray-400'}`}>{prop.name}</span>
+          <span className="text-[10px] font-medium mr-0.5 text-gray-400">{prop.name}</span>
           {(() => {
             const noneId = `none::${prop.id}`
             const noneActive = activeFilters.has(noneId)
