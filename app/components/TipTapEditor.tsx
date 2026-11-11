@@ -24,6 +24,18 @@ import data from '@emoji-mart/data'
 
 const EmojiPicker = lazy(() => import('@emoji-mart/react'))
 
+// Cards are stored as HTML, and the Tab key inserts a literal "\t". The editor
+// DOM is `white-space: pre-wrap`, so tabs and runs of spaces are real content,
+// but ProseMirror's default HTML parse collapses them (and strips a leading
+// one), so a tab typed into a card vanished on the next load. Parse with full
+// whitespace preservation so the parser is the inverse of getHTML(). Whitespace
+// between block elements is still ignored, so pretty-printed HTML from MCP
+// writes does not grow stray paragraphs.
+//
+// Pass this to `editor.commands.setContent` as well: setContent does not inherit
+// the editor-level parseOptions.
+const PARSE_OPTIONS = { preserveWhitespace: 'full' } as const
+
 const TabHandler = Extension.create({
   name: 'tabHandler',
   addKeyboardShortcuts() {
@@ -360,6 +372,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
       }),
     ],
     content,
+    parseOptions: PARSE_OPTIONS,
     editable,
     immediatelyRender: false,
     autofocus: autoFocus ? 'end' : false,
@@ -485,7 +498,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
     setContent: (html: string) => {
       if (!editor) return
       lastHTMLRef.current = html
-      editor.commands.setContent(html)
+      editor.commands.setContent(html, { parseOptions: PARSE_OPTIONS })
       // Re-sync lastHTMLRef after TipTap normalizes the HTML
       lastHTMLRef.current = editor.getHTML()
     },
@@ -561,7 +574,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
         if (resolved !== null) { editor.commands.setTextSelection(resolved); editor.view.focus() }
         else { editor.commands.setTextSelection(docSize); editor.view.focus() }
       },
-      setContent: (html: string) => { lastHTMLRef.current = html; editor.commands.setContent(html); lastHTMLRef.current = editor.getHTML() },
+      setContent: (html: string) => { lastHTMLRef.current = html; editor.commands.setContent(html, { parseOptions: PARSE_OPTIONS }); lastHTMLRef.current = editor.getHTML() },
       openLinkEditor: (prefilledText?: string) => openLinkEditor(editor, prefilledText),
       applyFormat: (from: number, to: number, format: SelectionFormat) => applyFormatToRange(editor, from, to, format),
       getSelectionFrom: () => editor.state.selection.from,
@@ -629,7 +642,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTa
     if (wasEditable && !contentChanged) return
     if (content === lastHTMLRef.current) return  // nothing changed
     lastHTMLRef.current = content
-    editor.commands.setContent(content)
+    editor.commands.setContent(content, { parseOptions: PARSE_OPTIONS })
     // Re-sync after TipTap normalizes the HTML
     lastHTMLRef.current = editor.getHTML()
   }, [editor, content, editable])
