@@ -149,6 +149,10 @@ body {
 }
 .tiptap-content p,
 .ProseMirror p { margin: 0; line-height: 1.5rem; }
+/* The editor is pre-wrap, so tabs show there; the read-only overlay needs it too.
+   Paragraphs only: stored HTML can have "\n" between blocks, which pre-wrap
+   would render as blank lines on a container. */
+.tiptap-content p { white-space: pre-wrap; }
 .tiptap-content p:empty,
 .tiptap-content p:has(> br:only-child),
 .ProseMirror p:empty,
